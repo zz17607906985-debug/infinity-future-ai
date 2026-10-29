@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; media-src 'self' file: data: blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self' blob:">
+    <title>∞未来 AI · 3D 导演台</title>
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+        background: #090909;
+      }
+    </style>
+    <link rel="stylesheet" href="./assets/index-qJDKzmaC.css">
+    <style>
+      :root {
+        --window-controls-safe-width: 148px;
+      }
+      .top-bar {
+        padding-right: calc(20px + var(--window-controls-safe-width));
+        -webkit-app-region: drag;
+      }
+      .top-bar button,
+      .top-bar input,
+      .top-bar select,
+      .top-bar textarea {
+        -webkit-app-region: no-drag;
+      }
+      @media (max-width: 920px) {
+        .top-bar {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .top-bar-left,
+        .top-bar-actions {
+          display: none;
+        }
+        .top-bar-center {
+          justify-content: flex-start;
+        }
+      }
+    </style>
+    <script src="./boot-error.js"></script>
+    <script src="./third-party/meshopt_decoder.js"></script>
+    <script src="./meshopt-bridge.js"></script>
+    <script type="module" src="./assets/index-CR8HYQHT.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="directorDeskBootError" hidden style="position:fixed;top:16px;left:16px;right:16px;z-index:9999;padding:10px 12px;border-radius:8px;background:rgba(120,20,20,.92);color:#fff;font:12px/1.5 sans-serif;box-shadow:0 12px 32px rgba(0,0,0,.35)"></div>
+  </body>
+</html>

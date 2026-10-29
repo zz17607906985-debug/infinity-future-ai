@@ -1,0 +1,10 @@
+LX Music Desktop
+Copyright (c) lyswhut and contributors
+https://github.com/lyswhut/lx-music-desktop
+
+Playback architecture portions are adapted under the Apache License 2.0.
+License: https://www.apache.org/licenses/LICENSE-2.0
+
+This application keeps its own user interface and legal free-stream source
+providers. LX Music Desktop does not provide online audio data; custom sources
+and stream availability remain the responsibility of their respective source.

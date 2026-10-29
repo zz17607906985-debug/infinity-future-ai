@@ -1,0 +1,23 @@
+[
+  {
+    "id": "script-to-asset-ledger",
+    "label": "剧本拆分 / 资产表",
+    "block": "assets",
+    "file": "./skills/installed/script-to-asset-ledger.SKILL.md",
+    "version": "bundled-2026-09-05"
+  },
+  {
+    "id": "visual-prompt-engineer",
+    "label": "资产图 / 视觉提示词",
+    "block": "assets",
+    "file": "./skills/installed/visual-prompt-engineer.SKILL.md",
+    "version": "bundled-2026-09-05"
+  },
+  {
+    "id": "seedance2-director-prompts",
+    "label": "视频生成 / Seedance 2 提示词",
+    "block": "video",
+    "file": "./skills/installed/seedance2-director-prompts.SKILL.md",
+    "version": "bundled-2026-09-05"
+  }
+]

@@ -1,0 +1,9 @@
+
+.image-request-dialog { box-sizing: border-box; width: min(820px, calc(100vw - 32px)); max-height: calc(100vh - 40px); padding: 22px; border: 1px solid #586b87; border-radius: 12px; background: #151e2c; color: #ecf1f8; }
+.image-request-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.image-request-dialog h2 { margin: 0 0 10px; font-size: 20px; }
+.image-request-dialog p { color: #c1cee1; line-height: 1.5; }
+.image-request-dialog textarea { box-sizing: border-box; display: block; width: 100%; height: min(52vh, 520px); resize: vertical; padding: 12px; background: #0e1520; color: #edf2fb; border: 1px solid #53647e; border-radius: 6px; font: 13px/1.65 monospace; }
+.image-request-dialog > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+.image-request-dialog button { min-height: 40px; padding: 8px 16px; border: 1px solid #647a98; border-radius: 6px; background: #2b3e59; color: #fff; cursor: pointer; }
+.image-request-dialog :focus-visible { outline: 2px solid #89c4ff; outline-offset: 2px; }

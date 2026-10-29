@@ -1,0 +1,10 @@
+node_modules/
+build-tools/node_modules/
+dist/
+dist-installer/
+.electron-dist/
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
