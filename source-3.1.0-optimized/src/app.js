@@ -2870,12 +2870,31 @@
     return !!target?.closest?.('.canvas-rail,.bottom-canvas-tools,.canvas-tidy-btn,.history-drawer,.asset-library,.queue-drawer,.music-workbench,.assistant-workbench,.short-workbench,.topbar,.workflow-bar,.canvas-search-bar,.zoom-control,.selection-toolbar,.settings-drawer,.command-palette,.modal,.image-modal,.fabric-editor-modal,.cropper-modal,.camera-modal,.chat-panel,.chat-preview,.mascot-button,.mascot-switch');
   }
 
-  function showNodeTypeMenu(clientX, clientY) {
+  function openCanvasMenu(clientX, clientY, html, onPick, extraClass = '') {
     closeNodeTypeMenu();
     closeNodeContextMenu();
     const menu = document.createElement('div');
-    menu.className = 'node-type-menu';
-    menu.innerHTML = `
+    menu.className = ('node-type-menu ' + extraClass).trim();
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML = html;
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(12, Math.min(clientX, window.innerWidth - r.width - 12)) + 'px';
+    menu.style.top = Math.max(12, Math.min(clientY, window.innerHeight - r.height - 12)) + 'px';
+    menu.onclick = e => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      closeNodeTypeMenu();
+      onPick({...btn.dataset});
+    };
+    nodeTypeMenuCloser = e => {
+      if (!menu.contains(e.target)) closeNodeTypeMenu();
+    };
+    setTimeout(() => document.addEventListener('mousedown', nodeTypeMenuCloser), 0);
+    return menu;
+  }
+  function showNodeTypeMenu(clientX, clientY) {
+    const html = `
       <button data-type="prompt"><i class="fa-solid fa-note-sticky"></i>提示词</button>
       <button data-type="upload"><i class="fa-solid fa-upload"></i>上传节点</button>
       <button data-type="character"><i class="fa-solid fa-user-astronaut"></i>角色卡</button>
@@ -2884,31 +2903,23 @@
       <button data-type="comfyui"><i class="fa-solid fa-diagram-project"></i>ComfyUI</button>
       <button data-action="storyboard"><i class="fa-solid fa-table-cells-large"></i>分镜组</button>
       <button data-action="script"><i class="fa-solid fa-scroll"></i>脚本节点</button>
-      <button data-action="grid"><i class="fa-solid fa-clapperboard"></i>分镜格子</button>`;
-    document.body.appendChild(menu);
-    const r = menu.getBoundingClientRect();
-    menu.style.left = Math.min(clientX, window.innerWidth - r.width - 12) + 'px';
-    menu.style.top = Math.min(clientY, window.innerHeight - r.height - 12) + 'px';
-    menu.onclick = e => {
-      const btn = e.target.closest('[data-type],[data-action]');
-      if (!btn) return;
+      <button data-action="grid"><i class="fa-solid fa-clapperboard"></i>分镜格子</button>
+      <button data-action="template"><i class="fa-solid fa-boxes-stacked"></i>插入模板</button>`;
+    openCanvasMenu(clientX, clientY, html, picked => {
       const pos = screenToWorld(clientX, clientY);
-      if (btn.dataset.action === 'storyboard') {
+      if (picked.action === 'storyboard') {
         addStoryboardAt(pos.x, pos.y);
-      } else if (btn.dataset.action === 'script') {
+      } else if (picked.action === 'script') {
         addNode('prompt', pos.x - 160, pos.y - 80, {title: '脚本节点', prompt: '脚本：镜头目标、角色动作、旁白/对白、画面调度、情绪节奏。'});
-      } else if (btn.dataset.action === 'grid') {
+      } else if (picked.action === 'grid') {
         addNode('prompt', pos.x - 160, pos.y - 80, {title: '分镜格子', prompt: '分镜格子：画面编号 / 景别 / 主体动作 / 场景 / 镜头运动 / 画面连续性。'});
-      } else {
-        const wide = ['image', 'video', 'comfyui'].includes(btn.dataset.type);
-        addNode(btn.dataset.type, pos.x - (wide ? 260 : 160), pos.y - 80);
+      } else if (picked.action === 'template') {
+        openWorkflowLibrary();
+      } else if (picked.type) {
+        const wide = ['image', 'video', 'comfyui'].includes(picked.type);
+        addNode(picked.type, pos.x - (wide ? 260 : 160), pos.y - 80);
       }
-      closeNodeTypeMenu();
-    };
-    nodeTypeMenuCloser = e => {
-      if (!menu.contains(e.target)) closeNodeTypeMenu();
-    };
-    setTimeout(() => document.addEventListener('mousedown', nodeTypeMenuCloser), 0);
+    });
   }
   function goProjectCenter() {
     closeFloatingCanvasUi();
