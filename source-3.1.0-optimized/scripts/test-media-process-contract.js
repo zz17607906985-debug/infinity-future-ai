@@ -1,0 +1,10 @@
+const assert = require('assert');
+const contract = require('../src/media/media-process-contract');
+assert.equal(contract.OPERATIONS.length, 18);
+assert.equal(contract.requiresSecondSource('video-concat'), true);
+const payload = contract.normalize({operation: 'video-speed', speed: 9, width: 1, background: 'red'});
+assert.equal(payload.speed, 2);
+assert.equal(payload.width, 64);
+assert.equal(payload.background, '#000000');
+assert.equal(contract.normalize({operation: 'unknown'}).operation, 'extract-first-frame');
+console.log('Media process contract tests passed.');

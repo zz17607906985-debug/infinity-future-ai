@@ -1,0 +1,85 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const root = path.join(__dirname, '..');
+const source = fs.readFileSync(path.join(root, 'src/media/short-workbench.js'), 'utf8');
+const batchSource = fs.readFileSync(path.join(root, 'src/short-batch-coordinator.js'), 'utf8');
+function harness(options = {}) {
+  const storage = new Map();
+  const controls = {shortStoryText: {value: '第一集：林青进入车站，携带铜钥匙。\n第二集：林青在车站打开行李箱。'}, shortArtDirection: {value: '写实美术设定'}};
+  const calls = [];
+  const errors = [];
+  const ledger = Array.from({length: options.count || 3}, (_, index) => ({id: 'A' + index, name: '资产' + index, type: ['人物', '场景', '道具'][index % 3], description: '剧本设定' + index, evidence: '第一集正文', states: ['未损坏']}));
+  const sandbox = {console, window: {confirm: () => true}, setTimeout: callback => callback(), localStorage: {getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value)}, fetch: async file => ({ok: true, text: async () => 'SKILL:' + file})};
+  vm.createContext(sandbox);
+  vm.runInContext(batchSource, sandbox);
+  vm.runInContext(source, sandbox);
+  const host = {assetItems: [], storyboardItems: [], shortTaskCoordinator: sandbox.window.ShortBatch?.createCoordinator?.()};
+  const batch = sandbox.window.FutureAIShortBatch || sandbox.window.ShortBatch;
+  host.shortTaskCoordinator = batch.createCoordinator();
+  const provider = {type: 'custom-sync', apiUrl: 'https://mock.invalid', chatModel: 'test-chat', imageModel: 'test-image', videoModel: 'test-video'};
+  let workbench;
+  workbench = sandbox.window.FutureAIShortWorkbench.create({host, $: id => controls[id] || null, esc: String, safeMediaUrl: value => value || '', shortError: error => error.message || String(error), toast: (message, kind) => errors.push({message, kind}), saveProject: async () => {}, queueSave: () => {}, API_TIMEOUTS: {}, applyModelAgnosticTextRules: value => value, applyModelAgnosticGenerationRules: value => value, globalProviderForKind: () => provider, providerApiKey: async () => '', reportProviderKeyResult: () => {}, chatCompletionTextRequest: async request => {
+    calls.push({kind: 'text', request});
+    if (options.onText) await options.onText({request, controls, host, workbench, calls});
+    if (options.failAt === calls.length) throw new Error('模拟文本服务失败');
+    const isLedger = request.messages[0].content.includes('script-to-asset-ledger');
+    return isLedger ? options.badLedger ? 'not-json' : JSON.stringify(ledger) : JSON.stringify({prompt: '完整美术提示词：' + calls.length});
+  }, imageGenerateRequest: async request => {calls.push({kind: 'image', request}); return {url: 'mock-image-' + calls.length};}, persistGeneratedImageResult: async result => result.url, addHistory: () => {}});
+  return {workbench, host, calls, errors, controls, storage};
+}
+async function main() {
+  const test = harness({count: 12});
+  const result = await test.workbench.runShortAssetPipeline();
+  assert.equal(result.total, 12);
+  assert.equal(test.host.assetItems.length, 12, 'no eight-asset cap');
+  assert.equal(test.calls.length, 13, 'ledger then one text compilation per asset');
+  assert.ok(test.calls[0].request.messages[0].content.includes('script-to-asset-ledger'));
+  for (const call of test.calls.slice(1)) {
+    assert.ok(call.request.messages[0].content.includes('visual-prompt-engineer'));
+    assert.ok(call.request.messages[1].content.includes(test.controls.shortStoryText.value));
+    assert.ok(call.request.messages[1].content.includes('A11'), 'complete ledger included');
+  }
+  assert.ok(test.host.assetItems.every(item => item.evidence && item.promptTrace && item.ledgerTrace));
+  test.host.assetItems[0].prompt = '用户编辑的最终提示词';
+  await test.workbench.runShortAssetPipeline({images: true});
+  assert.equal(test.calls.filter(call => call.kind === 'text').length, 13, 'compiled prompts reused');
+  const imageCalls = test.calls.filter(call => call.kind === 'image');
+  assert.equal(imageCalls.length, 12);
+  assert.equal(imageCalls[0].request.prompt, '用户编辑的最终提示词');
+  assert.ok(imageCalls.every(call => !call.request.prompt.includes('SKILL:')));
+  await test.workbench.runShortAssetPipeline({images: true});
+  assert.equal(test.calls.length, 25, 'completed images not regenerated');
+  const category = harness({count: 6});
+  await category.workbench.runShortAssetPipeline({filter: 'scenes', images: true});
+  assert.equal(category.calls.filter(call => call.kind === 'image').length, 2);
+  assert.equal(category.host.assetItems.filter(item => item.promptTrace).length, 2);
+  const broken = harness({badLedger: true});
+  assert.equal(await broken.workbench.runShortAssetPipeline({images: true}), null);
+  assert.equal(broken.host.assetItems.length, 0, 'no fallback assets');
+  assert.equal(broken.calls.length, 1);
+  const failed = harness({failAt: 3});
+  await failed.workbench.runShortAssetPipeline({images: true});
+  assert.equal(failed.host.assetItems.filter(item => item.promptTrace).length, 1);
+  assert.equal(failed.calls.filter(call => call.kind === 'image').length, 0);
+  await failed.workbench.runShortAssetPipeline({images: true});
+  assert.equal(failed.calls.filter(call => call.kind === 'image').length, 3, 'retry continues saved work');
+  const changed = harness({onText: ({controls, calls}) => {if (calls.length === 2) controls.shortStoryText.value = '另一个剧本';}});
+  await changed.workbench.runShortAssetPipeline({images: true});
+  assert.equal(changed.calls.filter(call => call.kind === 'image').length, 0);
+  assert.equal(changed.host.assetItems.filter(item => item.promptTrace).length, 0);
+  const stopped = harness({onText: ({workbench, calls}) => {if (calls.length === 2) workbench.stopShortAssetPipeline();}});
+  await stopped.workbench.runShortAssetPipeline({images: true});
+  assert.equal(stopped.calls.length, 2, 'stop prevents subsequent requests');
+  const edited = harness({onText: ({host, calls}) => {if (calls.length === 2) host.assetItems[0].prompt = '编译期间用户输入';}});
+  await edited.workbench.runShortAssetPipeline();
+  assert.equal(edited.host.assetItems[0].prompt, '编译期间用户输入');
+  const missing = harness();
+  missing.controls.shortStoryText.value = '';
+  await missing.workbench.runShortAssetPipeline();
+  assert.equal(missing.calls.length, 0);
+  console.log('Asset pipeline tests passed: skill sequence, full inputs, 12 assets, edited prompts, categories, resume, no silent fallback, context changes, cancellation.');
+}
+main().catch(error => {console.error(error); process.exitCode = 1;});

@@ -1,0 +1,7 @@
+node_modules/
+build-tools/node_modules/
+dist/
+build/
+*.asar
+*.exe
+*.log

@@ -1,0 +1,1163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob: http: https:; media-src 'self' file: data: blob: http: https:; font-src 'self' data:; connect-src http: https: ws: wss:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self' blob:">
+  <title>∞未来 AI</title>
+  <link rel="stylesheet" href="./assets/fontawesome/css/all.min.css">
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./assistant/workbench.css">
+  <link rel="stylesheet" href="./media/short-asset-pipeline.css">
+</head>
+<body class="dark-mode nexus-layout">
+  <div id="projectHome" class="project-home">
+    <video id="homeBgVideo" class="home-bg-video" muted loop playsinline preload="none" poster="./assets/app-bg.jpg" aria-hidden="true"></video>
+    <div class="gd-shell">
+      <aside class="gd-sidebar" aria-label="项目中心侧栏">
+        <div class="gd-sb-top">
+          <button id="homeLogo" class="logo-button" type="button" title="项目中心" aria-label="返回项目中心">
+            <img class="brand-icon gd-logo" src="./assets/app-icon.png" alt="∞未来">
+          </button>
+          <div class="gd-work-title">∞未来 AI</div>
+          <span id="homeVersionBadge" class="version-pill" title="版本信息">v--</span>
+        </div>
+        <nav class="gd-quick" aria-label="快捷入口">
+          <button id="homeQuickCreate" class="gd-quick-item" type="button"><span class="gd-qi">＋</span><span>新建项目</span></button>
+          <button id="homeQuickStorage" class="gd-quick-item" type="button"><span class="gd-qi"><i class="fa-solid fa-folder-open" aria-hidden="true"></i></span><span>选择存储</span></button>
+          <button id="homeQuickOpen" class="gd-quick-item" type="button" disabled><span class="gd-qi"><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i></span><span>进入项目</span></button>
+          <button id="homeQuickSettings" class="gd-quick-item" type="button"><span class="gd-qi"><i class="fa-solid fa-gear" aria-hidden="true"></i></span><span>系统设置</span></button>
+        </nav>
+        <div class="gd-sb-scroll">
+          <div class="gd-section-head">工作流</div>
+          <div class="gd-flow" aria-hidden="true"><span>构思</span><span>生成</span><span>检查</span><span>导出</span></div>
+          <p class="gd-sb-hint">先选左侧或下方的项目，再进入工作台继续创作。支持拖入图片和视频。</p>
+        </div>
+        <div class="gd-sb-foot">
+          <div class="gd-status-pills">
+            <span class="gd-pill on">本地创作</span>
+            <span class="gd-pill">专业工作台</span>
+          </div>
+        </div>
+      </aside>
+      <div class="gd-main">
+        <div class="gd-stage">
+          <header class="home-header gd-hero">
+            <div class="brand gd-hero-brand">
+              <div>
+                <h1 class="gd-hero-title">∞未来 AI</h1>
+                <p class="gd-hero-sub">一念起，万象生。</p>
+                <p class="gd-hero-desc">从灵感、生成到检查导出，都在同一个专业工作台完成。</p>
+              </div>
+            </div>
+          </header>
+          <section class="home-summary gd-action-grid" aria-label="开始创作">
+            <button id="homeCreateProject" class="action-card" type="button">
+              <span class="t">新建项目</span>
+              <span class="d">从空白或模板开始一部作品</span>
+            </button>
+            <button id="homeChooseStorageDir" class="action-card" type="button">
+              <span class="t">选择存储位置</span>
+              <span class="d">指定本地项目文件夹</span>
+            </button>
+            <button id="homeOpenCurrent" class="action-card" type="button" disabled>
+              <span class="t">进入当前项目</span>
+              <span class="d">继续上次未完成的创作</span>
+            </button>
+            <button id="homeOpenSettings" class="action-card" type="button">
+              <span class="t">系统设置</span>
+              <span class="d">API、模型、外观与存储</span>
+            </button>
+          </section>
+          <div class="gd-recent-label">最近项目</div>
+          <main id="projectGrid" class="project-grid"></main>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="appShell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="side-brand">
+        <img class="brand-icon small-icon" src="./assets/app-icon.png" alt="∞未来">
+        <div><strong>∞未来 AI</strong><span>一念起，万象生。</span></div>
+      </div>
+      <section class="side-section">
+        <div class="section-head">
+          <span><i class="fa-solid fa-folder-tree"></i> 项目管理</span>
+          <button id="sideCreateProject" class="icon-btn" title="新建项目" aria-label="新建项目"><i class="fa-solid fa-plus"></i></button>
+        </div>
+        <div id="sideProjects" class="side-list"></div>
+      </section>
+      <section class="side-section">
+        <div class="section-head">
+          <span><i class="fa-solid fa-gear"></i> 设置</span>
+          <button id="openSettings" class="ghost-btn"><i class="fa-solid fa-sliders"></i> 打开</button>
+        </div>
+        <p class="project-meta">自定义 API、模型导入和聊天模型都放在设置里。</p>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="top-left">
+          <button id="topLogo" class="nexus-nav-btn" title="返回项目中心"><i class="fa-solid fa-arrow-left"></i><span>返回项目中心</span></button>
+          <div class="nav-pills" role="tablist" aria-label="工作区">
+            <button id="openDialogEditWorkbench" class="nexus-mode-btn dialog-edit-entry" data-workspace="assistant" type="button"><i class="fa-solid fa-comments"></i><span>∞ 灵枢万象</span></button>
+            <button class="nexus-mode-btn active" data-workspace="canvas" type="button"><i class="fa-solid fa-infinity"></i><span>无限画布</span></button>
+            <button id="openDirectorDesk" class="nexus-mode-btn director-desk-entry" type="button"><i class="fa-solid fa-cube"></i><span>3D 导演台</span></button>
+          </div>
+          <button id="workspaceMenuToggle" class="workspace-menu-toggle" type="button" aria-expanded="false" aria-controls="workspaceMenu"><span id="workspaceMenuLabel">无限画布</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button>
+          <div id="workspaceMenu" class="workspace-menu hidden" role="menu" aria-label="切换工作区">
+            <button type="button" role="menuitem" data-workspace-mobile="assistant">∞ 灵枢万象</button>
+            <button type="button" role="menuitem" data-workspace-mobile="canvas">无限画布</button>
+            <button type="button" role="menuitem" data-workspace-mobile="director">3D 导演台</button>
+          </div>
+          <div class="project-title hidden" aria-hidden="true">
+            <span class="muted">当前项目：</span>
+            <strong id="projectTitle">未命名项目</strong>
+            <button id="projectDetailBtn" class="mini-pill" type="button">项目详情</button>
+            <button id="disconnectBtn" class="mini-pill" type="button" title="返回项目中心">返回</button>
+          </div>
+        </div>
+        <div class="top-actions">
+          <span id="saveStatus" class="save-status is-saved" role="status" aria-live="polite"><i class="fa-solid fa-check" aria-hidden="true"></i><span>已保存</span></span>
+          <button id="balancePill" class="status-pill hidden" type="button" title="API 余额" hidden aria-hidden="true"><i class="fa-solid fa-wallet"></i> <span id="balancePillValue">余额</span></button>
+          <button id="themeToggle" class="icon-btn" type="button" title="进入专注模式" aria-label="进入专注模式"><i class="fa-solid fa-crosshairs"></i></button>
+          <button id="topSettings" class="icon-btn" type="button" title="系统设置" aria-label="系统设置"><i class="fa-solid fa-gear"></i></button>
+          <button id="queueToggle" class="ghost-btn" type="button" title="生成队列"><i class="fa-solid fa-list-check"></i> 队列 <span id="queueCount">0</span></button>
+          <button id="historyToggle" class="ghost-btn" type="button" title="历史记录"><i class="fa-regular fa-clock"></i> 历史记录</button>
+          <button id="undoProject" class="icon-btn" type="button" title="撤销项目修改" aria-label="撤销项目修改"><i class="fa-solid fa-rotate-left"></i></button>
+          <button id="redoProject" class="icon-btn" type="button" title="重做项目修改" aria-label="重做项目修改"><i class="fa-solid fa-rotate-right"></i></button>
+          <button id="deleteSelection" class="icon-btn" type="button" title="删除选中" aria-label="删除选中"><i class="fa-regular fa-trash-can"></i></button>
+          <button id="runAll" class="icon-btn" type="button" title="执行全部" aria-label="执行全部"><i class="fa-solid fa-bolt"></i></button>
+          <button id="resetView" class="icon-btn" type="button" title="重置视图" aria-label="重置视图"><i class="fa-solid fa-arrow-rotate-left"></i></button>
+        </div>
+      </header>
+
+      <div class="workflow-bar" aria-label="快速创建">
+        <span><i class="fa-solid fa-wand-magic-sparkles"></i> 创作流程</span>
+        <button id="addPrompt" class="tool-btn"><i class="fa-regular fa-note-sticky"></i> 提示词</button>
+        <button id="addUpload" class="tool-btn"><i class="fa-solid fa-upload"></i> 上传节点</button>
+        <button id="addImage" class="tool-btn"><i class="fa-regular fa-image"></i> 图片</button>
+        <button id="addVideo" class="tool-btn"><i class="fa-solid fa-video"></i> 视频</button>
+        <button id="addMediaTool" class="tool-btn"><i class="fa-solid fa-scissors"></i> 媒体工具</button>
+        <button id="addComfyUI" class="tool-btn"><i class="fa-solid fa-diagram-project"></i> ComfyUI</button>
+        <button id="addStoryboard" class="tool-btn accent"><i class="fa-solid fa-film"></i> 分镜组</button>
+        <button id="addCharacter" class="tool-btn"><i class="fa-regular fa-user"></i> 角色卡</button>
+        <button id="openWorkflowLibrary" class="tool-btn accent"><i class="fa-solid fa-boxes-stacked"></i> 工作流库</button>
+        <button id="openDirectorDeskInline" class="tool-btn accent"><i class="fa-solid fa-cube"></i> 3D 导演台</button>
+        <button id="autoLayout" class="tool-btn"><i class="fa-solid fa-diagram-project"></i> 整理</button>
+        <button id="fitView" class="tool-btn"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> 适配</button>
+      </div>
+<section id="canvas" class="canvas">
+        <video class="canvas-bg-video" muted loop playsinline preload="none" poster="./assets/app-bg.jpg" aria-hidden="true"></video>
+        <div id="canvasEmptyState" class="canvas-empty-state" aria-label="空画布引导">
+          <i class="fa-solid fa-infinity" aria-hidden="true"></i>
+          <strong>从一个想法开始</strong>
+          <span>添加节点、导入素材，或直接使用一个创作模板。</span>
+          <div class="canvas-empty-actions">
+            <button type="button" class="primary-btn" data-canvas-empty="prompt"><i class="fa-regular fa-note-sticky" aria-hidden="true"></i>添加提示词</button>
+            <button type="button" class="ghost-btn" data-canvas-empty="upload"><i class="fa-solid fa-upload" aria-hidden="true"></i>导入素材</button>
+            <button type="button" class="ghost-btn" data-canvas-empty="template"><i class="fa-solid fa-boxes-stacked" aria-hidden="true"></i>使用模板</button>
+          </div>
+        </div>
+        <div class="canvas-search-bar" aria-label="画布搜索">
+          <label class="canvas-search-field">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input id="canvasSearchInput" type="search" placeholder="搜索节点、提示词、模型、标签">
+          </label>
+          <select id="canvasTypeFilter" title="节点类型筛选">
+            <option value="all">全部类型</option>
+            <option value="prompt">提示词</option>
+            <option value="character">角色卡</option>
+            <option value="image">图片</option>
+            <option value="video">视频</option>
+            <option value="upload">上传</option>
+            <option value="media-tool">媒体工具</option>
+            <option value="comfyui">ComfyUI</option>
+          </select>
+          <button id="canvasFavoritesOnly" class="icon-btn" type="button" title="只看收藏" aria-label="只看收藏"><i class="fa-regular fa-heart"></i></button>
+          <button id="clearCanvasSearch" class="icon-btn" type="button" title="清空搜索" aria-label="清空搜索"><i class="fa-solid fa-xmark"></i></button>
+          <button id="focusCanvasSearchResult" class="mini-pill" type="button" title="跳到第一个结果"><span id="canvasSearchCount">0/0</span></button>
+        </div>
+        <div class="canvas-rail" aria-label="画布工具">
+          <button id="railPan" class="rail-btn active" title="展开流程工具"><i class="fa-solid fa-plus"></i></button>
+          <button id="railSelect" class="rail-btn" title="参数设置"><i class="fa-solid fa-sliders"></i></button>
+          <button id="railHistory" class="rail-btn" title="历史记录"><i class="fa-regular fa-clock"></i></button>
+          <button id="railAssets" class="rail-btn" title="资产库"><i class="fa-solid fa-box-archive"></i></button>
+          <button id="railVariants" class="rail-btn" title="候选对比"><i class="fa-solid fa-table-cells-large"></i></button>
+          <button id="railCanvasAssistant" class="rail-btn" title="画布执行助手"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
+          <button id="railStorage" class="rail-btn" title="本地存储"><i class="fa-regular fa-floppy-disk"></i></button>
+        </div>
+        <aside id="canvasAssistantDrawer" class="history-drawer canvas-assistant-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="canvasAssistantTitle" aria-hidden="true">
+          <header><div><strong id="canvasAssistantTitle">画布执行助手</strong><span>先提案和预览，确认后才执行</span></div><button id="closeCanvasAssistant" class="icon-btn" type="button" title="关闭画布助手"><i class="fa-solid fa-xmark"></i></button></header>
+          <div class="canvas-assistant-compose">
+            <textarea id="canvasAssistantInput" rows="4" placeholder="例如：用当前角色做一个三镜头的 16:9 短片"></textarea>
+            <button id="canvasAssistantPlanBtn" class="primary-btn" type="button"><i class="fa-solid fa-list-check"></i> 生成操作提案</button>
+            <label class="canvas-assistant-paid"><input id="canvasAssistantRunPaid" type="checkbox"><span>画布建立后再单独确认运行付费节点</span></label>
+          </div>
+          <div id="canvasAssistantPlan" class="canvas-assistant-plan"></div>
+          <button id="canvasAssistantApply" class="primary-btn canvas-assistant-apply" type="button" disabled><i class="fa-solid fa-check"></i> 确认并执行为一次事务</button>
+        </aside>
+        <aside id="workflowLibraryDrawer" class="history-drawer workflow-library-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="workflowLibraryTitle" aria-hidden="true">
+          <header>
+            <div><strong id="workflowLibraryTitle">组合工作流</strong><span>把常用节点流程保存成可复用模板</span></div>
+            <button id="closeWorkflowLibrary" class="icon-btn" type="button" title="关闭工作流库" aria-label="关闭工作流库"><i class="fa-solid fa-xmark"></i></button>
+          </header>
+          <div class="workflow-library-compose">
+            <input id="workflowLibraryName" placeholder="工作流名称" maxlength="80">
+            <input id="workflowLibraryVersion" value="1.0.0" placeholder="版本号">
+            <input id="workflowLibraryNotes" placeholder="修改说明，可选" maxlength="500">
+            <button id="saveWorkflowSelection" class="primary-btn" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存当前选区</button>
+          </div>
+          <section class="workflow-exposure" aria-labelledby="workflowExposureTitle">
+            <div class="workflow-exposure-heading"><strong id="workflowExposureTitle">模板对外暴露</strong><span>只勾选复用时需要修改或读取的内容</span></div>
+            <div id="workflowExposureControls" class="workflow-exposure-controls"><small>先选择画布节点，再打开这里保存工作流。</small></div>
+          </section>
+          <div class="workflow-library-actions">
+            <button id="importWorkflowDefinition" class="ghost-btn" type="button"><i class="fa-solid fa-file-import"></i> 导入</button>
+            <input id="workflowImportFile" class="hidden" type="file" accept="application/json,.json">
+            <span>导入时自动清除 Key、私有路径和许可证信息</span>
+          </div>
+          <div id="workflowLibraryList" class="workflow-library-list"></div>
+        </aside>
+        <aside id="variantWorkbenchDrawer" class="history-drawer variant-workbench-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="variantWorkbenchTitle" aria-hidden="true">
+          <header>
+            <div><strong id="variantWorkbenchTitle">候选对比台</strong><span id="variantImpactSummary">集中对比、通过和传递生成结果</span></div>
+            <button id="closeVariantWorkbench" class="icon-btn" type="button" title="关闭候选对比" aria-label="关闭候选对比"><i class="fa-solid fa-xmark"></i></button>
+          </header>
+          <div class="variant-workbench-toolbar">
+            <select id="variantNodeSelect" aria-label="选择候选节点"></select>
+            <div class="variant-mode-tabs" role="group" aria-label="对比方式">
+              <button type="button" data-variant-mode="grid" class="active" title="宫格"><i class="fa-solid fa-table-cells-large"></i></button>
+              <button type="button" data-variant-mode="side" title="并排"><i class="fa-solid fa-columns"></i></button>
+            </div>
+            <button id="variantFramePrev" class="icon-btn" type="button" title="视频上一帧"><i class="fa-solid fa-backward-step"></i></button>
+            <button id="variantFrameNext" class="icon-btn" type="button" title="视频下一帧"><i class="fa-solid fa-forward-step"></i></button>
+          </div>
+          <details class="variant-branch-builder">
+            <summary><i class="fa-solid fa-code-branch"></i> 创建多个候选分支</summary>
+            <div class="variant-branch-fields">
+              <label>模型，每行一个<textarea id="variantBranchModels" rows="2"></textarea></label>
+              <label>提示词，每行一个<textarea id="variantBranchPrompts" rows="3"></textarea></label>
+              <label>种子，每行一个<textarea id="variantBranchSeeds" rows="2"></textarea></label>
+              <label>比例，每行一个<textarea id="variantBranchAspects" rows="2"></textarea></label>
+              <label>时长，每行一个<textarea id="variantBranchDurations" rows="2"></textarea></label>
+              <label>参考组合<select id="variantBranchReferenceMode"><option value="all">当前全部参考</option><option value="each">每张参考单独分支</option></select></label>
+              <label>最多候选<input id="variantBranchMax" type="number" min="1" max="12" value="6"></label>
+            </div>
+            <button id="variantRunBranches" class="primary-btn" type="button"><i class="fa-solid fa-play"></i> 预检并生成</button>
+          </details>
+          <div id="variantWorkbenchList" class="variant-workbench-list mode-grid"></div>
+        </aside>
+        <aside id="assetLibraryDrawer" class="history-drawer asset-library-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="assetLibraryDrawerTitle" aria-hidden="true">
+          <header>
+            <div><strong id="assetLibraryDrawerTitle">资产库</strong><span>拖到画布或 ∞ 灵枢万象即可调用</span></div>
+            <button id="closeAssetLibrary" class="icon-btn" type="button" title="关闭资产库" aria-label="关闭资产库"><i class="fa-solid fa-xmark"></i></button>
+          </header>
+          <div class="asset-library-tools">
+            <label><i class="fa-solid fa-magnifying-glass"></i><input id="assetLibrarySearch" type="search" placeholder="搜索名称、标签、提示词"></label>
+            <select id="assetLibraryType" title="资产类型筛选">
+              <option value="all">全部</option>
+              <option value="image">图片</option>
+              <option value="video">视频</option>
+            </select>
+            <button id="assetLibraryImport" class="icon-btn" type="button" title="导入资产" aria-label="导入资产"><i class="fa-solid fa-plus"></i></button>
+            <button id="assetLibraryTrashToggle" class="icon-btn" type="button" title="查看回收站" aria-label="查看回收站"><i class="fa-solid fa-trash-arrow-up"></i></button>
+            <button id="assetLibraryDedupe" class="icon-btn" type="button" title="检查重复素材" aria-label="检查重复素材"><i class="fa-solid fa-copy"></i></button>
+            <button id="assetLibraryReindex" class="icon-btn" type="button" title="重建本地视觉索引" aria-label="重建本地视觉索引"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
+            <input id="assetLibraryFileInput" class="hidden" type="file" accept="image/*,video/*" multiple>
+          </div>
+          <div class="asset-library-folders">
+            <label class="asset-folder-picker"><i class="fa-solid fa-folder"></i><select id="assetLibraryFolderSelect" title="资产文件夹"></select></label>
+            <button id="assetLibraryNewFolder" class="icon-btn" type="button" title="新建文件夹" aria-label="新建文件夹"><i class="fa-solid fa-folder-plus"></i></button>
+          </div>
+          <select id="assetSmartCollection" class="asset-smart-collection" aria-label="智能素材集合"><option value="all">全部智能集合</option><option value="character">角色</option><option value="scene">场景</option><option value="object">道具</option><option value="style">画风</option><option value="shot">镜头 / 构图</option><option value="unused">未使用</option><option value="indexed">已建立视觉索引</option></select>
+          <div id="assetLibraryReport" class="asset-library-report" aria-live="polite"></div>
+          <div id="assetLibraryList" class="history-list"></div>
+        </aside>
+        <div id="viewport" class="viewport">
+          <svg id="edges" width="12000" height="12000"></svg>
+        </div>
+        <canvas id="canvasProxyLayer" class="canvas-proxy-layer" aria-hidden="true"></canvas>
+        <div class="bottom-canvas-tools">
+          <div class="zoom-control">
+            <button id="zoomFitBtn" class="zoom-icon" type="button" title="适配画布"><i class="fa-regular fa-window-maximize"></i></button>
+            <button id="zoomMinusBtn" class="zoom-icon" type="button" title="缩小">-</button>
+            <input id="zoomSlider" type="range" min="25" max="160" value="100" aria-label="画布缩放">
+            <span id="canvasZoomLabel">100%</span>
+            <button id="zoomPlusBtn" class="zoom-icon" type="button" title="放大">+</button>
+          </div>
+          <button id="tidyCanvasBtn" class="canvas-tidy-btn" type="button" title="一键整理节点"><i class="fa-solid fa-table-cells-large"></i><span>整理</span></button>
+          <button id="fastCanvasBtn" class="canvas-fast-btn active" type="button" aria-pressed="true" title="极速画布：拖动和缩放时自动降低画面负载"><i class="fa-solid fa-gauge-high"></i><span>极速</span></button>
+        </div>
+        <div id="selectionBox" class="selection-box hidden"></div>
+        <div id="selectionToolbar" class="selection-toolbar hidden">
+          <button id="groupSelection" type="button"><i class="fa-regular fa-object-group"></i> 打组</button>
+          <button id="saveSelectionWorkflow" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存工作流</button>
+          <button id="ungroupSelection" type="button"><i class="fa-regular fa-object-ungroup"></i> 取消组</button>
+        </div>
+      </section>
+        <aside id="historyDrawer" class="history-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="historyDrawerTitle" aria-hidden="true">
+          <header>
+            <div><strong id="historyDrawerTitle">历史记录</strong><span>生成完成后会自动进入这里</span></div>
+            <button id="closeHistory" class="icon-btn" type="button" title="关闭历史记录" aria-label="关闭历史记录"><i class="fa-solid fa-xmark"></i></button>
+          </header>
+          <div id="historyList" class="history-list"></div>
+        </aside>
+        <aside id="queueDrawer" class="queue-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="queueDrawerTitle" aria-hidden="true">
+          <header>
+            <div><strong id="queueDrawerTitle">生成队列</strong><span id="queueSummary">空闲</span></div>
+            <button id="closeQueue" class="icon-btn" type="button" title="关闭生成队列" aria-label="关闭生成队列"><i class="fa-solid fa-xmark"></i></button>
+          </header>
+          <div class="queue-actions">
+            <button id="pauseQueue" class="ghost-btn" type="button"><i class="fa-solid fa-pause"></i> 暂停</button>
+            <button id="resumeQueue" class="ghost-btn" type="button"><i class="fa-solid fa-play"></i> 继续</button>
+            <button id="retryFailedQueue" class="ghost-btn" type="button"><i class="fa-solid fa-rotate-right"></i> 重试失败</button>
+            <button id="clearQueue" class="ghost-btn" type="button"><i class="fa-regular fa-trash-can"></i> 清理</button>
+          </div>
+            <div id="queueList" class="queue-list" aria-live="polite"></div>
+        </aside>
+      <section id="shortWorkbench" class="short-workbench hidden">
+        <header class="short-head manju-head">
+          <div class="manju-title">
+            <span class="manju-eyebrow">AI MANJU STUDIO</span>
+            <strong>AI 漫剧工作台</strong>
+            <span>构思到剧本、分镜、角色资产、关键帧和镜头视频的完整生产流</span>
+          </div>
+          <div class="manju-head-actions">
+            <div id="shortProductionStatus" class="short-production-status" aria-live="polite"></div><div class="manju-pipeline-chips" aria-label="漫剧生产流程">
+              <span>故事</span><i></i><span>分镜</span><i></i><span>资产</span><i></i><span>视频</span>
+            </div>
+            <button id="closeShortWorkbench" class="ghost-btn" type="button"><i class="fa-solid fa-arrow-left"></i> 返回画布</button>
+          </div>
+        </header>
+        <div class="short-layout">
+          <aside class="short-steps">
+            <button class="active short-block-nav" data-short-jump="idea"><span>01</span><strong>小说 / 剧本创作</strong><em>灵感、人物、剧情和分镜</em></button>
+            <button class="short-block-nav" data-short-jump="assets"><span>02</span><strong>资产表 / 资产图</strong><em>剧本拆分、提示词和角色场景</em></button>
+            <button class="short-block-nav" data-short-jump="video"><span>03</span><strong>视频生成</strong><em>关键帧、镜头、配音和成片</em></button>
+            <div class="short-skill-switcher"><label for="shortSkillSelector">当前 skill</label><select id="shortSkillSelector"><option value="script-to-asset-ledger">剧本拆分 / 资产表</option><option value="visual-prompt-engineer">资产图 / 视觉提示词</option><option value="seedance2-director-prompts">视频生成 / Seedance 2</option></select><span id="shortSkillVersion" class="short-skill-version">内置版本</span><div class="short-skill-actions"><button id="shortImportSkill" class="ghost-btn" type="button">导入 / 替换 Skill</button><button id="shortManageSkill" class="ghost-btn" type="button">版本管理</button></div><input id="shortSkillFile" type="file" accept=".md,.txt,.zip" hidden></div>
+            <small class="short-import-help">Skill：MD / TXT / ZIP（≤25 MB）；ZIP 含唯一 SKILL.md，保留包内资料，脚本不自动执行。</small>
+            <section id="shortTaskSidebar" class="short-task-sidebar" aria-live="polite" aria-label="漫剧任务监控"></section>
+          </aside>
+          <main class="short-main">
+            <section id="shortIdea" class="short-panel" data-short-section="idea">
+              <div class="short-panel-head">
+                <div><strong>漫剧构思</strong><span>一句话、角色设定、产品卖点或剧情方向都可以</span></div>
+                <button id="shortGenerateStory" class="primary-btn" type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> 加工成剧本</button>
+              </div>
+              <div class="short-brief-panel" aria-label="客户交付参数">
+                <div class="short-brief-title">
+                  <strong>客户交付参数</strong>
+                  <span>会约束剧本集数、单集节奏、分镜数量和画幅。</span>
+                </div>
+                <div class="short-brief-grid">
+                  <label>
+                    <span>总时长需求</span>
+                    <input id="shortClientTotalDuration" type="text" placeholder="例如 3 分钟 / 5 分钟">
+                  </label>
+                  <label>
+                    <span>集数要求</span>
+                    <input id="shortEpisodeCount" type="number" min="1" max="200" step="1" value="1">
+                  </label>
+                  <label>
+                    <span>每集时长</span>
+                    <input id="shortEpisodeDuration" type="number" min="5" max="1800" step="5" value="60">
+                  </label>
+                  <label>
+                    <span>每集场数</span>
+                    <input id="shortSceneCount" type="number" min="3" max="20" step="1" value="8">
+                  </label>
+                  <label>
+                    <span>画幅</span>
+                    <select id="shortFormat">
+                      <option value="9:16 竖屏">9:16 竖屏</option>
+                      <option value="16:9 横屏">16:9 横屏</option>
+                      <option value="1:1 方屏">1:1 方屏</option>
+                      <option value="4:5 信息流">4:5 信息流</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>发布平台</span>
+                    <input id="shortPlatform" type="text" placeholder="抖音 / 视频号 / 小红书">
+                  </label>
+                  <label>
+                    <span>目标受众</span>
+                    <input id="shortAudience" type="text" placeholder="例如 18-35 岁女性">
+                  </label>
+                  <label>
+                    <span>节奏密度</span>
+                    <select id="shortPace">
+                      <option value="强钩子快节奏">强钩子快节奏</option>
+                      <option value="标准短剧节奏">标准短剧节奏</option>
+                      <option value="情绪铺垫更充分">情绪铺垫更充分</option>
+                      <option value="高反转高密度">高反转高密度</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <textarea id="shortIdeaInput" placeholder="例如：一个年轻设计师用 AI 无限画布，在一夜之间完成客户漫剧方案。"></textarea>
+            </section>
+            <section id="shortStory" class="short-panel" data-short-section="story">
+              <div class="short-panel-head">
+                <div><strong>剧本方案</strong><span>客户满意后再转分镜</span></div>
+                <div class="short-actions">
+                  <button id="shortImportStory" class="ghost-btn" type="button"><i class="fa-solid fa-file-import"></i> 导入剧本</button><button id="shortAnalyzeStory" class="ghost-btn" type="button"><i class="fa-solid fa-list-check"></i> 结构化剧本</button><input id="shortStoryFile" type="file" multiple accept=".txt,.md,.markdown,.json,.docx,text/plain,text/markdown,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden><button id="shortApproveStory" class="ghost-btn" type="button"><i class="fa-regular fa-circle-check"></i> 客户通过</button>
+                  <button id="shortStoryToStoryboard" class="primary-btn" type="button"><i class="fa-solid fa-film"></i> 转化分镜</button>
+                </div>
+              </div>
+              <textarea id="shortStoryText" placeholder="生成后的漫剧剧本会显示在这里，也可以手动修改。"></textarea><div id="shortScriptStructure" class="short-script-structure" aria-live="polite"></div>
+              <p class="short-import-help">支持 TXT、MD / MARKDOWN、JSON、DOCX；可多选分集文件，按文件名数字顺序预览合并。单个 ≤25 MB，总量 ≤100 MB、正文 ≤200 万字符，不截断。旧 DOC、PDF、扫描件请先转换。</p>
+              <p id="shortScriptImportStatus" class="short-import-help" role="status" aria-live="polite"></p>
+            </section>
+            <section id="shortStoryboard" class="short-panel" data-short-section="storyboard">
+              <div class="short-panel-head">
+                <div><strong>镜头分镜</strong><span>每个镜头会继续生成关键帧和视频</span></div>
+              </div>
+              <div id="shortStoryboardList" class="short-card-grid"></div>
+            </section>
+            <section id="shortAssets" class="short-panel" data-short-section="assets">
+              <div class="short-panel-head">
+                <div><strong>人物 / 场景 / 道具 · 美术资产生产</strong><span>完整剧本 → 拆分 Skill 资产表 → 图片提示词 Skill → 生图，无需先转分镜</span></div>
+                <div class="short-actions">
+                  <button id="shortAssetPipelinePrompts" class="primary-btn" type="button">一键生成美术提示词</button>
+                  <button id="shortAssetPipelineImages" class="ghost-btn" type="button">一键完成并生图</button>
+                </div>
+              </div>
+              <details class="short-asset-art-settings"><summary>美术方向设置（可选）</summary><label class="short-prompt-editor"><span>与剧本和资产表一并交给图片提示词 Skill</span><textarea id="shortArtDirection" rows="2" placeholder="例如：媒介风格、人物设定图布局、场景空镜要求、道具展示方式；不填则按剧本事实编译。"></textarea></label></details>
+              <div class="short-actions">
+                <button id="shortGenerateAssets" class="ghost-btn" type="button">重新拆分资产表</button>
+                <button id="shortGenerateAllAssets" class="ghost-btn" type="button">继续生成资产图</button>
+                <button id="shortExportAssetPrompts" class="ghost-btn" type="button">导出提示词 TXT</button>
+                <button id="shortAssetPipelineStop" class="ghost-btn" type="button" disabled>停止后续步骤</button>
+              </div>
+              <p id="shortAssetPipelineStatus" role="status" aria-live="polite">“一键生成美术提示词”只调用文本模型，不生图；“一键完成并生图”还会调用图片模型。已完成项自动跳过，已有图片不会覆盖。</p>
+              <div id="shortAssetBrowserTools" class="short-asset-browser-tools">
+                <div class="short-asset-category-tabs" role="group" aria-label="资产分类">
+                  <button class="ghost-btn active" type="button" data-asset-filter="all" aria-pressed="true">全部 <b>0</b></button>
+                  <button class="ghost-btn" type="button" data-asset-filter="characters" aria-pressed="false">人物 <b>0</b></button>
+                  <button class="ghost-btn" type="button" data-asset-filter="scenes" aria-pressed="false">场景 <b>0</b></button>
+                  <button class="ghost-btn" type="button" data-asset-filter="props" aria-pressed="false">道具 <b>0</b></button>
+                </div>
+                <label class="short-asset-search"><span class="sr-only">搜索资产</span><input id="shortAssetSearch" type="search" placeholder="搜索名称、编号、别名或第几集"></label>
+                <label class="short-asset-columns">每排 <select id="shortAssetColumns" aria-label="每排图片数量"><option value="3">3 张</option><option value="4">4 张</option><option value="5">5 张</option><option value="6" selected>6 张</option><option value="8">8 张</option></select></label>
+              </div>
+              <div class="short-asset-browser-caption"><span id="shortAssetBrowserCount" role="status" aria-live="polite">显示 0 / 0 项</span><span>滚轮浏览 · 点击图片查看大图 / 编辑提示词 · 搜索不改变批量生成范围</span></div>
+              <div id="shortAssetsList" class="short-asset-browser" role="region" aria-label="资产图片节点，使用滚轮上下浏览" tabindex="0"></div>
+            </section>
+            <section id="shortFrames" class="short-panel" data-short-section="frames">
+              <div class="short-panel-head">
+                <div><strong>关键帧</strong><span>优先生成首帧，用于约束人物、场景和动作连续性</span></div>
+                <button id="shortGenerateAllFirstFrames" class="primary-btn" type="button"><i class="fa-regular fa-image"></i> 批量生成关键帧</button>
+              </div>
+              <div id="shortFramesList" class="short-card-grid"></div>
+            </section>
+            <section id="shortVideo" class="short-panel" data-short-section="video">
+              <div class="short-panel-head">
+                <div><strong>镜头视频</strong><span>使用通过的关键帧作为参考图生成对应镜头视频</span></div>
+                <button id="shortGenerateAllVideos" class="primary-btn" type="button"><i class="fa-solid fa-video"></i> 批量图生视频</button>
+              </div>
+              <div id="shortVideoList" class="short-card-grid"></div>
+            </section>
+          </main>
+        </div>
+      </section>
+      <section id="musicWorkbench" class="music-workbench hidden">
+        <div class="music-shell">
+          <header class="music-head"><div><strong>媒体中心</strong><span>本地媒体、公开资源和授权网页播放集中管理</span></div><div class="media-head-actions"><button id="musicImportBtn" class="ghost-btn" type="button"><i class="fa-solid fa-folder-open"></i> 导入音乐</button><input id="musicLocalAudioInput" class="fixed-file-input" type="file" accept="audio/*" multiple><button id="musicRadioBtn" class="ghost-btn" type="button"><i class="fa-solid fa-tower-broadcast"></i> 开源电台</button><button id="musicSearchBtn" class="primary-btn" type="button"><i class="fa-solid fa-magnifying-glass"></i> 搜索音乐</button></div></header>
+          <nav class="media-tabs" aria-label="媒体类型"><button class="active" data-media-mode="music" type="button"><i class="fa-solid fa-music"></i> 音乐</button><button data-media-mode="video" type="button"><i class="fa-solid fa-film"></i> 视频</button><button data-media-mode="tv" type="button"><i class="fa-solid fa-tv"></i> 电视</button></nav>
+          <div class="music-search-row"><i class="fa-solid fa-magnifying-glass"></i><input id="musicSearchInput" type="search" placeholder="输入歌名、歌手或曲风，自动找可免费播放的歌"><span id="musicSearchStatus">未搜索</span></div>
+          <main class="music-layout">
+            <section class="music-deck">
+              <div class="music-cover">
+                <div class="music-disc"><i class="fa-solid fa-music"></i></div>
+                <div class="music-bars" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+              </div>
+              <div class="music-deck-copy">
+                <span>NOW PLAYING</span>
+                <strong id="musicDeckTitle">未选择音乐</strong>
+                <small id="musicDeckMeta">搜索歌曲或导入本地音乐</small>
+              </div>
+              <div class="music-section-title"><strong>播放队列</strong><span id="musicQueueCount">0 首可播放</span></div>
+              <div id="musicQueueList" class="music-list compact music-queue-list"></div>
+            </section>
+            <section class="music-results"><div class="music-section-title"><strong>曲库 / 搜索结果</strong><span>点击歌曲直接播放</span></div><div id="musicResultsList" class="music-list"></div></section>
+            <aside class="music-favorites"><div class="music-section-title"><strong>音乐来源</strong><span>选择搜索曲库</span></div><div id="musicPluginList" class="music-plugin-list"></div><div class="music-section-title"><strong>我的收藏</strong><span id="musicFavoriteCount">0 首</span></div><div id="musicFavoritesList" class="music-list compact"></div></aside>
+          </main>
+          <main id="videoWorkbenchPanel" class="media-video-panel hidden"><section class="media-screen"><video id="mediaVideoPlayer" controls playsinline preload="metadata"></video><div class="media-empty-state"><i class="fa-solid fa-film"></i><strong>选择一个视频开始播放</strong><span>打开本地视频、粘贴地址，或搜索公开资源</span></div></section><aside class="media-sidebar"><div class="music-section-title"><strong>视频播放</strong><span>本地视频、网络地址和免费公开视频</span></div><div class="media-control-stack"><button id="mediaOpenVideoFile" class="primary-btn" type="button"><i class="fa-solid fa-folder-open"></i> 打开本地视频</button><input id="mediaVideoFileInput" class="fixed-file-input" type="file" accept="video/*"><div class="media-url-row"><input id="mediaVideoUrlInput" type="url" placeholder="粘贴 mp4 / webm / m3u8 地址"><button id="mediaPlayVideoUrl" class="ghost-btn" type="button">播放</button></div><div class="media-url-row"><input id="mediaVideoSearchInput" type="search" placeholder="搜索免费公开视频，例如：自然、城市、纪录片"><button id="mediaSearchVideoBtn" class="ghost-btn" type="button">搜索</button></div><div id="mediaVideoSearchStatus" class="music-empty">可搜索 Wikimedia Commons / Internet Archive 免费公开视频</div><div id="mediaVideoList" class="music-list compact"></div></div></aside></main>
+          <main id="tvWorkbenchPanel" class="media-video-panel hidden"><section class="media-screen"><video id="mediaTvPlayer" controls playsinline preload="metadata"></video><div class="media-empty-state"><i class="fa-solid fa-tv"></i><strong>选择一个公开频道开始播放</strong><span>也可以粘贴你有权限使用的直播地址</span></div></section><aside class="media-sidebar"><div class="music-section-title"><strong>电视直播</strong><span>公开频道和自定义直播地址</span></div><div id="mediaTvList" class="music-list compact"></div><div class="media-url-row"><input id="mediaTvUrlInput" type="url" placeholder="粘贴直播 m3u8 / mp4 地址"><button id="mediaPlayTvUrl" class="ghost-btn" type="button">播放</button></div></aside></main>
+          <footer class="music-player">
+            <div class="music-player-controls">
+              <button id="musicShuffle" class="icon-btn" type="button" title="随机播放" aria-label="随机播放"><i class="fa-solid fa-shuffle"></i></button>
+              <button id="musicPrev" class="icon-btn" type="button" title="上一首" aria-label="上一首"><i class="fa-solid fa-backward-step"></i></button>
+              <button id="musicPlayPause" class="music-main-play" type="button" title="播放/暂停"><i class="fa-solid fa-play"></i></button>
+              <button id="musicNext" class="icon-btn" type="button" title="下一首" aria-label="下一首"><i class="fa-solid fa-forward-step"></i></button>
+              <button id="musicRepeat" class="icon-btn" type="button" title="循环播放" aria-label="循环播放"><i class="fa-solid fa-repeat"></i></button>
+            </div>
+            <div class="music-now">
+              <div class="music-now-line"><strong id="musicNowTitle">未选择音乐</strong><span id="musicQueueState">0 / 0</span></div>
+              <span id="musicNowMeta">搜索后点击播放</span>
+              <div class="music-progress-row"><span id="musicElapsed">0:00</span><input id="musicSeek" type="range" min="0" max="1000" value="0" step="1" aria-label="播放进度"><span id="musicDuration">0:00</span></div>
+              <audio id="musicAudio" preload="none"></audio>
+            </div>
+            <div class="music-player-actions">
+              <label class="music-volume" title="音量"><i class="fa-solid fa-volume-high"></i><input id="musicVolume" type="range" min="0" max="100" value="80" step="1" aria-label="音量"></label>
+              <button id="musicFavoriteCurrent" class="ghost-btn" type="button"><i class="fa-regular fa-heart"></i> 收藏</button>
+              <button id="musicOpenSource" class="ghost-btn" type="button"><i class="fa-solid fa-arrow-up-right-from-square"></i> 来源</button>
+            </div>
+          </footer>
+        </div>
+      </section>
+      <section id="assistantWorkbench" class="assistant-workbench hidden">
+        <header class="short-head manju-head assistant-studio-head">
+          <div class="manju-title">
+            <span class="manju-eyebrow">AI ASSISTANT STUDIO</span>
+            <strong>∞ 灵枢万象</strong>
+            <span>围绕项目开展对话、调用技能和处理创作任务</span>
+          </div>
+            <div class="assistant-model-row">
+              <label class="assistant-model-select"><span>模型</span><select id="assistantModelSelect"></select></label>
+              <label class="assistant-context-select"><span>上下文</span><select id="assistantContextModeInline">
+                <option value="auto">自动</option>
+                <option value="selected">仅选中节点</option>
+                <option value="full">完整画布</option>
+                <option value="off">关闭</option>
+              </select></label>
+              <button id="assistantOpenCanvas" class="ghost-btn" type="button" title="返回画布"><i class="fa-solid fa-arrow-left"></i> 返回画布</button>
+            </div>
+        </header>
+        <div class="assistant-studio-shell">
+          <aside class="assistant-list">
+            <div class="codex-nav-brand"><i class="fa-solid fa-terminal"></i><strong>∞ 灵枢万象</strong></div>
+            <button class="codex-new-task" data-assistant-action="add-topic" type="button"><i class="fa-solid fa-plus"></i><span>新建任务</span></button>
+            <button class="codex-nav-item" data-codex-view="scheduled" type="button"><i class="fa-regular fa-clock"></i><span>已安排</span><em id="codexScheduleCount">0</em></button>
+            <button class="codex-nav-item" data-codex-view="skills" type="button"><i class="fa-solid fa-wand-magic-sparkles"></i><span>技能库</span></button>
+            <button class="codex-nav-item" data-codex-view="plugins" type="button"><i class="fa-solid fa-puzzle-piece"></i><span>插件</span></button>
+            <div class="codex-nav-label codex-nav-label-row"><span>项目</span><button data-assistant-action="add-project" type="button" title="新建项目" aria-label="新建项目"><i class="fa-solid fa-plus"></i></button></div>
+            <div id="assistantTopicList" class="assistant-topic-list codex-task-list"></div>
+            <div class="codex-nav-label codex-standalone-label">任务</div>
+            <div id="assistantUnfiledTaskList" class="assistant-topic-list codex-unfiled-list"></div>
+            <div class="codex-nav-footer"><button id="assistantOpenSettings" type="button"><i class="fa-solid fa-gear"></i><span>灵枢万象设置</span></button></div>
+          </aside>
+          <main class="assistant-main-stage">
+            <div class="assistant-panel-head"><div id="assistantBreadcrumb" class="assistant-breadcrumb"></div></div>
+            <section id="agentConsole" class="agent-console" aria-label="Agent 控制台"></section>
+            <section id="dialogEditWorkbench" class="dialog-edit-workbench assistant-pane">
+              <div id="dialogEditWorkbenchPanel" class="dialog-edit-host"></div>
+              <input id="dialogEditRefInput" type="file" multiple class="fixed-file-input">
+            </section>
+          </main>
+          <aside class="assistant-topic-rail codex-context-rail">
+            <section class="codex-context-section">
+              <div class="codex-context-title"><span>环境信息</span></div>
+              <div id="assistantRuntimeInfo" class="codex-runtime-info"></div>
+            </section>
+            <section class="codex-context-section">
+              <div class="codex-context-title"><span>当前上下文</span></div>
+              <div id="assistantProjectContext" class="codex-project-context"></div>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+  </div>
+
+  <aside id="settingsDrawer" class="settings-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" aria-hidden="true">
+    <div class="settings-card">
+      <header class="settings-head">
+        <div><h2 id="settingsTitle">设置</h2><p>常用项直接改，高级项收在对应页里。</p></div>
+        <button id="closeSettings" class="icon-btn" type="button" title="关闭设置" aria-label="关闭设置"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <nav class="settings-nav" role="tablist" aria-label="设置分类">
+        <button type="button" role="tab" aria-selected="false" data-settings-tab="appearance"><i class="fa-solid fa-palette"></i> 外观</button>
+        <button type="button" role="tab" aria-selected="true" class="active" data-settings-tab="api"><i class="fa-solid fa-plug"></i> API</button>
+        <button type="button" role="tab" aria-selected="false" data-settings-tab="generation"><i class="fa-solid fa-shield-halved"></i> 生成</button>
+        <button type="button" role="tab" aria-selected="false" data-settings-tab="storage"><i class="fa-solid fa-folder-open"></i> 存储</button>
+        <button type="button" role="tab" aria-selected="false" data-settings-tab="about"><i class="fa-solid fa-circle-info"></i> 关于</button>
+      </nav>
+      <div class="settings-body">
+      <div class="settings-pane hidden" data-settings-pane="appearance">
+      <section class="settings-section">
+        <h3><i class="fa-solid fa-palette"></i> 外观</h3>
+        <label>工作台模式<select id="appearanceMode">
+          <option value="standard">标准暗色：高级玻璃质感</option>
+          <option value="focus">专注模式：弱化装饰，突出节点</option>
+          <option value="contrast">高对比模式：强化端口和连线</option>
+        </select></label>
+        <fieldset class="color-theme-fieldset">
+          <legend>配色主题</legend>
+          <div class="color-theme-grid" role="radiogroup" aria-label="配色主题">
+            <label title="极光青"><input type="radio" name="colorTheme" value="ocean" checked><span class="color-theme-swatch" style="--swatch:#4fd6e8"></span><span>极光青</span></label>
+            <label title="青玉绿"><input type="radio" name="colorTheme" value="jade"><span class="color-theme-swatch" style="--swatch:#34c7a1"></span><span>青玉绿</span></label>
+            <label title="暮光紫"><input type="radio" name="colorTheme" value="dusk"><span class="color-theme-swatch" style="--swatch:#9b8af5"></span><span>暮光紫</span></label>
+            <label title="珊瑚红"><input type="radio" name="colorTheme" value="coral"><span class="color-theme-swatch" style="--swatch:#f27588"></span><span>珊瑚红</span></label>
+            <label title="琥珀金"><input type="radio" name="colorTheme" value="amber"><span class="color-theme-swatch" style="--swatch:#e9aa3a"></span><span>琥珀金</span></label>
+            <label title="自定义颜色"><input type="radio" name="colorTheme" value="custom"><span class="color-theme-swatch color-theme-custom"><i class="fa-solid fa-eye-dropper"></i></span><span>自定义</span></label>
+          </div>
+          <div id="customThemeRow" class="custom-theme-row" aria-hidden="true">
+            <div class="theme-zone-picker" role="tablist" aria-label="选择要编辑的界面区域">
+              <button class="active" type="button" role="tab" aria-selected="true" data-theme-zone="accent"><span class="theme-zone-swatch"></span><strong>按钮强调</strong></button>
+              <button type="button" role="tab" aria-selected="false" data-theme-zone="deep"><span class="theme-zone-swatch"></span><strong>应用背景</strong></button>
+              <button type="button" role="tab" aria-selected="false" data-theme-zone="workspace"><span class="theme-zone-swatch"></span><strong>画布底色</strong></button>
+              <button type="button" role="tab" aria-selected="false" data-theme-zone="panel"><span class="theme-zone-swatch"></span><strong>大面板</strong></button>
+              <button type="button" role="tab" aria-selected="false" data-theme-zone="control"><span class="theme-zone-swatch"></span><strong>卡片输入</strong></button>
+            </div>
+            <div id="customColorWheel" class="professional-color-wheel" aria-label="自定义主题色轮"></div>
+            <div class="custom-theme-precision">
+              <span id="customThemePreview" class="custom-theme-preview" aria-hidden="true"></span>
+              <label>主题名称<input id="customThemeName" type="text" value="我的主题 1" maxlength="24" autocomplete="off"></label>
+              <label><span id="customThemeZoneLabel">按钮强调 HEX</span><input id="customThemeHex" type="text" value="#4FD6E8" maxlength="7" spellcheck="false" autocomplete="off"></label>
+              <button id="saveCustomTheme" class="primary-btn" type="button"><i class="fa-solid fa-bookmark"></i> 保存当前</button>
+              <input id="customThemeColor" type="color" value="#4fd6e8" tabindex="-1" aria-hidden="true" hidden>
+            </div>
+          </div>
+          <div class="color-theme-footer"><button id="resetColorTheme" class="ghost-btn" type="button"><i class="fa-solid fa-arrow-rotate-left"></i> 恢复默认</button></div>
+          <section class="saved-theme-library" aria-label="我的主题">
+            <header><span><i class="fa-solid fa-bookmark"></i> 我的主题</span><em id="savedColorThemeCount">0 / 5</em></header>
+            <div id="savedColorThemeList" class="saved-color-theme-list"></div>
+          </section>
+        </fieldset>
+        <p class="appearance-mode-hint">顶部准星可开关专注模式。浅色模式已去掉。</p>
+        <label class="perf-mode-toggle">
+          <input id="perfReduceMotion" type="checkbox">
+          <span><strong>性能模式</strong><small>关闭首页背景视频与部分装饰动画，弱机更流畅；不影响生成与导出。</small></span>
+        </label>
+      </section>
+      <section class="settings-section ui-sound-settings">
+        <h3><i class="fa-solid fa-volume-high"></i> 界面声音</h3>
+        <div class="ui-sound-setting-row">
+          <label class="ui-sound-toggle">
+            <input id="uiSoundEnabled" type="checkbox" checked data-ui-sound="off">
+            <span class="ui-sound-switch" aria-hidden="true"></span>
+            <span class="ui-sound-copy"><strong>交互音效</strong><small>按钮、切换和确认反馈</small></span>
+          </label>
+          <button id="uiSoundPreview" class="ghost-btn" type="button"><i class="fa-solid fa-play"></i> 试听</button>
+        </div>
+        <label class="ui-sound-volume">
+          <span><strong>音量</strong><output id="uiSoundVolumeValue" for="uiSoundVolume">35%</output></span>
+          <input id="uiSoundVolume" type="range" min="0" max="100" step="1" value="35" data-ui-sound="off" aria-label="界面音效音量">
+        </label>
+      </section>
+      </div>
+      <div class="settings-pane" data-settings-pane="api">
+      <section class="settings-section api-settings-modern">
+        <h3><i class="fa-solid fa-plug"></i> API 设置</h3>
+        <div class="api-settings-intro"><strong>只需三步：选服务、填地址和 Key、点击自动配置</strong><span>配置成功后会自动读取可用模型；模型选择会在服务卡片里直接显示。</span></div>
+        <section class="api-default-details api-global-defaults-details api-global-defaults-visible">
+          <div class="api-global-section-head"><div><strong><i class="fa-solid fa-route"></i> 默认模型</strong><small>设置画布未指定服务时使用的供应商和模型</small></div></div>
+        <div class="api-global-defaults">
+          <div class="api-global-head">
+            <div>
+              <strong>默认模型</strong>
+              <span>没有单独指定服务的节点，会使用这里的供应商和模型。</span>
+            </div>
+          </div>
+          <div class="api-global-row" data-global-model-kind="chat">
+            <b>聊天</b>
+            <label>供应商<select id="globalChatProvider" data-global-provider="chat"></select></label>
+            <label>模型<input id="globalChatModel" data-global-model="chat" list="globalChatModelList" placeholder="选择模型，或粘贴 model id"><datalist id="globalChatModelList"></datalist></label>
+          </div>
+          <div class="api-global-row" data-global-model-kind="image">
+            <b>图片</b>
+            <label>供应商<select id="globalImageProvider" data-global-provider="image"></select></label>
+            <label>模型<input id="globalImageModel" data-global-model="image" list="globalImageModelList" placeholder="选择模型，或粘贴 model id"><datalist id="globalImageModelList"></datalist></label>
+          </div>
+          <div class="api-global-row" data-global-model-kind="video">
+            <b>视频</b>
+            <label>供应商<select id="globalVideoProvider" data-global-provider="video"></select></label>
+            <label>模型<input id="globalVideoModel" data-global-model="video" list="globalVideoModelList" placeholder="选择模型，或粘贴 model id"><datalist id="globalVideoModelList"></datalist></label>
+          </div>
+        </div>
+        </section>
+        <details class="api-default-details">
+          <summary><span>旧版兼容设置（通常不需要修改）</span><i class="fa-solid fa-chevron-down"></i></summary>
+          <p class="api-legacy-note">这些字段用于兼容旧项目。新配置请在下面的供应商卡片中完成，保存后会自动同步。</p>
+          <div class="model-preset-row">
+            <label>模型配置预设<select id="modelPresetSelect">
+              <option value="openai-compatible">OpenAI 兼容</option>
+              <option value="siliconflow">硅基流动</option>
+              <option value="volcengine">火山</option>
+              <option value="tongyi">通义</option>
+              <option value="comfyui-local">ComfyUI 本地</option>
+              <option value="custom">自定义 OpenAI-compatible</option>
+            </select></label>
+            <button id="applyModelPreset" class="ghost-btn" type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> 应用预设</button>
+          </div>
+          <p id="modelPresetHint" class="model-preset-hint">选择预设后只填 API 地址和模型建议，不会改写 API 密钥。</p>
+          <label>API 地址<input id="apiUrl" value="https://nexusapi.cn/v1" placeholder="https://api.example.com/v1"></label>
+          <label>API 密钥<input id="apiKey" type="password" placeholder="sk-..."></label>
+          <button id="clearApiKey" class="ghost-btn" type="button"><i class="fa-regular fa-trash-can"></i> 清除密钥</button>
+          <label>默认图像模型<input id="imageModel" value="gpt-image2" placeholder="gpt-image2"></label>
+          <label>默认视频模型<input id="videoModel" value="omni-flash" placeholder="omni-flash / sora-2 / veo3.1-components"></label>
+          <label>默认聊天模型<input id="chatModel" value="gpt-4o-mini" placeholder="gpt-4o-mini"></label>
+          <label>∞ 灵枢万象上下文<select id="assistantContextMode">
+            <option value="auto">自动：选中节点优先，未选中时轻量摘要</option>
+            <option value="selected">仅选中节点：没选节点就不带画布</option>
+            <option value="full">完整画布：始终带项目摘要</option>
+            <option value="off">关闭：纯聊天</option>
+          </select></label>
+          <p class="assistant-context-mode-hint">控制∞ 灵枢万象每次发送消息时带多少画布上下文，避免通用问题被当前项目带偏。</p>
+        </details>
+        <div class="api-providers-panel">
+          <div class="api-providers-head">
+            <div>
+              <strong>已连接的服务</strong>
+              <span>通常只需要一个服务。填写地址和 Key 后点击“保存并自动配置”。</span>
+            </div>
+              <button id="addApiProvider" class="primary-btn" type="button"><i class="fa-solid fa-plus"></i> 添加服务</button>
+          </div>
+          <div id="apiProviderList" class="api-provider-list"></div>
+        </div>
+      </section>
+      <section class="settings-section">
+        <h3><i class="fa-solid fa-diagram-project"></i> ComfyUI</h3>
+        <label>服务地址<input id="comfyUrl" value="http://127.0.0.1:8188" placeholder="http://127.0.0.1:8188"></label>
+        <div class="settings-action-row">
+          <button id="testComfyUI" class="ghost-btn"><i class="fa-solid fa-vial"></i> 测试连接</button>
+          <button id="importComfyWorkflow" class="ghost-btn"><i class="fa-solid fa-file-import"></i> 导入工作流</button>
+        </div>
+        <input id="comfyWorkflowFile" type="file" accept=".json,application/json" class="hidden">
+        <details class="settings-details">
+          <summary>工作流 JSON</summary>
+          <label>工作流名称<input id="comfyWorkflowName" value="默认工作流" placeholder="例如：SDXL 文生图"></label>
+          <div class="settings-action-row">
+            <button id="exportComfyWorkflow" class="ghost-btn"><i class="fa-solid fa-file-export"></i> 导出</button>
+            <button id="clearComfyWorkflow" class="ghost-btn"><i class="fa-regular fa-trash-can"></i> 清空</button>
+          </div>
+          <textarea id="comfyWorkflowJson" placeholder="导入 ComfyUI API 格式 workflow JSON 后，会保存在本机设置里。"></textarea>
+        </details>
+      </section>
+      </div>
+      <div class="settings-pane hidden" data-settings-pane="generation">
+      <section class="settings-section generation-safety-settings">
+        <h3><i class="fa-solid fa-shield-halved"></i> 生成保护</h3>
+        <div class="two-col">
+          <label>单次最多请求数<input id="generationMaxTasks" type="number" min="1" max="100" step="1" value="12"><small>运行全部节点时，超过此数量会先停止。</small></label>
+          <label>连续失败停止<input id="generationFailureStop" type="number" min="1" max="20" step="1" value="3"><small>连续失败达到次数后，不再提交后续任务。</small></label>
+          <label>每日请求提醒<input id="generationDailyReminder" type="number" min="1" max="1000" step="1" value="30"><small>达到当天累计请求数时再次确认。</small></label>
+          <label class="generation-storage-toggle ui-sound-toggle">
+            <input id="generationRequireStorage" type="checkbox" checked>
+            <span class="ui-sound-switch" aria-hidden="true"></span>
+            <span class="ui-sound-copy"><strong>要求本地持久化</strong><small>运行前检查存储目录，避免临时链接丢失</small></span>
+          </label>
+        </div>
+        <details class="settings-details">
+          <summary>费用预算</summary>
+          <div class="two-col">
+            <label>预算币种<select id="generationBudgetCurrency"><option value="USD">USD 美元</option><option value="CNY">CNY 人民币</option></select><small>模型价格与预算币种不一致时会先阻止。</small></label>
+            <label>单次任务预算<input id="generationSingleBudget" type="number" min="0" step="0.01" value="0"><small>0 表示不设上限；超过后必须明确确认。</small></label>
+            <label>每日费用预算<input id="generationDailyBudget" type="number" min="0" step="0.01" value="0"><small>统计当天所有项目的预计费用。</small></label>
+            <label>当前项目预算<input id="generationProjectBudget" type="number" min="0" step="0.01" value="0"><small>只作用于当前项目，切换项目后自动更新。</small></label>
+          </div>
+        </details>
+         <p class="storage-note">图片按所选尺寸请求，不自动扩图、插值放大或降尺寸重试；参考图兼容、失败后重试或切换备用 Key 可能产生额外 API 调用。</p>
+        <details class="settings-details" aria-labelledby="budgetLedgerTitle">
+          <summary>费用账本与路由预览</summary>
+          <section class="budget-ledger-panel">
+            <div class="workflow-exposure-heading"><strong id="budgetLedgerTitle">费用账本与路由预览</strong><span>只展示建议，不会自动切换模型</span></div>
+            <div class="two-col">
+              <label>路由偏好<select id="budgetRoutePreference"><option value="balanced">均衡</option><option value="price">价格优先</option><option value="speed">速度优先</option><option value="quality">质量优先</option></select></label>
+              <button id="previewBudgetRoutes" class="ghost-btn" type="button"><i class="fa-solid fa-route"></i> 预览候选路由</button>
+            </div>
+            <div id="budgetLedgerReport" class="budget-ledger-report" aria-live="polite"></div>
+          </section>
+        </details>
+      </section>
+      </div>
+      <div class="settings-pane hidden" data-settings-pane="storage">
+      <section class="settings-section">
+        <h3><i class="fa-solid fa-folder-open"></i> 本地存储</h3>
+        <label>存储位置<input id="localStoragePath" readonly placeholder="未选择，默认使用浏览器本地存储"></label>
+        <div class="settings-action-row">
+          <button id="chooseStorageDir" class="ghost-btn"><i class="fa-solid fa-folder-open"></i> 更改</button>
+          <button id="openStorageDir" class="ghost-btn"><i class="fa-solid fa-arrow-up-right-from-square"></i> 打开文件夹</button>
+        </div>
+        <div class="settings-action-group">
+          <strong>备份</strong>
+          <div class="settings-action-row">
+            <button id="exportWorkspaceBackup" class="ghost-btn"><i class="fa-solid fa-box-archive"></i> 导出完整备份</button>
+            <button id="restoreWorkspaceBackup" class="ghost-btn"><i class="fa-solid fa-shield-arrow-up"></i> 恢复完整备份</button>
+            <button id="restoreProjectBackup" class="ghost-btn"><i class="fa-solid fa-clock-rotate-left"></i> 恢复备份</button>
+          </div>
+        </div>
+        <div class="settings-action-group">
+          <strong>导出</strong>
+          <div class="settings-action-row">
+            <button id="batchExport" class="ghost-btn"><i class="fa-solid fa-file-export"></i> 批量导出</button>
+            <button id="exportReviewPackage" class="ghost-btn"><i class="fa-solid fa-clapperboard"></i> 导出审片包</button>
+            <button id="importReviewComments" class="ghost-btn"><i class="fa-solid fa-comment-medical"></i> 导入审阅意见</button>
+            <input id="reviewCommentsFile" class="hidden" type="file" accept=".json,application/json">
+          </div>
+        </div>
+        <div class="settings-action-group">
+          <strong>维护</strong>
+          <div class="settings-action-row">
+            <button id="scanMediaLibrary" class="ghost-btn"><i class="fa-solid fa-photo-film"></i> 本地素材库</button>
+            <button id="exportDiagnostics" class="ghost-btn"><i class="fa-solid fa-file-medical"></i> 导出诊断包</button>
+            <button id="runCleanup" class="ghost-btn"><i class="fa-solid fa-broom"></i> 一键清理</button>
+          </div>
+        </div>
+        <div id="mediaLibraryReport" class="media-library-report"></div>
+        <div id="reviewCommentsReport" class="review-comments-report" aria-live="polite"></div>
+        <p class="storage-note">完整备份含项目、历史、资产、模型和媒体；不含 API 密钥。</p>
+        <details class="settings-details" aria-label="项目恢复点">
+          <summary>项目恢复点</summary>
+          <div class="project-version-controls">
+            <div><strong>项目恢复点</strong><span id="projectVersionSummary">尚无自动恢复点</span></div>
+            <div class="two-col">
+              <select id="projectVersionSelect" aria-label="选择项目恢复点"><option value="">暂无自动恢复点</option></select>
+              <button id="restoreProjectVersion" class="ghost-btn" type="button"><i class="fa-solid fa-clock-rotate-left"></i> 恢复版本</button>
+            </div>
+            <small>每次保存会保留最近的自动恢复点；恢复后仍可用“重做”返回当前版本。</small>
+          </div>
+        </details>
+      </section>
+      </div>
+      <div class="settings-pane hidden" data-settings-pane="about">
+      <section class="settings-section license-settings">
+        <h3><i class="fa-solid fa-key"></i> 软件授权</h3>
+        <div id="licenseStatus" class="license-status" data-status="loading">
+          <i class="fa-solid fa-circle-notch fa-spin"></i>
+          <div><strong>正在检查</strong><span>--</span></div>
+        </div>
+        <div class="license-redeem-row">
+          <label><span>兑换码</span><input id="licenseRedemptionCode" type="text" maxlength="32" autocomplete="off" spellcheck="false" placeholder="FAI1-XXXX-XXXX-XXXX-XXXX"></label>
+          <button id="redeemLicense" class="primary-btn" type="button"><i class="fa-solid fa-shield-check"></i> 激活</button>
+        </div>
+        <button id="deactivateLicense" class="ghost-btn danger license-deactivate" type="button"><i class="fa-solid fa-link-slash"></i> 解除本机</button>
+        <details class="license-offline-recovery">
+          <summary><i class="fa-solid fa-life-ring"></i> 离线恢复</summary>
+          <div class="license-offline-body">
+            <label>许可证编号<input id="licenseId" type="text" maxlength="36" autocomplete="off" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
+            <div class="two-col">
+              <button id="createActivationRequest" class="ghost-btn" type="button"><i class="fa-solid fa-fingerprint"></i> 生成请求码</button>
+              <button id="copyActivationRequest" class="ghost-btn" type="button"><i class="fa-regular fa-copy"></i> 复制请求码</button>
+            </div>
+            <label>请求码<textarea id="activationRequestCode" rows="3" readonly spellcheck="false"></textarea></label>
+            <label>激活响应码<textarea id="activationResponseCode" rows="4" spellcheck="false"></textarea></label>
+            <button id="importActivation" class="ghost-btn" type="button"><i class="fa-solid fa-file-import"></i> 导入离线响应</button>
+          </div>
+        </details>
+      </section>
+      <section class="settings-section">
+        <h3><i class="fa-solid fa-rotate"></i> 更新系统</h3>
+        <div class="settings-action-row">
+          <button id="checkUpdates" class="ghost-btn"><i class="fa-solid fa-magnifying-glass"></i> 检查更新</button>
+          <button id="applyUpdatePackage" class="ghost-btn"><i class="fa-solid fa-box-open"></i> 应用本地更新包</button>
+          <button id="rollbackUpdate" class="ghost-btn"><i class="fa-solid fa-clock-rotate-left"></i> 回滚上一版</button>
+        </div>
+        <p class="storage-note">正式版使用发布者签名的完整安装包升级；项目、历史、媒体和 API Key 保存在独立用户目录。</p>
+      </section>
+      <section class="settings-section support-center-settings">
+        <h3><i class="fa-solid fa-life-ring"></i> 客户支持与版本</h3>
+        <div class="support-build-summary">
+          <div><span>当前版本</span><strong id="supportVersion">--</strong></div>
+          <div><span>发布通道</span><strong id="supportChannel">--</strong></div>
+          <div><span>交付状态</span><strong id="supportTrustStatus">--</strong></div>
+        </div>
+        <div class="support-document-grid">
+          <button class="ghost-btn" type="button" data-support-document="help"><i class="fa-regular fa-circle-question"></i> 帮助中心</button>
+          <button class="ghost-btn" type="button" data-support-document="privacy"><i class="fa-solid fa-user-shield"></i> 隐私政策</button>
+          <button class="ghost-btn" type="button" data-support-document="agreement"><i class="fa-regular fa-file-lines"></i> 用户协议</button>
+          <button class="ghost-btn" type="button" data-support-document="refund"><i class="fa-solid fa-headset"></i> 退款与售后</button>
+          <button class="ghost-btn" type="button" data-support-document="requirements"><i class="fa-solid fa-desktop"></i> 系统要求</button>
+          <button class="ghost-btn" type="button" data-support-document="releases"><i class="fa-solid fa-clock-rotate-left"></i> 版本说明</button>
+          <button class="ghost-btn" type="button" data-support-document="thirdParty"><i class="fa-solid fa-scale-balanced"></i> 第三方许可</button>
+          <button class="ghost-btn" type="button" data-support-document="musicPolicy"><i class="fa-solid fa-music"></i> 音乐来源政策</button>
+        </div>
+      </section>
+      </div>
+      </div>
+    </div>
+  </aside>
+
+  <section id="commandPalette" class="command-palette hidden" role="dialog" aria-modal="true" aria-labelledby="commandPaletteTitle" aria-hidden="true">
+    <div class="command-palette-card">
+      <header>
+        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+        <label id="commandPaletteTitle" class="sr-only" for="commandPaletteInput">命令中心</label>
+        <input id="commandPaletteInput" aria-label="搜索命令" aria-controls="commandPaletteList" aria-autocomplete="list" placeholder="搜索功能、创建节点、切换工作区..." autocomplete="off">
+        <kbd>Esc</kbd>
+      </header>
+      <div id="commandPaletteList" class="command-palette-list"></div>
+    </div>
+  </section>
+
+  <button id="mascotSwitch" class="mascot-switch" title="切换伙伴"><i class="fa-solid fa-venus-mars"></i></button>
+  <button id="mascotButton" class="mascot-button" title="∞小子">
+    <img id="mascotImage" src="./assets/mascot-boy.png" alt="∞小子">
+    <span>hi</span>
+  </button>
+
+  <button id="chatPreview" class="chat-preview hidden" type="button" title="打开助手对话">
+    <strong>∞小子回复</strong>
+    <span id="chatPreviewText">点击查看最近回复</span>
+  </button>
+
+  <section id="chatPanel" class="chat-panel hidden" role="dialog" aria-modal="true" aria-labelledby="chatPanelTitle" aria-hidden="true">
+    <header>
+      <div><strong id="chatPanelTitle">∞小子</strong><span>你的画布创作助手</span></div>
+      <button id="closeChat" class="icon-btn" type="button" title="关闭助手对话" aria-label="关闭助手对话"><i class="fa-solid fa-xmark"></i></button>
+    </header>
+    <div id="chatMessages" class="chat-messages"></div>
+    <footer>
+      <input id="chatUploadInput" type="file" accept="image/*,video/*" class="hidden" multiple>
+      <button id="chatUploadBtn" class="ghost-btn chat-upload-btn" title="上传素材给助手"><i class="fa-solid fa-paperclip"></i></button>
+      <textarea id="chatInput" placeholder="问我提示词、分镜、角色一致性..."></textarea>
+      <button id="sendChat" class="primary-btn" type="button" title="发送消息" aria-label="发送消息"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
+    </footer>
+  </section>
+
+  <div id="textEditorModal" class="text-editor-modal hidden">
+    <div class="text-editor-card">
+      <button id="textEditorClose" class="editor-expand" type="button" title="收起"><i class="fa-solid fa-compress"></i></button>
+      <textarea id="textEditorInput" placeholder="描述你想要生成的内容，并在下方调整生成参数。"></textarea>
+    </div>
+  </div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-hidden="true">
+    <div class="modal-card">
+      <h3 id="modalTitle">项目</h3>
+      <p id="modalText" class="hidden"></p>
+      <input id="modalInput">
+      <div class="modal-actions">
+        <button id="modalCancel" class="ghost-btn">取消</button>
+        <button id="modalOk" class="primary-btn">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <section id="supportDocumentModal" class="support-document-modal hidden" aria-modal="true" role="dialog" aria-labelledby="supportDocumentTitle">
+    <article class="support-document-card">
+      <header>
+        <h2 id="supportDocumentTitle">帮助中心</h2>
+        <button id="supportDocumentClose" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <div id="supportDocumentContent" class="support-document-content"></div>
+    </article>
+  </section>
+
+  <section id="providerConformanceModal" class="provider-conformance-modal hidden" aria-modal="true" role="dialog" aria-labelledby="providerConformanceTitle">
+    <article class="provider-conformance-card">
+      <header>
+        <div><h2 id="providerConformanceTitle">API 兼容性验收</h2><span id="providerConformanceSubtitle">--</span></div>
+        <button id="providerConformanceClose" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <div class="provider-conformance-body">
+        <section class="provider-conformance-options">
+          <label><input type="checkbox" data-conformance-step="models" checked><span><i class="fa-solid fa-list"></i>模型列表</span></label>
+          <label><input type="checkbox" data-conformance-step="text" checked><span><i class="fa-solid fa-message"></i>文本请求</span></label>
+          <label><input type="checkbox" data-conformance-step="imageSquare"><span><i class="fa-regular fa-square"></i>方图</span></label>
+          <label><input type="checkbox" data-conformance-step="imageLandscape"><span><i class="fa-regular fa-image"></i>16:9 图片</span></label>
+          <label><input type="checkbox" data-conformance-step="imageReference"><span><i class="fa-solid fa-images"></i>参考图</span></label>
+          <label><input type="checkbox" data-conformance-step="videoLandscape"><span><i class="fa-solid fa-video"></i>16:9 视频</span></label>
+        </section>
+        <p class="provider-conformance-cost"><i class="fa-solid fa-circle-info"></i>图片和视频项会提交真实生成任务，可能产生供应商费用。</p>
+        <div id="providerConformanceResults" class="provider-conformance-results"></div>
+      </div>
+      <footer>
+        <button id="providerConformanceExport" class="ghost-btn hidden" type="button"><i class="fa-solid fa-file-export"></i>导出证据</button>
+        <button id="providerConformanceRerun" class="ghost-btn hidden" type="button"><i class="fa-solid fa-rotate"></i>重新验收</button>
+        <button id="providerConformanceRun" class="primary-btn" type="button"><i class="fa-solid fa-play"></i>开始验收</button>
+      </footer>
+    </article>
+  </section>
+
+  <div id="imageModal" class="image-modal hidden" role="dialog" aria-modal="true" aria-label="素材预览" aria-hidden="true">
+    <button id="imageModalClose" class="image-close" type="button" title="关闭预览" aria-label="关闭预览"><i class="fa-solid fa-xmark"></i></button>
+    <div class="image-modal-toolbar">
+      <button id="imageModalZoomOut" type="button" title="缩小"><i class="fa-solid fa-minus"></i></button>
+      <span id="imageModalZoomLabel">100%</span>
+      <button id="imageModalZoomIn" type="button" title="放大"><i class="fa-solid fa-plus"></i></button>
+      <button id="imageModalZoomReset" type="button" title="重置"><i class="fa-solid fa-rotate-left"></i></button>
+      <button id="imageModalDownload" type="button" title="下载当前图片"><i class="fa-solid fa-download"></i></button>
+    </div>
+    <img id="imageModalImg" alt="">
+    <video id="videoModalPlayer" class="hidden" controls></video>
+  </div>
+
+  <section id="fabricEditorModal" class="fabric-editor-modal hidden" aria-label="图片节点编辑器">
+    <div class="fabric-editor-shell">
+      <header class="fabric-editor-head">
+        <div>
+          <strong><i class="fa-regular fa-object-group"></i> 图片节点编辑器</strong>
+          <span id="fabricEditorTitle">选择、标注、绘制后保存回当前图片节点</span>
+        </div>
+        <button id="fabricEditorClose" type="button" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <div class="fabric-editor-toolbar" role="toolbar" aria-label="图片编辑工具">
+        <button type="button" data-fabric-tool="select" class="active" title="选择"><i class="fa-solid fa-arrow-pointer"></i></button>
+        <button type="button" data-fabric-tool="draw" title="画笔"><i class="fa-solid fa-pen"></i></button>
+        <button type="button" data-fabric-tool="text" title="文字"><i class="fa-solid fa-font"></i></button>
+        <button type="button" data-fabric-tool="rect" title="矩形"><i class="fa-regular fa-square"></i></button>
+        <button type="button" data-fabric-tool="circle" title="圆形"><i class="fa-regular fa-circle"></i></button>
+        <button type="button" data-fabric-tool="arrow" title="箭头"><i class="fa-solid fa-arrow-right-long"></i></button>
+        <label class="fabric-editor-color" title="颜色"><input id="fabricEditorColor" type="color" value="#ffcc33"></label>
+        <label class="fabric-editor-width" title="笔画粗细"><input id="fabricEditorStroke" type="range" min="1" max="24" value="4"></label>
+        <button type="button" data-fabric-action="back" title="下移一层"><i class="fa-solid fa-turn-down"></i></button>
+        <button type="button" data-fabric-action="front" title="上移一层"><i class="fa-solid fa-turn-up"></i></button>
+        <button type="button" data-fabric-action="delete" title="删除选中"><i class="fa-regular fa-trash-can"></i></button>
+        <button type="button" data-fabric-action="undo" title="撤销"><i class="fa-solid fa-rotate-left"></i></button>
+        <button type="button" data-fabric-action="clear" title="清空标注"><i class="fa-solid fa-eraser"></i></button>
+        <button id="fabricEditorSave" type="button" class="fabric-editor-save"><i class="fa-solid fa-floppy-disk"></i><span>保存到节点</span></button>
+      </div>
+      <main class="fabric-editor-stage">
+        <canvas id="fabricEditorCanvas" width="1024" height="768"></canvas>
+      </main>
+      <p class="fabric-editor-status" id="fabricEditorStatus">对象可拖动、缩放、旋转；保存后会覆盖当前图片节点。</p>
+    </div>
+  </section>
+  <section id="cropperModal" class="cropper-modal hidden" aria-label="图片节点裁剪器">
+    <div class="cropper-shell">
+      <header class="cropper-head">
+        <div>
+          <strong><i class="fa-solid fa-crop-simple"></i> 图片节点裁剪</strong>
+          <span id="cropperTitle">快速裁成常用比例并保存回当前图片节点</span>
+        </div>
+        <button id="cropperClose" type="button" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <div class="cropper-toolbar" role="toolbar" aria-label="裁剪工具">
+        <button type="button" data-crop-ratio="free">自由</button>
+        <button type="button" data-crop-ratio="1">1:1</button>
+        <button type="button" data-crop-ratio="1.7777777778">16:9</button>
+        <button type="button" data-crop-ratio="0.5625">9:16</button>
+        <button type="button" data-crop-ratio="1.3333333333">4:3</button>
+        <button type="button" data-crop-ratio="0.75">3:4</button>
+        <button type="button" data-crop-action="rotate-left" title="左转"><i class="fa-solid fa-rotate-left"></i></button>
+        <button type="button" data-crop-action="rotate-right" title="右转"><i class="fa-solid fa-rotate-right"></i></button>
+        <button type="button" data-crop-action="flip-x" title="水平翻转"><i class="fa-solid fa-left-right"></i></button>
+        <button type="button" data-crop-action="flip-y" title="垂直翻转"><i class="fa-solid fa-up-down"></i></button>
+        <button type="button" data-crop-action="reset" title="重置"><i class="fa-solid fa-arrows-rotate"></i></button>
+        <button id="cropperSave" type="button" class="cropper-save"><i class="fa-solid fa-floppy-disk"></i><span>保存到节点</span></button>
+      </div>
+      <main class="cropper-stage"><img id="cropperImage" alt=""></main>
+      <p class="cropper-status" id="cropperStatus">拖动裁剪框调整构图，保存后会覆盖当前图片节点。</p>
+    </div>
+  </section>
+  <section id="cameraModal" class="camera-modal hidden" aria-label="3D 相机角度">
+    <div class="camera-card">
+      <header>
+        <strong><i class="fa-solid fa-camera"></i> 3D 相机角度</strong>
+        <button id="cameraClose" type="button" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <div class="camera-stage">
+        <div class="camera-world">
+          <div class="camera-grid"></div>
+          <div id="cameraPlane" class="camera-plane"></div>
+          <div id="cameraSight" class="camera-sight"></div>
+          <div id="cameraEye" class="camera-eye"><i class="fa-solid fa-video"></i></div>
+        </div>
+        <div id="cameraHint" class="camera-hint">拖动旋转 · 滚轮缩放</div>
+      </div>
+      <div id="cameraSummary" class="camera-summary">正面 · 平视 · 中景</div>
+      <div class="camera-controls">
+        <label>方位角 <span id="cameraYawValue">0°</span><input id="cameraYaw" type="range" min="-180" max="180" step="1" value="0"></label>
+        <div class="camera-preset-row" data-camera-presets="yaw">
+          <button type="button" data-camera-yaw="0">正面</button>
+          <button type="button" data-camera-yaw="45">右前</button>
+          <button type="button" data-camera-yaw="90">右侧</button>
+          <button type="button" data-camera-yaw="135">右后</button>
+          <button type="button" data-camera-yaw="180">背面</button>
+          <button type="button" data-camera-yaw="-135">左后</button>
+          <button type="button" data-camera-yaw="-90">左侧</button>
+          <button type="button" data-camera-yaw="-45">左前</button>
+        </div>
+        <label>仰角 <span id="cameraPitchValue">0°</span><input id="cameraPitch" type="range" min="-30" max="30" value="0"></label>
+        <div class="camera-preset-row" data-camera-presets="pitch">
+          <button type="button" data-camera-pitch="-18">仰拍</button>
+          <button type="button" data-camera-pitch="0">平视</button>
+          <button type="button" data-camera-pitch="18">俯拍</button>
+          <button type="button" data-camera-pitch="28">高角度</button>
+        </div>
+        <label>距离 <span id="cameraDistanceValue">5.0</span><input id="cameraDistance" type="range" min="1" max="10" step=".1" value="5"></label>
+        <div class="camera-preset-row" data-camera-presets="distance">
+          <button type="button" data-camera-distance="2.2">特写</button>
+          <button type="button" data-camera-distance="5">中景</button>
+          <button type="button" data-camera-distance="8">远景</button>
+        </div>
+      </div>
+      <footer>
+        <button id="cameraCancel" class="ghost-btn" type="button">取消</button>
+        <button id="cameraApply" class="primary-btn" type="button">生成</button>
+      </footer>
+    </div>
+  </section>
+  <section id="directorDeskModal" class="director-desk-modal hidden" aria-label="3D 导演台">
+    <header class="director-desk-shellbar">
+      <div>
+        <strong><i class="fa-solid fa-cube"></i> 3D 导演台</strong>
+        <span>角色摆位 · 机位视角 · 全景背景 · 截图记录</span>
+      </div>
+      <button id="directorDeskClose" type="button" title="关闭 3D 导演台"><i class="fa-solid fa-xmark"></i></button>
+    </header>
+    <iframe id="directorDeskFrame" title="3D 导演台" data-src="./director-desk/index.html"></iframe>
+  </section>
+
+  <div id="toast" class="toast-stack"></div>
+  <!-- Core modules: defer keeps order while unblocking HTML parse. Heavy vendors load on demand. -->
+  <script defer src="./runtime/renderer-bootstrap.js"></script>
+  <script defer src="./runtime/vendor-loader.js"></script>
+  <script defer src="./runtime/performance-mode.js"></script>
+  <script defer src="./runtime/e2e-smoke.js"></script>
+  <script defer src="./media/image-editors.js"></script>
+  <script defer src="./media/dimensions.js"></script>
+  <script defer src="./models/capabilities.js"></script>
+  <script defer src="./media/reference-roles.js"></script>
+  <script defer src="./media/video-director.js"></script>
+  <script defer src="./media/media-process-contract.js"></script>
+  <script defer src="./generation/budget-guard.js"></script>
+  <script defer src="./generation/variant-manager.js"></script>
+  <script defer src="./delivery/provenance.js"></script>
+  <script defer src="./generation/variant-workbench.js"></script>
+  <script defer src="./providers/key-pool.js"></script>
+  <script defer src="./providers/provider-api.js"></script>
+  <script defer src="./providers/provider-ui.js"></script>
+  <link rel="stylesheet" href="./generation/image-request-policy.css">
+  <script defer src="./generation/image-request-policy.js"></script>
+  <script defer src="./generation/generation-queue.js"></script>
+  <script defer src="./support/support-ui.js"></script>
+  <script defer src="./licensing/license-ui.js"></script>
+  <script defer src="./app/domain-registry.js"></script>
+  <script defer src="./ai-client.js"></script>
+  <script defer src="./ai/context.js"></script>
+  <script defer src="./assistant/attachments.js"></script>
+  <script defer src="./assistant/canvas-executor.js"></script>
+  <script defer src="./assistant/topics.js"></script>
+  <script defer src="./assistant/dialog-runtime.js"></script>
+  <script defer src="./assistant/chrome.js"></script>
+  <script defer src="./comfyui-client.js"></script>
+  <script defer src="./storage/browser-store.js"></script>
+  <script defer src="./project/store.js"></script>
+  <script defer src="./history/history.js"></script>
+  <script defer src="./diagnostics/renderer-diagnostics.js"></script>
+  <script defer src="./providers/provider-conformance.js"></script>
+  <script defer src="./cleanup/cleanup-rendering.js"></script>
+  <script defer src="./update/update-rendering.js"></script>
+  <script defer src="./export/batch-export-payload.js"></script>
+  <script defer src="./canvas/core.js"></script>
+  <script defer src="./canvas/edges.js"></script>
+  <script defer src="./canvas/nodes.js"></script>
+  <script defer src="./canvas/camera.js"></script>
+  <script defer src="./canvas/runtime.js"></script>
+  <script defer src="./canvas/layout.js"></script>
+  <script defer src="./canvas/events.js"></script>
+  <script defer src="./workflows/workflow-library.js"></script>
+  <script defer src="./ui/render-helpers.js"></script>
+  <script defer src="./ui/color-themes.js"></script>
+  <script defer src="./ui/sound-feedback.js"></script>
+  <script defer src="./media/media-utils.js"></script>
+  <script defer src="./media/media-library-rendering.js"></script>
+  <script defer src="./assets/smart-index.js"></script>
+  <script defer src="./review/review-package.js"></script>
+  <script defer src="./models/presets.js"></script>
+  <script defer src="./models/model-rendering.js"></script>
+  <script defer src="./templates/project-templates.js"></script>
+  <script defer src="./app.js"></script>
+</body>
+</html>
+
+
+
