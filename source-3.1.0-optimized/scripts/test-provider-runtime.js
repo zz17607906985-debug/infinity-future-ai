@@ -72,7 +72,7 @@ async function main() {
     assert.deepEqual(JSON.parse(syncRequest.body), {model: 'image-model', prompt: 'test', n: 1, width: 1536, height: 1024});
 
     const batch = await provider.imageGenerateBatchRequest({
-      apiUrl: base, apiKey: 'batch-key', model: 'gpt-image-2.5', prompt: 'transparent object',
+      apiUrl: base, apiKey: 'batch-key', model: 'gpt-image-2.5-sunburst', prompt: 'transparent object',
       size: '1024x1024', count: 3, backgroundMode: 'transparent',
       provider: {type: 'openai-images'}
     });
@@ -80,7 +80,7 @@ async function main() {
     assert.notEqual(batch[0].url, batch[1].url);
     const batchRequest = requests.find(item => item.authorization === 'Bearer batch-key');
     assert.deepEqual(JSON.parse(batchRequest.body), {
-      model: 'gpt-image-2.5', prompt: 'transparent object', n: 3,
+      model: 'gpt-image-2.5-sunburst', prompt: 'transparent object', n: 3,
       size: '1024x1024', background: 'transparent', output_format: 'png'
     });
     await assert.rejects(provider.rawImageGenerationWithModel({

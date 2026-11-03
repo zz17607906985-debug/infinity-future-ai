@@ -380,7 +380,7 @@ async function rawImageEditRequest(o) {
 function imageBackgroundFields(o, model) {
   const transparent = o.backgroundMode === 'transparent';
   const supportsBackground = (o.provider?.type || 'openai-images') === 'openai-images'
-    && /^gpt-image-(?:1|2\.5)$/i.test(String(model || ''));
+    && /^gpt-image-(?:1(?:\.5|-mini)?|2(?:-2026-04-21)?|2\.5(?:-(?:sunburst|flare)(?:-2026-09-08)?)?)$/i.test(String(model || ''));
   if (transparent && !supportsBackground) {
     throw new Error('当前图片模型或供应商未确认支持透明背景，请选择 GPT Image 的 OpenAI Images 兼容接口');
   }
