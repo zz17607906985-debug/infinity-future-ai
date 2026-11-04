@@ -2655,20 +2655,9 @@ body.fast-canvas-mode .canvas.proxy-active #edges{
 .node-virtual-hidden{
   display:none!important;
 }
-.canvas.is-panning .node,
-.canvas.is-zooming .node,
-.canvas.is-dragging-node .node{
+.canvas.is-dragging-node .node.drag-active{
   transition:none!important;
-  box-shadow:none!important;
-}
-.canvas.is-dragging-node .node.drag-active{will-change:transform}
-.canvas.is-panning .edge,
-.canvas.is-zooming .edge,
-.canvas.is-dragging-node .edge,
-.canvas.is-panning .edge-preview,
-.canvas.is-zooming .edge-preview,
-.canvas.is-dragging-node .edge-preview{
-  filter:none!important;
+  will-change:transform;
 }
 body.fast-canvas-mode .canvas.is-panning #edges,
 body.fast-canvas-mode .canvas.is-zooming #edges{

@@ -233,5 +233,8 @@ layout.applyTransform(false, false);
 assert.equal(viewportVariableWrites, 4, 'normal zoom updates inherited variables once');
 assert.match(styles, /\.canvas\.is-panning \.viewport,[\s\S]*?will-change:transform!important/);
 assert.match(styles, /\.node\{[\s\S]*?will-change:auto;/);
+assert.doesNotMatch(styles, /(?<!fast-canvas-mode )\.canvas\.is-panning \.node(?:,|\s*\{)/);
+assert.doesNotMatch(styles, /(?<!fast-canvas-mode )\.canvas\.is-panning \.edge(?:,|\s*\{)/);
+assert.match(styles, /\.canvas\.is-dragging-node \.node\.drag-active\{[\s\S]*?transition:none!important/);
 
 console.log('Canvas drag and pan performance tests passed.');
