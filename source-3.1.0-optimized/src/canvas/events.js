@@ -23,6 +23,7 @@
     const zoomAroundPoint = deps.zoomAroundPoint || ((viewport) => viewport);
     const setCanvasProxyActive = deps.setCanvasProxyActive || (() => {});
     const scheduleTransform = deps.scheduleTransform || (() => {});
+    const applyTransform = deps.applyTransform || (() => {});
     const scheduleViewportInteractionEnd = deps.scheduleViewportInteractionEnd || (() => {});
     const updateLinkDrag = deps.updateLinkDrag || (() => {});
     const updateReferenceSort = deps.updateReferenceSort || (() => {});
@@ -158,7 +159,10 @@
           state.offsetY += e.clientY - state.panning.y;
           state.panning.x = e.clientX;
           state.panning.y = e.clientY;
-          scheduleTransform(false, false);
+          // Keep full-fidelity normal mode directly under the pointer. The proxy
+          // mode still coalesces its snapshot transform on animation frames.
+          if (state.fastCanvasMode) scheduleTransform(false, false);
+          else applyTransform(false, false);
         }
         if (state.dragging) updateNodeDrag(e.clientX, e.clientY);
       });

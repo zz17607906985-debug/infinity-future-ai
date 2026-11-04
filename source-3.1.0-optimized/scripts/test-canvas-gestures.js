@@ -43,10 +43,12 @@ const canvas = surface();
 const document = surface();
 document.querySelector = () => null;
 const window = surface();
-const state = {activeWorkspace: 'canvas', scale: 1, offsetX: 0, offsetY: 0};
+const state = {activeWorkspace: 'canvas', fastCanvasMode: false, scale: 1, offsetX: 0, offsetY: 0};
 let menu = 0;
 let cleared = 0;
 let selections = 0;
+let scheduledTransforms = 0;
+let immediateTransforms = 0;
 const context = {window, document, setTimeout, console};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'canvas', 'events.js'), 'utf8'), context);
@@ -60,7 +62,8 @@ context.window.FutureAICanvasEvents.create({
   finishSelection: () => { selections++; state.selecting = null; },
   isCanvasMenuBlockedTarget: () => false,
   zoomAroundPoint: (viewport, point, scale) => ({...viewport, scale}),
-  scheduleTransform: () => {}
+  scheduleTransform: () => { scheduledTransforms++; },
+  applyTransform: () => { immediateTransforms++; }
 }).bindCanvas();
 
 fire(canvas, 'pointerdown', {button: 2, buttons: 2});
@@ -78,9 +81,18 @@ assert.equal(cleared, 0, 'Space drag preserves selection');
 fire(document, 'pointermove', {clientX: 135, clientY: 120});
 assert.equal(state.offsetX, 35);
 assert.equal(state.offsetY, 20);
+assert.equal(immediateTransforms, 1, 'normal pan updates the viewport immediately');
+assert.equal(scheduledTransforms, 0, 'normal pan does not wait for the next animation frame');
 fire(document, 'pointerup');
 fire(document, 'keyup', {code: 'Space'});
 assert.equal(state.spacePanning, false);
+state.fastCanvasMode = true;
+fire(canvas, 'pointerdown', {button: 1, buttons: 4, target: target(true)});
+fire(document, 'pointermove', {clientX: 120, clientY: 100, buttons: 4});
+assert.equal(scheduledTransforms, 1, 'fast mode keeps its coalesced proxy update');
+assert.equal(immediateTransforms, 1, 'fast mode does not update the full viewport');
+fire(document, 'pointerup');
+state.fastCanvasMode = false;
 
 fire(canvas, 'pointerdown', {button: 1, buttons: 4, target: target(true)});
 assert.ok(state.panning, 'middle button pans');

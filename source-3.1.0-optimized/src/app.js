@@ -703,6 +703,7 @@
         $,
         state: {
           get activeWorkspace() { return activeWorkspace; },
+          get fastCanvasMode() { return fastCanvasMode; },
           get spacePanning() { return spacePanning; },
           set spacePanning(v) { spacePanning = v; },
           get scale() { return scale; },
@@ -741,6 +742,7 @@
         zoomAroundPoint,
         setCanvasProxyActive,
         scheduleTransform,
+        applyTransform,
         scheduleViewportInteractionEnd,
         updateLinkDrag,
         updateReferenceSort,
