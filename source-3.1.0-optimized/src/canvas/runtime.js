@@ -160,9 +160,7 @@ function renderImageNode(node) {
   const provider = currentProviderForNode(node, 'image');
   const normalizedModel = normalizeKnownImageModelAlias(node.data.model, provider);
   if (normalizedModel !== node.data.model) node.data.model = normalizedModel;
-  const modelOptions = modelOptionsHtml('image', node.data.model, node);
   const providerOptions = providerOptionsHtml(node.data.providerId);
-  const aspectOptions = imageAspectOptionsHtml(node);
   return `
     <div class="node-head">
       <div class="node-title" title="双击重命名"><i class="fa-solid fa-image"></i><span data-title-text>${esc(nodeDisplayTitle(node))}</span></div>
@@ -176,83 +174,66 @@ function renderImageNode(node) {
       <input type="file" accept="image/*,video/*" data-upload class="hidden">
       <div class="image-preview" data-preview></div>
       <div class="node-status hidden" data-status></div>
-      <div class="image-panel image-composer">
-        <div class="composer-top">
-          <div class="composer-chips">
-            <button type="button" class="composer-chip" data-upload-btn title="上传参考图"><i class="fa-solid fa-plus"></i> 参考</button>
-            <button type="button" class="composer-chip${node.data.markTag ? ' on' : ''}" data-composer-menu="mark" title="构图标记">标记</button>
-            <button type="button" class="composer-chip${node.data.styleTag ? ' on' : ''}" data-composer-menu="style" title="视觉风格">风格</button>
-            <button type="button" class="composer-chip${node.data.moodTag ? ' on' : ''}" data-composer-menu="mood" title="情绪氛围">情绪</button>
-          </div>
-          ${composerPresetPopHtml('mark', node.data.markTag)}
-          ${composerPresetPopHtml('style', node.data.styleTag)}
-          ${composerPresetPopHtml('mood', node.data.moodTag)}
+    </div>
+    <div class="image-panel image-composer node-composer" data-composer>
+      <div class="composer-head">
+        <div class="composer-tabs" role="tablist">
+          <button type="button" class="composer-tab active" data-composer-tab="ref" role="tab">参考</button>
+          ${composerTabButtonHtml('mark', '标记', node.data.markTag)}
+          ${composerTabButtonHtml('style', '风格', node.data.styleTag)}
+          ${composerTabButtonHtml('mood', '情绪', node.data.moodTag)}
         </div>
-        <textarea data-field="prompt" placeholder="描述你想要生成的内容，并在下方调整生成参数。" title="输入当前图片节点自己的指令。连接参考图不会覆盖这里。"></textarea>
+        <button type="button" class="composer-close" data-composer-close title="关闭面板" aria-label="关闭面板"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="composer-pane composer-ref-pane" data-composer-pane="ref">
+        <div class="ref-box composer-refs" data-refbox>未连接或上传参考图</div>
+        <button type="button" class="composer-add-ref" data-upload-btn title="上传参考图"><i class="fa-solid fa-plus"></i><span>添加</span></button>
+      </div>
+      ${composerPresetPaneHtml('mark', node.data.markTag)}
+      ${composerPresetPaneHtml('style', node.data.styleTag)}
+      ${composerPresetPaneHtml('mood', node.data.moodTag)}
+      <textarea data-field="prompt" placeholder="描述你想要生成的内容" title="输入当前图片节点自己的指令。连接参考图不会覆盖这里。"></textarea>
+      <div class="composer-hint"><span>参考图按用途排序发送，同用途内可拖动排序</span><span class="media-size-summary" data-size-summary></span><span class="media-capability-summary" data-capability-summary>${esc(modelCapabilitySummary(node, 'image'))}</span></div>
         <div class="composer-bar">
-          <label class="composer-pill composer-model" title="模型">
+          <label class="composer-pill composer-model" title="模型（按 API 服务分组）">
             <i class="fa-solid fa-circle-nodes"></i>
-            <input data-field="model" list="node-models-${esc(node.id)}" value="${esc(node.data.model || '')}" placeholder="模型">
-            <datalist id="node-models-${esc(node.id)}">${modelOptions}</datalist>
+            <select data-model-picker aria-label="模型">${modelPickerHtml(node)}</select>
           </label>
-          <button type="button" class="composer-pill" data-shot-toggle title="比例 / 清晰度 / 张数">
-            <i class="fa-regular fa-image"></i>
-            <span data-shot-label>${esc(imageShotLabel(node))}</span>
-            <i class="fa-solid fa-caret-down composer-caret"></i>
-          </button>
-          <div class="composer-shot-pop hidden" data-shot-pop>
-            <label>比例<select data-field="aspect">${aspectOptions}</select></label>
-            <label>清晰度<select data-field="resolution">${imageResolutionOptionsHtml(node)}</select></label>
-            <label>张数<select data-field="count"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
-             <label>背景<select data-field="backgroundMode" title="透明背景需要模型和供应商支持，结果保留 PNG 透明通道"><option value="opaque">不透明</option><option value="transparent">透明 PNG</option></select></label>
-          </div>
-          <label class="composer-pill" title="生成质量：高质量可能增加费用和耗时，需供应商支持">
-            <i class="fa-regular fa-gem"></i>
-            <select data-field="quality">
-              <option value="auto">自动质量</option>
-              <option value="low">低</option>
-              <option value="medium">标准</option>
-              <option value="high">高质量</option>
-              <option value="hd">HD</option>
-            </select>
-          </label>
-          <button type="button" class="composer-icon" data-quick="camera" title="3D 机位"><i class="fa-solid fa-camera"></i></button>
-          <button type="button" class="composer-pill" data-more-toggle title="供应商、参考图和更多工具">
-            <i class="fa-solid fa-sliders"></i> 更多
-          </button>
+          <label class="composer-pill" title="比例"><select data-field="aspect">${imageAspectOptionsHtml(node)}</select></label>
+          <label class="composer-pill" title="清晰度"><select data-field="resolution">${imageResolutionOptionsHtml(node)}</select></label>
+          <label class="composer-pill" title="张数"><select data-field="count"><option value="1">1张</option><option value="2">2张</option><option value="3">3张</option><option value="4">4张</option></select></label>
+          <button type="button" class="composer-more-toggle" data-more-toggle title="生成质量、透明背景与更多设置" aria-label="更多生成设置"><i class="fa-solid fa-sliders"></i></button>
           <span class="composer-cost" data-cost-estimate></span>
-          <button type="button" class="composer-send" data-run="image" title="生成图像 / 图生图">
+          <button type="button" class="composer-send" data-run="image" title="生成图像 / 图生图" aria-label="生成图像 / 图生图">
             <i class="fa-solid fa-arrow-up"></i>
           </button>
         </div>
-        <div class="image-request-controls">
-          <label>提示词<select data-field="promptMode"><option value="raw">原文直通</option><option value="context">增强上下文</option></select></label>
+        <div class="composer-more hidden" data-composer-more>
+          <div class="image-request-controls">
+            <label>提示词<select data-field="promptMode"><option value="raw">原文直通</option><option value="context">增强上下文</option></select></label>
+            <label>质量<select data-field="quality"><option value="auto">自动质量</option><option value="low">低</option><option value="medium">标准</option><option value="high">高质量</option><option value="hd">HD</option></select></label>
+            <label>背景<select data-field="backgroundMode" title="透明背景需要模型和供应商支持，结果保留 PNG 透明通道"><option value="opaque">不透明</option><option value="transparent">透明 PNG</option></select></label>
+          </div>
+          <div class="image-grid">
+            <label class="image-grid-wide">供应商<select data-field="providerId">${providerOptions}</select></label>
+          </div>
+          <div class="image-tools">
+            <button class="dark-btn" data-optimize-prompt><i class="fa-solid fa-wand-magic-sparkles"></i> 优化提示词</button>
+            <button class="dark-btn" data-safe><i class="fa-solid fa-shield-heart"></i> 安全改写</button>
+            <button class="dark-btn" data-clear-ref>清参考</button>
+            <button class="dark-btn" data-copy-prompt title="复制提示词"><i class="fa-solid fa-copy"></i></button>
+            <button class="dark-btn" data-download title="下载图片"><i class="fa-solid fa-download"></i></button>
+            <button class="dark-btn" data-quick="camera" title="3D 机位"><i class="fa-solid fa-camera"></i></button>
+          </div>
+          <div class="image-request-controls">
           <button type="button" class="dark-btn" data-preview-request>请求预览</button>
           <button type="button" class="dark-btn" data-last-request>上次请求</button>
-          <small>原文直通不添加机位、风格标签或通用规则；高质量可能增加费用。</small>
+          </div>
         </div>
         <div class="image-custom-size hidden" data-image-custom-size>
           <label>宽<input data-field="customWidth" type="number" min="64" max="16384" step="1" placeholder="64-16384"></label>
           <label>高<input data-field="customHeight" type="number" min="64" max="16384" step="1" placeholder="64-16384"></label>
         </div>
-        <button type="button" class="composer-3d" data-quick="camera"><i class="fa-regular fa-square"></i> 展开 3D 机位控制</button>
-        <div class="composer-more hidden" data-composer-more>
-          <div class="image-grid">
-            <label class="image-grid-wide">供应商<select data-field="providerId">${providerOptions}</select></label>
-          </div>
-          <div class="media-size-summary" data-size-summary></div>
-          <div class="media-capability-summary" data-capability-summary>${esc(modelCapabilitySummary(node, 'image'))}</div>
-          <div class="image-tools">
-            <button class="dark-btn" data-optimize-prompt><i class="fa-solid fa-wand-magic-sparkles"></i> 优化提示词</button>
-            <button class="dark-btn" data-safe><i class="fa-solid fa-shield-heart"></i> 安全改写</button>
-            <button class="dark-btn" data-upload-btn><i class="fa-solid fa-upload"></i> 上传参考</button>
-            <button class="dark-btn" data-clear-ref>清参考</button>
-            <button class="dark-btn" data-copy-prompt><i class="fa-solid fa-copy"></i></button>
-            <button class="dark-btn" data-download><i class="fa-solid fa-download"></i></button>
-          </div>
-          <div class="ref-box" data-refbox>未连接或上传参考图</div>
-        </div>
-      </div>
     </div>`;
 }
 function renderVideoNode(node) {
@@ -434,6 +415,51 @@ function modelOptionsHtml(kind, current = '', node = null) {
     esc
   });
 }
+const MODEL_PICKER_CUSTOM = '__custom_model__';
+function modelPickerValue(providerId = '', model = '') {
+  return JSON.stringify([String(providerId || ''), String(model || '')]);
+}
+function modelPickerHtml(node) {
+  const selectedProvider = String(node.data.providerId || '');
+  const selectedModel = String(node.data.model || '');
+  const globalModel = $('imageModel')?.value || '';
+  const option = (id, model, label, selected) => `<option value="${esc(modelPickerValue(id, model))}"${selected ? ' selected' : ''}>${esc(label)}</option>`;
+  const options = [option('', selectedProvider ? '' : selectedModel, `跟随全局 · ${selectedProvider ? globalModel : selectedModel || globalModel}`, !selectedProvider)];
+  host.apiProviders.forEach(provider => {
+    const models = unique([provider.imageModel, ...providerModelsForKind(provider, 'image').slice(0, 40), selectedProvider === provider.id ? selectedModel : ''].filter(Boolean));
+    if (!models.length) return;
+    options.push(`<optgroup label="${esc(provider.name || provider.type || 'API')}">${models.map(model =>
+      option(provider.id, model, model, selectedProvider === provider.id && selectedModel === model)
+    ).join('')}</optgroup>`);
+  });
+  if (selectedProvider && selectedModel && !host.apiProviders.some(provider => provider.id === selectedProvider)) {
+    options.push(`<optgroup label="当前选择">${option(selectedProvider, selectedModel, selectedModel, true)}</optgroup>`);
+  }
+  options.push(`<option value="${MODEL_PICKER_CUSTOM}">自定义模型 ID…</option>`);
+  return options.join('');
+}
+async function applyModelPick(node, picker) {
+  let pick;
+  if (picker.value === MODEL_PICKER_CUSTOM) {
+    const model = String(await openModal({title: '自定义模型 ID', value: node.data.model || '', okText: '使用'}) || '').trim();
+    if (model) pick = {providerId: node.data.providerId || currentProviderForNode(node, 'image')?.id || '', model};
+  } else {
+    try {
+      const [providerId, model] = JSON.parse(picker.value);
+      pick = {providerId, model};
+    } catch {}
+  }
+  if (pick) {
+    node.data.providerId = pick.providerId;
+    node.data.model = pick.model ? normalizeKnownImageModelAlias(pick.model, currentProviderForNode(node, 'image')) : '';
+    refreshNodeProviderSelects();
+    refreshNodeCapabilityControls(node);
+    applyNodeMediaLayout(node);
+    applyCanvasFilters();
+    queueSave();
+  }
+  refreshNodeModelSelects();
+}
 function modelCapabilityProfile(node, kind = node?.type || 'image') {
   if (!ModelCapabilities || !node) return null;
   const provider = currentProviderForNode(node, kind);
@@ -473,6 +499,33 @@ function composerPresetPopHtml(kind, current) {
     `<button type="button" class="composer-pick${current === value ? ' on' : ''}" data-composer-set="${esc(field)}" data-value="${esc(value)}">${esc(value)}</button>`
   ).join('')}</div>`;
 }
+function composerTabButtonHtml(kind, label, current) {
+  return `<button type="button" class="composer-tab${current ? ' on' : ''}" data-composer-tab="${esc(kind)}" data-tab-label="${esc(label)}" role="tab">${esc(current ? `${label}·${current}` : label)}</button>`;
+}
+function composerPresetPaneHtml(kind, current) {
+  return `<div class="composer-pane composer-presets hidden" data-composer-pane="${esc(kind)}">${(COMPOSER_PRESETS[kind] || []).map(value =>
+    `<button type="button" class="composer-pick${current === value ? ' on' : ''}" data-composer-set="${esc(COMPOSER_FIELDS[kind])}" data-value="${esc(value)}">${esc(value)}</button>`
+  ).join('')}</div>`;
+}
+function selectComposerTab(root, kind) {
+  root.querySelectorAll('[data-composer-tab]').forEach(tab => tab.classList.toggle('active', tab.dataset.composerTab === kind));
+  root.querySelectorAll('[data-composer-pane]').forEach(pane => pane.classList.toggle('hidden', pane.dataset.composerPane !== kind));
+}
+function positionImageComposer(node) {
+  if (node?.type !== 'image' || !host.selectedNodes.has(node.id)) return;
+  requestAnimationFrame(() => {
+    const panel = node.el.querySelector('.node-composer');
+    const canvas = $('canvas');
+    if (!panel || !canvas) return;
+    panel.classList.remove('panel-above');
+    const bounds = canvas.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const nodeRect = node.el.getBoundingClientRect();
+    if (panelRect.bottom > bounds.bottom - 56 && nodeRect.top - panelRect.height > bounds.top + 48) {
+      panel.classList.add('panel-above');
+    }
+  });
+}
 function imageShotLabel(node) {
   const aspect = String(node?.data?.aspect || '') === 'custom' ? '自定义' : (node?.data?.aspect || '16:9');
   const resolution = node?.data?.resolution || '1K';
@@ -509,15 +562,16 @@ function updateImageComposerSummary(node) {
     const field = COMPOSER_FIELDS[btn.dataset.composerMenu];
     btn.classList.toggle('on', !!(field && node.data[field]));
   });
+  node.el.querySelectorAll('[data-composer-tab][data-tab-label]').forEach(tab => {
+    const value = node.data[COMPOSER_FIELDS[tab.dataset.composerTab]] || '';
+    tab.classList.toggle('on', !!value);
+    tab.textContent = value ? `${tab.dataset.tabLabel}·${value}` : tab.dataset.tabLabel;
+  });
   node.el.querySelectorAll('[data-composer-set]').forEach(btn => {
     btn.classList.toggle('on', String(node.data[btn.dataset.composerSet] || '') === btn.dataset.value);
   });
   const more = node.el.querySelector('[data-composer-more]');
   const moreBtn = node.el.querySelector('[data-more-toggle]');
-  const refbox = node.el.querySelector('[data-refbox]');
-  if (more && refbox?.classList.contains('has-refs') && more.classList.contains('hidden')) {
-    more.classList.remove('hidden');
-  }
   moreBtn?.classList.toggle('on', more ? !more.classList.contains('hidden') : false);
 }
 function videoSizeOptionsHtml(node) {
@@ -651,8 +705,13 @@ function refreshNodeCapabilityControls(node) {
 function refreshNodeModelSelects() {
   host.nodes.forEach(node => {
     if (node.type !== 'image' && node.type !== 'video') return;
+    const picker = node.el.querySelector('[data-model-picker]');
+    if (picker) picker.innerHTML = modelPickerHtml(node);
     const control = node.el.querySelector('[data-field="model"]');
-    if (!control) return;
+    if (!control) {
+      refreshNodeCapabilityControls(node);
+      return;
+    }
     const options = modelOptionsHtml(node.type, node.data.model, node);
     if (control.tagName === 'SELECT') {
       control.innerHTML = options;
@@ -742,6 +801,10 @@ function bindNode(node) {
       updateReferenceRole(node, e.target.dataset.refKey, e.target.value);
       return;
     }
+    if (e.target.matches('[data-model-picker]')) {
+      applyModelPick(node, e.target).catch(error => toast(error.message || String(error), 'error'));
+      return;
+    }
     const field = e.target.dataset.field;
     if (field) node.data[field] = e.target.value;
     if (node.type === 'video' && field === 'operation') {
@@ -763,13 +826,12 @@ function bindNode(node) {
         node.data.model = defaultModel;
         const modelControl = node.el.querySelector('[data-field="model"]');
         if (modelControl) {
-          refreshNodeModelSelects();
           modelControl.value = node.data.model;
         }
       } else if (!node.data.providerId) {
         node.data.model = '';
-        refreshNodeModelSelects();
       }
+      refreshNodeModelSelects();
     }
     if ((field === 'providerId' || field === 'model') && (node.type === 'image' || node.type === 'video')) {
       ensureSupportedVideoOperation(node);
@@ -801,6 +863,17 @@ function bindNode(node) {
     if (e.target.closest('[data-dup]')) return duplicateNode(node.id);
     if (e.target.closest('[data-clear]')) { node.data.prompt = ''; hydrateNode(node); applyCanvasFilters(); saveProject(); return; }
     if (e.target.closest('[data-run="prompt"]')) return runPrompt(node.id);
+    const composerTab = e.target.closest('[data-composer-tab]');
+    if (composerTab) {
+      selectComposerTab(el, composerTab.dataset.composerTab);
+      positionImageComposer(node);
+      return;
+    }
+    if (e.target.closest('[data-composer-close]')) {
+      host.selectedNodes.delete(node.id);
+      renderSelection();
+      return;
+    }
     if (e.target.closest('[data-shot-toggle]')) {
       const pop = el.querySelector('[data-shot-pop]');
       const willOpen = pop?.classList.contains('hidden');
@@ -830,6 +903,7 @@ function bindNode(node) {
       const more = el.querySelector('[data-composer-more]');
       more?.classList.toggle('hidden');
       updateImageComposerSummary(node);
+      positionImageComposer(node);
       return;
     }
     if (e.target.closest('[data-shot-pop],[data-composer-pop]')) return;
@@ -929,7 +1003,7 @@ function beginNodeDrag(node, e, pointerId = null) {
   }
 }
 function isNodeInteractiveTarget(target) {
-  return !!target.closest('button,input,textarea,select,option,a,video,.port,.node-actions,.text-expand-btn,[data-zoom]');
+  return !!target.closest('button,input,textarea,select,option,a,video,.port,.node-actions,.node-composer,.text-expand-btn,[data-zoom]');
 }
 function isNodeDragSurface(node, target) {
   if (!node || (node.type !== 'image' && node.type !== 'video' && node.type !== 'upload' && node.type !== 'comfyui')) return false;
@@ -940,6 +1014,7 @@ function selectSingleNode(id) {
   host.selectedNodes.clear();
   host.selectedNodes.add(id);
   renderSelection();
+  positionImageComposer(host.nodes.get(id));
 }
 function selectAllCanvasNodes() {
   host.selectedNodes.clear();
@@ -983,6 +1058,7 @@ function applyCanvasFilters() {
   const count = $('canvasSearchCount');
   if (count) count.textContent = `${visible}/${total}`;
   $('canvasFavoritesOnly')?.classList.toggle('active', host.canvasFavoritesOnly);
+  $('canvasSearchBtn')?.classList.toggle('active', queryActive || host.canvasTypeFilter !== 'all' || host.canvasFavoritesOnly);
   drawEdges();
 }
 function focusCanvasSearchResult() {

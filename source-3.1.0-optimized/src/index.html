@@ -162,25 +162,6 @@
             <button type="button" class="ghost-btn" data-canvas-empty="template"><i class="fa-solid fa-boxes-stacked" aria-hidden="true"></i>使用模板</button>
           </div>
         </div>
-        <div class="canvas-search-bar" aria-label="画布搜索">
-          <label class="canvas-search-field">
-            <i class="fa-solid fa-magnifying-glass"></i>
-            <input id="canvasSearchInput" type="search" placeholder="搜索节点、提示词、模型、标签">
-          </label>
-          <select id="canvasTypeFilter" title="节点类型筛选">
-            <option value="all">全部类型</option>
-            <option value="prompt">提示词</option>
-            <option value="character">角色卡</option>
-            <option value="image">图片</option>
-            <option value="video">视频</option>
-            <option value="upload">上传</option>
-            <option value="media-tool">媒体工具</option>
-            <option value="comfyui">ComfyUI</option>
-          </select>
-          <button id="canvasFavoritesOnly" class="icon-btn" type="button" title="只看收藏" aria-label="只看收藏"><i class="fa-regular fa-heart"></i></button>
-          <button id="clearCanvasSearch" class="icon-btn" type="button" title="清空搜索" aria-label="清空搜索"><i class="fa-solid fa-xmark"></i></button>
-          <button id="focusCanvasSearchResult" class="mini-pill" type="button" title="跳到第一个结果"><span id="canvasSearchCount">0/0</span></button>
-        </div>
         <div class="canvas-rail" aria-label="画布工具">
           <button id="railPan" class="rail-btn active" title="展开流程工具"><i class="fa-solid fa-plus"></i></button>
           <button id="railSelect" class="rail-btn" title="参数设置"><i class="fa-solid fa-sliders"></i></button>
@@ -290,6 +271,31 @@
             <button id="zoomPlusBtn" class="zoom-icon" type="button" title="放大">+</button>
           </div>
           <button id="tidyCanvasBtn" class="canvas-tidy-btn" type="button" title="一键整理节点"><i class="fa-solid fa-table-cells-large"></i><span>整理</span></button>
+          <div class="canvas-search-tool">
+            <button id="canvasSearchBtn" class="canvas-tidy-btn canvas-search-btn" type="button" title="搜索节点（Ctrl+F）" aria-label="搜索节点" aria-expanded="false" aria-controls="canvasSearchPopover"><i class="fa-solid fa-magnifying-glass"></i></button>
+            <div id="canvasSearchPopover" class="canvas-search-popover hidden" role="search" aria-label="搜索画布节点">
+              <div class="canvas-search-popover-row">
+                <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                <input id="canvasSearchInput" type="search" placeholder="搜索节点、提示词、模型、标签" autocomplete="off">
+                <button id="closeCanvasSearch" class="icon-btn" type="button" title="关闭搜索（Esc）" aria-label="关闭搜索"><i class="fa-solid fa-xmark"></i></button>
+              </div>
+              <div class="canvas-search-popover-row">
+                <select id="canvasTypeFilter" title="节点类型筛选">
+                  <option value="all">全部类型</option>
+                  <option value="prompt">提示词</option>
+                  <option value="character">角色卡</option>
+                  <option value="image">图片</option>
+                  <option value="video">视频</option>
+                  <option value="upload">上传</option>
+                  <option value="media-tool">媒体工具</option>
+                  <option value="comfyui">ComfyUI</option>
+                </select>
+                <button id="canvasFavoritesOnly" class="icon-btn" type="button" title="只看收藏" aria-label="只看收藏"><i class="fa-regular fa-heart"></i></button>
+                <button id="focusCanvasSearchResult" class="mini-pill" type="button" title="跳到第一个结果"><span id="canvasSearchCount">0/0</span></button>
+                <button id="clearCanvasSearch" class="icon-btn" type="button" title="清空搜索和筛选" aria-label="清空搜索和筛选"><i class="fa-solid fa-eraser"></i></button>
+              </div>
+            </div>
+          </div>
           <button id="fastCanvasBtn" class="canvas-fast-btn active" type="button" aria-pressed="true" title="极速画布：拖动和缩放时自动降低画面负载"><i class="fa-solid fa-gauge-high"></i><span>极速</span></button>
         </div>
         <div id="selectionBox" class="selection-box hidden"></div>

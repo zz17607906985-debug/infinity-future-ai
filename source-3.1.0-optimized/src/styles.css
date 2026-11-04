@@ -8039,6 +8039,127 @@ html body .upload-node .upload-preview{
   html body .image-node:has(.image-preview img) .image-preview,
   html body .upload-node .upload-preview{height:220px!important;min-height:220px!important}
 }
+
+/* Restore the backup's selected-image composer without changing the node footprint. */
+html body .image-node > .node-composer.image-composer{
+  position:absolute!important;
+  left:50%!important;
+  top:calc(100% + 12px * var(--canvas-zoom-inverse,1))!important;
+  width:720px!important;
+  max-width:calc(100vw - 32px)!important;
+  max-height:calc(100vh - 100px);
+  overflow:auto;
+  box-sizing:border-box;
+  margin:0!important;
+  padding:8px 10px!important;
+  transform:scale(var(--canvas-zoom-inverse,1)) translateX(-50%);
+  transform-origin:0 0;
+  z-index:90;
+  border:1px solid var(--theme-surface-line,rgba(255,255,255,.14))!important;
+  border-radius:8px!important;
+  background:var(--theme-bg-panel,#1b1d21)!important;
+  box-shadow:0 18px 44px rgba(0,0,0,.45)!important;
+  cursor:default;
+}
+html body .image-node:not(.selected-node) > .node-composer{display:none!important}
+html body .image-node > .node-composer.panel-above{
+  top:auto!important;
+  bottom:calc(100% + 12px * var(--canvas-zoom-inverse,1))!important;
+  transform-origin:0 100%;
+}
+.image-node .composer-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.image-node .composer-tabs{display:flex;gap:2px;min-width:0;flex-wrap:wrap}
+.image-node .composer-tab,.image-node .composer-close{
+  height:28px;border:0;border-radius:6px;background:transparent;color:#9daab5;font-size:12px;
+}
+.image-node .composer-tab{padding:0 10px;white-space:nowrap}
+.image-node .composer-tab:hover,.image-node .composer-tab.active,.image-node .composer-close:hover{color:#f2f5f8;background:rgba(255,255,255,.09)}
+.image-node .composer-tab.on{color:var(--theme-accent,#70c7e6)}
+.image-node .composer-close{width:28px;flex:none;display:grid;place-items:center}
+.image-node .composer-pane{display:flex;align-items:flex-start;gap:8px;margin:4px 0;min-height:48px}
+.image-node .composer-pane.hidden{display:none!important}
+html body .image-node .composer-refs{
+  flex:1;min-width:0;max-height:124px;overflow:auto;min-height:0!important;
+  margin:0!important;padding:0!important;border:0!important;background:transparent!important;
+  box-shadow:none!important;color:#9daab5;font-size:12px;
+}
+.image-node .composer-add-ref{
+  width:48px;height:48px;flex:none;display:grid;place-items:center;gap:2px;
+  border:1px dashed rgba(255,255,255,.22);border-radius:7px;background:rgba(255,255,255,.04);
+  color:#b4c0c9;font-size:11px;cursor:pointer;
+}
+.image-node .composer-add-ref:hover{border-color:var(--theme-accent);color:#fff}
+.image-node .composer-presets{flex-wrap:wrap;align-content:center;gap:6px}
+.image-node .composer-pick{
+  height:27px;padding:0 10px;border:1px solid rgba(255,255,255,.14);border-radius:6px;
+  background:rgba(255,255,255,.04);color:#d5dbe2;font-size:12px;cursor:pointer;
+}
+.image-node .composer-pick.on,.image-node .composer-pick:hover{border-color:var(--theme-accent);color:#fff}
+html body .image-node > .node-composer textarea{
+  min-height:46px!important;max-height:120px;margin:4px 0 0!important;
+  padding:4px 36px 4px 2px!important;resize:vertical;
+  background:transparent!important;border:0!important;box-shadow:none!important;
+  color:#dce5eb!important;font-size:13px!important;line-height:1.5!important;
+}
+.image-node .composer-hint{display:flex;gap:8px;align-items:center;min-width:0;margin:2px 0 6px;color:#8b9ba7;font-size:10px}
+.image-node .composer-hint>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+html body .image-node .composer-hint .media-size-summary,
+html body .image-node .composer-hint .media-capability-summary{
+  flex:0 1 30%;min-width:0;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  margin:0!important;padding:0!important;border:0!important;background:transparent!important;
+  min-height:0!important;font-size:10px!important;color:#8b9ba7;
+}
+.image-node .composer-bar{display:flex;align-items:center;gap:5px;min-width:0;flex-wrap:wrap}
+html body .image-node > .node-composer .composer-pill{
+  display:inline-flex;align-items:center;gap:4px;max-width:220px;height:28px;padding:0 7px;
+  border:1px solid rgba(255,255,255,.12);border-radius:6px;background:rgba(255,255,255,.04);
+  color:#d9e3e9;font-size:12px;white-space:nowrap;
+}
+html body .image-node > .node-composer .composer-pill select{
+  width:auto;min-width:48px;max-width:170px;height:26px!important;padding:0 2px!important;
+  border:0!important;background:transparent!important;box-shadow:none!important;color:inherit!important;font-size:12px!important;
+}
+.image-node .composer-model select{min-width:110px!important;max-width:182px!important}
+.image-node .composer-pill select option,.image-node .composer-pill select optgroup{background:#1b252d;color:#e6ebf0}
+.image-node .composer-more-toggle{
+  width:28px;height:28px;flex:none;border:1px solid rgba(255,255,255,.12);
+  border-radius:6px;background:rgba(255,255,255,.04);color:#d9e3e9;cursor:pointer;
+}
+.image-node .composer-more-toggle:hover,.image-node .composer-more-toggle.on{border-color:var(--theme-accent);color:#fff}
+.image-node .composer-cost{margin-left:auto;font-size:11px;color:#d9bd81}
+.image-node .composer-send{
+  width:30px;height:30px;flex:none;display:grid;place-items:center;border:0;border-radius:50%;
+  background:#edf4f6;color:#14212b;cursor:pointer;
+}
+.image-node .composer-more{margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.1)}
+.image-node .composer-more.hidden{display:none!important}
+.image-node .composer-more .image-request-controls{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 8px}
+.image-node .composer-more .image-tools{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0}
+.image-node .image-custom-size.hidden{display:none!important}
+@media(max-width:700px){
+  html body .image-node > .node-composer.image-composer{width:calc(100vw - 24px)!important}
+  .image-node .composer-hint .media-capability-summary{display:none}
+}
+
+/* The backup's canvas search lives behind one control in the bottom dock. */
+.bottom-canvas-tools .canvas-search-tool{position:relative;display:flex}
+html body[class] .bottom-canvas-tools .canvas-search-btn{width:32px;min-width:32px;padding:0}
+.canvas-search-popover{
+  position:absolute;left:0;bottom:calc(100% + 8px);z-index:140;
+  width:min(304px,calc(100vw - 24px));display:grid;gap:6px;padding:8px;
+  border:1px solid var(--theme-surface-line,rgba(223,232,238,.14));border-radius:8px;
+  background:var(--theme-bg-panel,#151b20);box-shadow:0 14px 34px rgba(0,0,0,.34);
+}
+.canvas-search-popover.hidden{display:none!important}
+.canvas-search-popover-row{display:flex;align-items:center;gap:6px;min-width:0}
+.canvas-search-popover-row>i{flex:none;width:16px;color:var(--muted);font-size:12px;text-align:center}
+.canvas-search-popover input,.canvas-search-popover select{
+  flex:1;min-width:0;height:28px;padding:0 7px;border:1px solid var(--theme-surface-line,rgba(223,232,238,.14));
+  border-radius:6px;background:var(--theme-bg-control,#10161a);color:var(--text);font-size:12px;
+}
+.canvas-search-popover .icon-btn{flex:none;width:28px;height:28px;min-width:28px;border-radius:6px}
+.canvas-search-popover .mini-pill{flex:none;height:28px;min-height:28px;padding:0 8px;font-size:12px}
+.bottom-canvas-tools .canvas-search-btn.active{color:var(--theme-accent)}
 html body.nexus-layout[class] .manju-head{
   display:grid!important;
   grid-template-columns:minmax(240px,1fr) minmax(0,auto)!important;

@@ -392,6 +392,7 @@ function scheduleTransform(updateVisibility = true, updateToolbar = true) {
 function applyTransform(updateVisibility = true, updateToolbar = true) {
   $('viewport').style.transform = `translate(${host.offsetX}px, ${host.offsetY}px) scale(${host.scale})`;
   $('viewport').style.setProperty('--port-inverse-scale', String(1 / Math.max(host.scale, .2)));
+  $('viewport').style.setProperty('--canvas-zoom-inverse', String(1 / Math.max(host.scale, .2)));
   updateZoomLabel();
   if (updateToolbar) updateSelectionToolbar();
   if (updateVisibility) scheduleVisibilityUpdate();

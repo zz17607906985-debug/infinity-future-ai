@@ -1854,6 +1854,11 @@
       applyCanvasFilters();
     });
     $('clearCanvasSearch')?.addEventListener('click', clearCanvasSearch);
+    $('canvasSearchBtn')?.addEventListener('click', () => (isCanvasSearchOpen() ? closeCanvasSearch() : openCanvasSearch()));
+    $('closeCanvasSearch')?.addEventListener('click', () => closeCanvasSearch());
+    document.addEventListener('pointerdown', e => {
+      if (isCanvasSearchOpen() && !e.target.closest?.('.canvas-search-tool')) closeCanvasSearch(false);
+    }, true);
     $('focusCanvasSearchResult')?.addEventListener('click', () => focusCanvasSearchResult());
     $('zoomFitBtn')?.addEventListener('click', () => fitView(true));
     $('zoomMinusBtn')?.addEventListener('click', () => zoomCanvas(.87));
@@ -2172,7 +2177,7 @@
       {id: 'add-video', icon: 'fa-video', title: '创建视频节点', hint: '文生视频 / 图生视频', run: () => { setActiveWorkspace('canvas'); addVideoAtCenter(); }},
       {id: 'add-comfyui', icon: 'fa-diagram-project', title: '创建 ComfyUI 节点', hint: '导入 workflow 后在画布运行', run: () => { setActiveWorkspace('canvas'); addComfyUIAtCenter(); }},
       {id: 'settings', icon: 'fa-gear', title: '打开设置', hint: 'API、模型、本地存储', run: openSettings},
-      {id: 'search-canvas', icon: 'fa-magnifying-glass', title: '搜索画布节点', hint: '按名称、提示词、模型或标签搜索', run: () => { setActiveWorkspace('canvas'); requestAnimationFrame(() => $('canvasSearchInput')?.focus()); }},
+      {id: 'search-canvas', icon: 'fa-magnifying-glass', title: '搜索画布节点', hint: '按名称、提示词、模型或标签搜索', run: () => { setActiveWorkspace('canvas'); openCanvasSearch(); }},
       {id: 'pause-queue', icon: 'fa-pause', title: '暂停生成队列', hint: '保留当前排队任务，可随时继续', run: pauseQueue},
       {id: 'retry-failed-queue', icon: 'fa-rotate-right', title: '重试失败任务', hint: '只重试已经失败的排队任务', run: retryFailedQueue},
       {id: 'fit-view', icon: 'fa-maximize', title: '适配画布视图', hint: '把画布内容放回视野', run: () => fitView(true)},
@@ -2762,6 +2767,11 @@
   }
   function handleGlobalKeydown(e) {
     if (trapVisibleDialogFocus(e)) return;
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'f' && activeWorkspace === 'canvas' && !$('appShell')?.classList.contains('hidden')) {
+      e.preventDefault();
+      openCanvasSearch();
+      return;
+    }
     if (activeWorkspace === 'canvas' && !$('appShell')?.classList.contains('hidden') && !isEditableTarget(e.target) && !e.target.closest?.('[role="dialog"],.command-palette') && $('modal')?.classList.contains('hidden') && e.key === 'Delete' && selectedNodes.size) {
       e.preventDefault();
       deleteSelectedNodes();
@@ -2789,6 +2799,10 @@
       }
     }
     if (e.key === 'Escape') {
+      if (isCanvasSearchOpen()) {
+        closeCanvasSearch();
+        return;
+      }
       if (!$('imageModal')?.classList.contains('hidden')) {
         closeImageModal();
         return;
@@ -2876,7 +2890,7 @@
   }
 
   function isCanvasMenuBlockedTarget(target) {
-    return !!target?.closest?.('.canvas-rail,.bottom-canvas-tools,.canvas-tidy-btn,.history-drawer,.asset-library,.queue-drawer,.music-workbench,.assistant-workbench,.short-workbench,.topbar,.workflow-bar,.canvas-search-bar,.zoom-control,.selection-toolbar,.settings-drawer,.command-palette,.modal,.image-modal,.fabric-editor-modal,.cropper-modal,.camera-modal,.chat-panel,.chat-preview,.mascot-button,.mascot-switch');
+    return !!target?.closest?.('.canvas-rail,.bottom-canvas-tools,.canvas-tidy-btn,.history-drawer,.asset-library,.queue-drawer,.music-workbench,.assistant-workbench,.short-workbench,.topbar,.workflow-bar,.canvas-search-popover,.zoom-control,.selection-toolbar,.settings-drawer,.command-palette,.modal,.image-modal,.fabric-editor-modal,.cropper-modal,.camera-modal,.chat-panel,.chat-preview,.mascot-button,.mascot-switch');
   }
 
   function openCanvasMenu(clientX, clientY, html, onPick, extraClass = '') {
@@ -3027,6 +3041,27 @@
   function clearSelection() {
     selectedNodes.clear();
     renderSelection();
+  }
+  function isCanvasSearchOpen() {
+    return !!$('canvasSearchPopover') && !$('canvasSearchPopover').classList.contains('hidden');
+  }
+  function openCanvasSearch() {
+    const popover = $('canvasSearchPopover');
+    if (!popover) return;
+    popover.classList.remove('hidden');
+    $('canvasSearchBtn')?.setAttribute('aria-expanded', 'true');
+    requestAnimationFrame(() => {
+      $('canvasSearchInput')?.focus();
+      $('canvasSearchInput')?.select();
+    });
+  }
+  function closeCanvasSearch(restoreFocus = true) {
+    const popover = $('canvasSearchPopover');
+    if (!popover || popover.classList.contains('hidden')) return;
+    const hadFocus = popover.contains(document.activeElement);
+    popover.classList.add('hidden');
+    $('canvasSearchBtn')?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && hadFocus) $('canvasSearchBtn')?.focus();
   }
   function updateSelectionToolbar() {
     const toolbar = $('selectionToolbar');
