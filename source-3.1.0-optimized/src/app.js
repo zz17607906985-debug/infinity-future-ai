@@ -157,6 +157,8 @@
   let uiSoundEnabled = true;
   let uiSoundVolume = .35;
   let uiSoundController = null;
+  let canvasWallpaper = null;
+  let balanceChip = null;
   let colorTheme = 'ocean';
   let customThemeColor = '#4fd6e8';
   let customThemePalette = {accent:'#4fd6e8',deep:'#07090e',workspace:'#0b0f16',panel:'#12161e',control:'#0e141c'};
@@ -403,6 +405,7 @@
         getStore,
         setStore,
         saveSettings,
+        onBalanceDisplayChange: () => balanceChip?.render(),
         renderModels,
         refreshNodeProviderSelects,
         refreshNodeModelSelects,
@@ -1478,6 +1481,24 @@
     $('musicWorkbench')?.remove();
     applyFastCanvasMode();
     applyReduceMotionMode();
+    canvasWallpaper = window.FutureAICanvasWallpaper?.createCanvasWallpaper({
+      document, bridge: window.wallpaperBridge, onChange: saveSettings, toast
+    });
+    canvasWallpaper?.bind();
+    balanceChip = window.FutureAIBalanceChip?.createBalanceChip({
+      document, esc,
+      getProviders: () => apiProviders,
+      getDefaultProviderId: () => globalProviderForKind('image')?.id,
+      balance: {
+        queryable: provider => Boolean(providerUI()?.providerBalanceQueryable?.(provider)),
+        state: id => providerUI()?.providerBalanceState?.(id) || null,
+        view: provider => providerUI()?.providerBalanceView?.(provider) || {text: '余额 —', title: '', tone: ''},
+        format: (value, unit) => providerUI()?.formatBalanceAmount?.(value, unit) ?? String(value),
+        refresh: (provider, options) => providerUI()?.refreshProviderBalance?.(provider, options)
+      },
+      onChange: saveSettings
+    });
+    balanceChip?.bind();
     loadSettings();
     // Color wheel (iro) loads on demand when custom theme is active or opened.
     if (colorTheme === 'custom') void ensureColorThemePicker();
@@ -1485,6 +1506,8 @@
     scheduleHomeBackgroundVideo();
     scheduleCodexAutoUpdate();
     await loadApiKeySecret();
+    balanceChip?.render();
+    void balanceChip?.refresh();
     await recoverStorageDir();
     await loadLocalStores();
     await loadSupportCenter();
@@ -2137,6 +2160,7 @@
     const workspaceLabels = {short: 'AI 漫剧工作台', assistant: '∞ 灵枢万象', canvas: '无限画布', music: '媒体中心'};
     if ($('workspaceMenuLabel')) $('workspaceMenuLabel').textContent = workspaceLabels[activeWorkspace] || '当前工作区';
     syncCanvasEmptyState();
+    if (activeWorkspace === 'canvas') void balanceChip?.refresh();
     $('railMedia')?.classList.toggle('active', activeWorkspace === 'music');
     $('shortWorkbench')?.classList.toggle('hidden', activeWorkspace !== 'short');
     $('assistantWorkbench')?.classList.toggle('hidden', activeWorkspace !== 'assistant');
@@ -4212,7 +4236,14 @@
     budgetBatchOverride.remaining -= 1;
     return true;
   }
-  async function authorizeGenerationBudget({node, provider, model, kind, request, profile = null} = {}) {
+  const generationSpendTickets = new Map();
+  async function authorizeGenerationBudget(args = {}) {
+    const ledgerId = await authorizeGenerationBudgetLedger(args);
+    const id = ledgerId || `spend-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`;
+    generationSpendTickets.set(id, {ledger: Boolean(ledgerId), spend: balanceChip?.noteGenerationStarted(args.provider) || null});
+    return id;
+  }
+  async function authorizeGenerationBudgetLedger({node, provider, model, kind, request, profile = null} = {}) {
     if (!BudgetGuard || !ModelCapabilities) return '';
     const capability = profile || ModelCapabilities.resolveProfile({provider, modelId: model, kind});
     const estimate = ModelCapabilities.estimateCost(capability, request || {});
@@ -4256,7 +4287,10 @@
     return id;
   }
   function completeGenerationBudget(id, result = {}) {
-    if (!id || !BudgetGuard) return;
+    const ticket = generationSpendTickets.get(id);
+    generationSpendTickets.delete(id);
+    void balanceChip?.noteGenerationFinished(ticket?.spend || null, result);
+    if (!id || !BudgetGuard || (ticket && !ticket.ledger)) return;
     setGenerationBudgetLedger(BudgetGuard.completeEntry(generationBudgetLedger(), id, result));
   }
   function generationReferenceProblems(node, add) {
@@ -5551,6 +5585,8 @@
     syncGlobalModelInputs();
     applyAppearanceMode(s.appearanceMode || 'standard');
     applyColorTheme(colorTheme, customThemeColor);
+    canvasWallpaper?.load(s.canvasWallpaper);
+    balanceChip?.load(s.balanceChipProviderId);
     applyMascot(s.mascot || 'boy');
     migrateLegacyApiKeySecret(s);
     syncUISoundControls();
@@ -5611,10 +5647,13 @@
       customThemePalette,
       savedColorThemes,
       activeSavedColorThemeId,
+      canvasWallpaper: canvasWallpaper?.value() || previous.canvasWallpaper,
+      balanceChipProviderId: balanceChip ? balanceChip.value() : previous.balanceChipProviderId,
       theme: 'dark',
       appearanceMode: normalizeAppearanceMode($('appearanceMode')?.value || document.body.dataset.appearance || 'standard'),
       mascot: $('mascotImage')?.dataset.mascot || 'boy'
     });
+    balanceChip?.render();
   }
   function initUISoundFeedback() {
     if (!window.FutureAIUISound?.createUISoundController) return;

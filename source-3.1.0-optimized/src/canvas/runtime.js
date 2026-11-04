@@ -202,6 +202,7 @@ function renderImageNode(node) {
           <label class="composer-pill" title="比例"><select data-field="aspect">${imageAspectOptionsHtml(node)}</select></label>
           <label class="composer-pill" title="清晰度"><select data-field="resolution">${imageResolutionOptionsHtml(node)}</select></label>
           <label class="composer-pill" title="张数"><select data-field="count"><option value="1">1张</option><option value="2">2张</option><option value="3">3张</option><option value="4">4张</option></select></label>
+          <button type="button" class="composer-background-toggle" data-background-toggle title="透明背景（仅支持的模型；默认关闭）" aria-label="透明背景" aria-pressed="${node.data.backgroundMode === 'transparent'}"><i class="fa-solid fa-chess-board"></i><span>透明</span></button>
           <button type="button" class="composer-more-toggle" data-more-toggle title="生成质量、透明背景与更多设置" aria-label="更多生成设置"><i class="fa-solid fa-sliders"></i></button>
           <span class="composer-cost" data-cost-estimate></span>
           <button type="button" class="composer-send" data-run="image" title="生成图像 / 图生图" aria-label="生成图像 / 图生图">
@@ -573,6 +574,11 @@ function updateImageComposerSummary(node) {
   const more = node.el.querySelector('[data-composer-more]');
   const moreBtn = node.el.querySelector('[data-more-toggle]');
   moreBtn?.classList.toggle('on', more ? !more.classList.contains('hidden') : false);
+  const transparent = node.data.backgroundMode === 'transparent';
+  node.el.classList.toggle('transparent-preview', transparent);
+  const toggle = node.el.querySelector('[data-background-toggle]');
+  toggle?.classList.toggle('on', transparent);
+  toggle?.setAttribute('aria-pressed', String(transparent));
 }
 function videoSizeOptionsHtml(node) {
   const profile = modelCapabilityProfile(node, 'video');
@@ -874,6 +880,14 @@ function bindNode(node) {
       renderSelection();
       return;
     }
+    if (e.target.closest('[data-background-toggle]')) {
+      node.data.backgroundMode = node.data.backgroundMode === 'transparent' ? 'opaque' : 'transparent';
+      const select = el.querySelector('[data-field="backgroundMode"]');
+      if (select) select.value = node.data.backgroundMode;
+      updateImageComposerSummary(node);
+      queueSave();
+      return;
+    }
     if (e.target.closest('[data-shot-toggle]')) {
       const pop = el.querySelector('[data-shot-pop]');
       const willOpen = pop?.classList.contains('hidden');
@@ -1131,6 +1145,11 @@ function hydrateNode(node) {
       preview.innerHTML = '<div><i class="fa-solid fa-video"></i><br>暂无视频</div>';
     } else {
       video.addEventListener('loadedmetadata', () => {
+        if (video.videoWidth && video.videoHeight) {
+          node.mediaNaturalUrl = node.data.url;
+          node.mediaNaturalRatio = video.videoWidth / video.videoHeight;
+          applyNodeMediaLayout(node);
+        }
         const actualDuration = Number(video.duration || 0);
         const audioTrack = video.audioTracks?.length > 0 || video.mozHasAudio === true || Number(video.webkitAudioDecodedByteCount || 0) > 0
           ? 'present'
@@ -1160,7 +1179,7 @@ function hydrateNode(node) {
     } else if (isVideoMedia(node.data.mime, url)) {
       replacePreviewMedia(preview, 'video', url, {controls: true, label: node.data.name || '视频素材'});
     } else {
-      replacePreviewMedia(preview, 'img', url, {zoom: true, label: node.data.name || '图片素材'});
+      observePreviewImage(node, replacePreviewMedia(preview, 'img', url, {zoom: true, label: node.data.name || '图片素材'}), url);
     }
     return;
   }
@@ -1191,8 +1210,8 @@ function hydrateNode(node) {
   preview?.classList.remove('has-variants');
   if (urls.length) {
     preview.classList.remove('has-status', 'is-error', 'is-running');
-    if (urls.length === 1) replacePreviewMedia(preview, 'img', urls[0], {zoom: true});
-    else renderImageVariantPreview(preview, urls, safeMediaUrl(node.data.url || urls[0]));
+    if (urls.length === 1) observePreviewImage(node, replacePreviewMedia(preview, 'img', urls[0], {zoom: true}), urls[0]);
+    else renderImageVariantPreview(preview, urls, safeMediaUrl(node.data.url || urls[0]), node);
   } else if (node.data.statusType && node.data.status) {
     preview.innerHTML = imageStatusHtml(node);
     preview.classList.add('has-status');
@@ -1227,7 +1246,7 @@ function imagePreviewUrls(node) {
   return list.slice(0, 4);
 }
 
-function renderImageVariantPreview(preview, urls, activeUrl) {
+function renderImageVariantPreview(preview, urls, activeUrl, node) {
   if (!preview) return;
   preview.classList.add('has-variants');
   preview.replaceChildren();
@@ -1240,11 +1259,26 @@ function renderImageVariantPreview(preview, urls, activeUrl) {
     const img = document.createElement('img');
     img.src = url;
     img.alt = `第 ${index + 1} 张`;
+    if (url === activeUrl) observePreviewImage(node, img, url);
     const badge = document.createElement('span');
     badge.textContent = `${index + 1}/${urls.length}`;
     button.append(img, badge);
     preview.appendChild(button);
   });
+}
+
+function observePreviewImage(node, img, url) {
+  if (!img) return;
+  const update = () => {
+    if (!img.naturalWidth || !img.naturalHeight || !node.el.isConnected) return;
+    if (node.type === 'image' && !imagePreviewUrls(node).includes(url)) return;
+    if (node.type === 'upload' && safeMediaUrl(node.data.url) !== url) return;
+    node.mediaNaturalUrl = url;
+    node.mediaNaturalRatio = img.naturalWidth / img.naturalHeight;
+    applyNodeMediaLayout(node);
+  };
+  img.addEventListener('load', update, {once: true});
+  if (img.complete) update();
 }
 
 function replacePreviewMedia(preview, tagName, value, {controls = false, zoom = false, label = ''} = {}) {
@@ -1263,7 +1297,10 @@ function replacePreviewMedia(preview, tagName, value, {controls = false, zoom = 
   return media;
 }
 function mediaAspectRatio(node) {
-  if (!node || (node.type !== 'image' && node.type !== 'video')) return 1;
+  if (!node || (node.type !== 'image' && node.type !== 'video' && node.type !== 'upload')) return 1;
+  const url = node.type === 'image' ? safeMediaUrl(node.data.url || imagePreviewUrls(node)[0]) : safeMediaUrl(node.data.url);
+  if (url && url === node.mediaNaturalUrl && Number.isFinite(node.mediaNaturalRatio)) return node.mediaNaturalRatio;
+  if (node.type === 'upload') return 16 / 9;
   return MediaDimensions?.mediaAspectRatio(node.data, node.type) || 1;
 }
 function syncMediaSelection(node, field) {
@@ -1332,8 +1369,8 @@ function updateMediaSizeSummary(node) {
   }
 }
 function applyNodeMediaLayout(node) {
-  if (!node?.el || (node.type !== 'image' && node.type !== 'video')) return;
-  const sync = width => {
+  if (!node?.el || (node.type !== 'image' && node.type !== 'video' && node.type !== 'upload')) return;
+  const sync = () => {
     const ratio = mediaAspectRatio(node);
     const previewHeight = 292;
     node.el.style.setProperty('--node-media-ratio', String(ratio));
@@ -1343,7 +1380,7 @@ function applyNodeMediaLayout(node) {
     preview?.style.setProperty('--node-preview-height', `${previewHeight}px`);
   };
   const width = node.el.offsetWidth || Number.parseFloat(getComputedStyle(node.el).width) || 430;
-  sync(width);
+  sync();
   updateMediaSizeSummary(node);
   if (node.type === 'image') updateImageCustomSizeControls(node);
   if (!node.mediaLayoutObserver && typeof ResizeObserver === 'function') {
@@ -1352,7 +1389,7 @@ function applyNodeMediaLayout(node) {
       const nextWidth = Math.round(entries[0]?.contentRect?.width || node.el.offsetWidth || 0);
       if (!nextWidth || nextWidth === node.mediaLayoutWidth) return;
       node.mediaLayoutWidth = nextWidth;
-      sync(nextWidth);
+      sync();
       scheduleDrawEdges();
       scheduleVisibilityUpdate();
     });

@@ -41,6 +41,12 @@ contextBridge.exposeInMainWorld('localStorageBridge', {
   checkWritable: dir => ipcRenderer.invoke('storage:checkWritable', dir)
 });
 
+contextBridge.exposeInMainWorld('wallpaperBridge', {
+  current: () => ipcRenderer.invoke('wallpaper:current'),
+  importFile: file => ipcRenderer.invoke('wallpaper:import', {sourcePath: webUtils.getPathForFile(file)}),
+  remove: () => ipcRenderer.invoke('wallpaper:delete')
+});
+
 const meshoptBridge = createMeshoptBridge();
 
 contextBridge.exposeInMainWorld('secretBridge', {
@@ -53,7 +59,8 @@ contextBridge.exposeInMainWorld('secretBridge', {
   setProviderApiKey: (providerId, apiKey, keyId, label, scope) => ipcRenderer.invoke('secret:setProviderApiKey', providerId, apiKey, keyId, label, scope),
   updateProviderApiKeyMetadata: (providerId, keyId, metadata) => ipcRenderer.invoke('secret:updateProviderApiKeyMetadata', providerId, keyId, metadata),
   removeProviderApiKey: (providerId, keyId) => ipcRenderer.invoke('secret:removeProviderApiKey', providerId, keyId),
-  clearProviderApiKey: providerId => ipcRenderer.invoke('secret:clearProviderApiKey', providerId)
+  clearProviderApiKey: providerId => ipcRenderer.invoke('secret:clearProviderApiKey', providerId),
+  getProviderBalance: request => ipcRenderer.invoke('provider:balance', request)
 });
 
 contextBridge.exposeInMainWorld('e2eBridge', {

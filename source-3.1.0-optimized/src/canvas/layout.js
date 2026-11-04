@@ -399,14 +399,16 @@ function applyTransform(updateVisibility = true, updateToolbar = true) {
   if (host.canvasProxyActive) scheduleCanvasProxyDraw();
 }
 function proxyNodeSize(node) {
-  const width = node.type === 'image' || node.type === 'upload' ? 520
+  const width = node.type === 'image' || node.type === 'upload' ? 292 * nodeMediaAspectRatio(node) + 2
     : node.type === 'video' || node.type === 'comfyui' ? 430 : 320;
   const height = node.type === 'image' || node.type === 'upload' ? 292
     : node.type === 'video' ? 292 : node.type === 'comfyui' ? 260 : 180;
   return {width, height};
 }
 function nodeMediaAspectRatio(node) {
-  if (!node || (node.type !== 'image' && node.type !== 'video')) return 1;
+  if (!node || (node.type !== 'image' && node.type !== 'video' && node.type !== 'upload')) return 1;
+  if (Number.isFinite(node.mediaNaturalRatio) && node.mediaNaturalRatio > 0) return node.mediaNaturalRatio;
+  if (node.type === 'upload') return 16 / 9;
   return MediaDimensions?.mediaAspectRatio(node.data, node.type) || 1;
 }
 function setCanvasProxyActive(active) {

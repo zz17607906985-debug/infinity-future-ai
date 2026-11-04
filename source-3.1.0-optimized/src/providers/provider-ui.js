@@ -18,6 +18,7 @@
     const getStore = deps.getStore;
     const setStore = deps.setStore;
     const saveSettings = deps.saveSettings;
+    const onBalanceDisplayChange = deps.onBalanceDisplayChange;
     const renderModels = deps.renderModels;
     const refreshNodeProviderSelects = deps.refreshNodeProviderSelects;
     const refreshNodeModelSelects = deps.refreshNodeModelSelects;
@@ -479,9 +480,82 @@ function providerListItemHtml(provider) {
   const defaults = Object.entries(host.globalModelProviders || {}).filter(([, id]) => id === provider.id).map(([kind]) => kind === 'chat' ? '聊天默认' : kind === 'image' ? '图片默认' : '视频默认');
   return `<button class="api-provider-list-item ${selected ? 'selected' : ''}" data-provider-select="${esc(provider.id)}" type="button">
     <span class="api-provider-list-avatar">${esc(providerInitial(provider))}</span>
-    <span class="api-provider-list-copy"><strong>${esc(provider.name || providerTypeLabel(provider.type))}</strong><small>${esc(provider.apiUrl || '尚未填写地址')}</small><em>${esc(models)}${defaults.length ? ` · ${esc(defaults.join(' / '))}` : ''}</em></span>
+    <span class="api-provider-list-copy"><strong>${esc(provider.name || providerTypeLabel(provider.type))}</strong><small>${esc(provider.apiUrl || '尚未填写地址')}</small><em>${esc(models)}${defaults.length ? ` · ${esc(defaults.join(' / '))}` : ''}</em>${providerBalanceLineHtml(provider)}</span>
+    <span class="api-provider-list-rename" data-provider-rename="${esc(provider.id)}" role="button" tabindex="0" title="重命名服务" aria-label="重命名服务"><i class="fa-solid fa-pen"></i></span>
+    <span class="api-provider-list-rename" data-provider-balance-refresh="${esc(provider.id)}" role="button" tabindex="0" title="刷新余额" aria-label="刷新余额"><i class="fa-solid fa-rotate"></i></span>
     <span class="api-provider-list-status ${healthClass}" title="${esc(healthText)}"></span>
   </button>`;
+}
+const providerBalances = new Map();
+const providerBalanceInflight = new Map();
+function providerBalanceQueryable(provider) {
+  return Boolean(provider?.apiUrl && provider.type !== 'custom-sync'
+    && (provider.useGlobalKey ? $('apiKey')?.value.trim() : provider.apiKeySaved || provider.keyPool?.length));
+}
+function formatBalanceAmount(value, unit) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  const code = String(unit || '').toUpperCase();
+  if (code === 'USD') return `$${amount.toFixed(2)}`;
+  if (code === 'CNY' || code === 'RMB') return `¥${amount.toFixed(2)}`;
+  if (code === 'QUOTA') return `${Math.round(amount).toLocaleString('zh-CN')} 额度`;
+  return `${amount.toFixed(2)} ${unit || ''}`.trim();
+}
+function providerBalanceView(provider) {
+  if (!providerBalanceQueryable(provider)) return {text: '余额 —', title: '填写地址并保存 Key 后可查询余额', tone: ''};
+  const state = providerBalances.get(provider.id);
+  if (!state || state.status === 'loading') return {text: '余额 查询中…', title: '正在查询余额', tone: 'loading'};
+  if (state.status === 'unsupported') return {text: '不支持查询', title: '该服务没有提供可用的余额查询接口', tone: 'muted'};
+  if (state.status !== 'ok') return {text: `查询失败：${state.reason || '未知错误'}`, title: '点击刷新按钮重试', tone: 'fail'};
+  const used = state.used == null ? '' : `已用 ${formatBalanceAmount(state.used, state.unit)}`;
+  const total = state.total == null ? '' : `总额 ${formatBalanceAmount(state.total, state.unit)}`;
+  const checked = state.checkedAt ? `查询于 ${new Date(state.checkedAt).toLocaleTimeString('zh-CN', {hour12: false})}` : '';
+  const title = [used, total, checked].filter(Boolean).join(' · ');
+  if (state.unlimited) return {text: '无限额度', title, tone: 'ok'};
+  if (state.remaining != null) return {text: `余额 ${formatBalanceAmount(state.remaining, state.unit)}`, title, tone: state.remaining <= 0 ? 'fail' : 'ok'};
+  return {text: total || '余额 —', title, tone: 'ok'};
+}
+function providerBalanceLineHtml(provider) {
+  const view = providerBalanceView(provider);
+  return `<span class="api-provider-list-balance ${view.tone}" data-provider-balance="${esc(provider.id)}" title="${esc(view.title)}">${esc(view.text)}</span>`;
+}
+function providerBalanceState(id) { return providerBalances.get(id) || null; }
+function paintProviderBalance(provider) {
+  const line = $('apiProviderList')?.querySelector(`[data-provider-balance="${CSS.escape(provider.id)}"]`);
+  if (line) line.outerHTML = providerBalanceLineHtml(provider);
+  onBalanceDisplayChange?.();
+}
+function refreshProviderBalance(provider, {force = false, quiet = false} = {}) {
+  if (!providerBalanceQueryable(provider) || !secretBridge()?.getProviderBalance) return Promise.resolve(null);
+  const inflight = providerBalanceInflight.get(provider.id);
+  if (inflight) return force && !inflight.force
+    ? inflight.promise.then(() => refreshProviderBalance(provider, {force, quiet}))
+    : inflight.promise;
+  if (!(quiet && providerBalances.get(provider.id)?.status === 'ok')) {
+    providerBalances.set(provider.id, {status: 'loading'});
+    paintProviderBalance(provider);
+  }
+  const promise = (async () => {
+    let result;
+    try {
+      result = await secretBridge().getProviderBalance({
+        providerId: provider.id, apiUrl: provider.apiUrl,
+        useGlobalKey: provider.useGlobalKey === true, keyId: provider.activeKeyId || '', force
+      });
+    } catch {
+      result = {status: 'error', reason: '查询异常'};
+    }
+    providerBalances.set(provider.id, result || {status: 'error', reason: '查询异常'});
+    providerBalanceInflight.delete(provider.id);
+    const current = host.apiProviders.find(item => item.id === provider.id);
+    if (current) paintProviderBalance(current);
+    return providerBalances.get(provider.id);
+  })();
+  providerBalanceInflight.set(provider.id, {promise, force});
+  return promise;
+}
+function refreshProviderBalances({force = false} = {}) {
+  return Promise.all(host.apiProviders.map(provider => refreshProviderBalance(provider, {force})));
 }
 async function hydrateProviderKeyInputs() {
   if (!window.secretBridge?.getProviderApiKey) return;
@@ -1026,6 +1100,28 @@ function scheduleProviderAutoConfigure(card) {
   providerAutoConfigureTimers.set(providerId, timer);
 }
 function handleApiProviderClick(e) {
+  const balanceRefresh = e.target.closest('[data-provider-balance-refresh]');
+  if (balanceRefresh) {
+    e.preventDefault();
+    e.stopPropagation();
+    const provider = host.apiProviders.find(item => item.id === balanceRefresh.dataset.providerBalanceRefresh);
+    return provider && refreshProviderBalance(provider, {force: true});
+  }
+  const rename = e.target.closest('[data-provider-rename]');
+  if (rename) {
+    e.preventDefault();
+    e.stopPropagation();
+    const provider = host.apiProviders.find(item => item.id === rename.dataset.providerRename);
+    if (!provider) return;
+    return Promise.resolve(openModal?.({title: '重命名服务', value: provider.name, okText: '保存'})).then(value => {
+      const name = typeof value === 'string' ? value.trim().slice(0, 60) : '';
+      if (!name || name === provider.name) return;
+      provider.name = name;
+      saveSettings();
+      renderApiProviders();
+      refreshNodeModelSelects();
+    });
+  }
   const selectProvider = e.target.closest('[data-provider-select]');
   if (selectProvider) {
     host.apiProviderUiSelectedId = selectProvider.dataset.providerSelect;
@@ -2025,6 +2121,12 @@ async function importModelsForProviderCard(card) {
       syncApiProviderCardFields,
       handleApiProviderInput,
       handleApiProviderClick,
+      refreshProviderBalance,
+      refreshProviderBalances,
+      providerBalanceQueryable,
+      providerBalanceState,
+      providerBalanceView,
+      formatBalanceAmount,
       useProviderModelFromCard,
       addProviderModelFromCard,
       toggleApiProviderCollapsed,

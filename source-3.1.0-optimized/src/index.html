@@ -12,6 +12,7 @@
 </head>
 <body class="dark-mode nexus-layout">
   <div id="projectHome" class="project-home">
+    <div id="homeWallpaper" class="wallpaper-layer home-wallpaper" aria-hidden="true" hidden></div>
     <video id="homeBgVideo" class="home-bg-video" muted loop playsinline preload="none" poster="./assets/app-bg.jpg" aria-hidden="true"></video>
     <div class="gd-shell">
       <aside class="gd-sidebar" aria-label="项目中心侧栏">
@@ -122,7 +123,7 @@
         </div>
         <div class="top-actions">
           <span id="saveStatus" class="save-status is-saved" role="status" aria-live="polite"><i class="fa-solid fa-check" aria-hidden="true"></i><span>已保存</span></span>
-          <button id="balancePill" class="status-pill hidden" type="button" title="API 余额" hidden aria-hidden="true"><i class="fa-solid fa-wallet"></i> <span id="balancePillValue">余额</span></button>
+          <button id="balanceChip" class="status-pill balance-chip hidden" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="balancePopover" title="API 余额"><i class="fa-solid fa-wallet"></i> <span id="balanceChipValue">—</span></button>
           <button id="themeToggle" class="icon-btn" type="button" title="进入专注模式" aria-label="进入专注模式"><i class="fa-solid fa-crosshairs"></i></button>
           <button id="topSettings" class="icon-btn" type="button" title="系统设置" aria-label="系统设置"><i class="fa-solid fa-gear"></i></button>
           <button id="queueToggle" class="ghost-btn" type="button" title="生成队列"><i class="fa-solid fa-list-check"></i> 队列 <span id="queueCount">0</span></button>
@@ -152,6 +153,7 @@
       </div>
 <section id="canvas" class="canvas">
         <video class="canvas-bg-video" muted loop playsinline preload="none" poster="./assets/app-bg.jpg" aria-hidden="true"></video>
+        <div id="canvasWallpaper" class="wallpaper-layer" aria-hidden="true" hidden></div>
         <div id="canvasEmptyState" class="canvas-empty-state" aria-label="空画布引导">
           <i class="fa-solid fa-infinity" aria-hidden="true"></i>
           <strong>从一个想法开始</strong>
@@ -647,6 +649,27 @@
           <input id="uiSoundVolume" type="range" min="0" max="100" step="1" value="35" data-ui-sound="off" aria-label="界面音效音量">
         </label>
       </section>
+      <section class="settings-section canvas-wallpaper-fieldset">
+        <h3><i class="fa-solid fa-image"></i> 壁纸</h3>
+        <div id="canvasWallpaperGrid" class="color-theme-grid canvas-wallpaper-grid" role="radiogroup" aria-label="壁纸">
+          <label title="无"><input type="radio" name="canvasWallpaper" value="none" checked><span class="wallpaper-swatch"></span><span>无</span></label>
+          <label title="极光"><input type="radio" name="canvasWallpaper" value="aurora"><span class="wallpaper-swatch" data-wallpaper-preset="aurora"></span><span>极光</span></label>
+          <label title="暮霞"><input type="radio" name="canvasWallpaper" value="dusk"><span class="wallpaper-swatch" data-wallpaper-preset="dusk"></span><span>暮霞</span></label>
+          <label title="林间"><input type="radio" name="canvasWallpaper" value="forest"><span class="wallpaper-swatch" data-wallpaper-preset="forest"></span><span>林间</span></label>
+          <label title="深海"><input type="radio" name="canvasWallpaper" value="ocean"><span class="wallpaper-swatch" data-wallpaper-preset="ocean"></span><span>深海</span></label>
+          <label title="晨雾"><input type="radio" name="canvasWallpaper" value="mist"><span class="wallpaper-swatch" data-wallpaper-preset="mist"></span><span>晨雾</span></label>
+          <label id="canvasWallpaperCustomTile" title="我的图片" hidden><input type="radio" name="canvasWallpaper" value="custom"><span class="wallpaper-swatch"></span><span>我的图片</span></label>
+        </div>
+        <div class="canvas-wallpaper-upload">
+          <button id="canvasWallpaperUpload" class="ghost-btn" type="button"><i class="fa-solid fa-upload"></i> 上传图片</button>
+          <button id="canvasWallpaperDelete" class="ghost-btn" type="button" title="删除上传的壁纸" hidden><i class="fa-solid fa-trash-can"></i> 删除图片</button>
+          <small id="canvasWallpaperLocation">上传的图片会复制一份保存，原文件可随意移动或删除。</small>
+          <input id="canvasWallpaperFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        </div>
+        <label class="ui-sound-volume"><span><strong>模糊</strong><output id="canvasWallpaperBlurValue" for="canvasWallpaperBlur">0px</output></span><input id="canvasWallpaperBlur" type="range" min="0" max="24" step="1" value="0" data-ui-sound="off" aria-label="壁纸模糊"></label>
+        <label class="ui-sound-volume"><span><strong>暗度</strong><output id="canvasWallpaperDimValue" for="canvasWallpaperDim">35%</output></span><input id="canvasWallpaperDim" type="range" min="0" max="90" step="1" value="35" data-ui-sound="off" aria-label="壁纸暗度"></label>
+        <label class="generation-storage-toggle ui-sound-toggle"><input id="canvasWallpaperGridToggle" type="checkbox" checked><span class="ui-sound-switch" aria-hidden="true"></span><span class="ui-sound-copy"><strong>显示画布网格</strong></span></label>
+      </section>
       </div>
       <div class="settings-pane" data-settings-pane="api">
       <section class="settings-section api-settings-modern">
@@ -1102,6 +1125,8 @@
     <iframe id="directorDeskFrame" title="3D 导演台" data-src="./director-desk/index.html"></iframe>
   </section>
 
+  <div id="balanceFlash" class="balance-flash hidden" role="status" aria-live="polite"></div>
+  <div id="balancePopover" class="balance-popover hidden" aria-label="余额显示"></div>
   <div id="toast" class="toast-stack"></div>
   <!-- Core modules: defer keeps order while unblocking HTML parse. Heavy vendors load on demand. -->
   <script defer src="./runtime/renderer-bootstrap.js"></script>
@@ -1153,6 +1178,9 @@
   <script defer src="./workflows/workflow-library.js"></script>
   <script defer src="./ui/render-helpers.js"></script>
   <script defer src="./ui/color-themes.js"></script>
+  <script defer src="./ui/canvas-wallpaper.js"></script>
+  <script defer src="./ui/balance-spend.js"></script>
+  <script defer src="./ui/balance-chip.js"></script>
   <script defer src="./ui/sound-feedback.js"></script>
   <script defer src="./media/media-utils.js"></script>
   <script defer src="./media/media-library-rendering.js"></script>

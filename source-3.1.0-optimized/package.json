@@ -5,7 +5,7 @@
   "main": "src/main.js",
   "private": true,
   "scripts": {
-    "pretest": "node scripts/test-image-request-policy.js && node scripts/test-canvas-gestures.js && node scripts/test-short-import.js && node scripts/test-short-asset-pipeline.js && node scripts/test-image-regeneration-node.js && node scripts/test-window-controls-layout.js",
+    "pretest": "node scripts/test-restored-canvas-features.js && node scripts/test-image-request-policy.js && node scripts/test-canvas-gestures.js && node scripts/test-short-import.js && node scripts/test-short-asset-pipeline.js && node scripts/test-image-regeneration-node.js && node scripts/test-window-controls-layout.js",
     "build:tools": "npm ci --prefix build-tools --ignore-scripts --no-audit --no-fund",
     "build": "npm run build:tools && npm test && node scripts/build-release.js",
     "build:install": "npm run build:tools && npm test && node scripts/build-release.js --install",
@@ -13,6 +13,7 @@
     "check:release-resources": "node scripts/check-release-resources.js",
     "test": "node scripts/smoke-test.js && node scripts/test-media-dimensions.js && node scripts/test-media-process-contract.js && node scripts/test-canvas-executor.js && node scripts/test-asset-smart-index.js && node scripts/test-review-package.js && node scripts/test-review-export.js && node scripts/test-review-package-input.js && node scripts/test-model-capabilities.js && node scripts/test-model-import-capabilities.js && node scripts/test-reference-roles.js && node scripts/test-video-director.js && node scripts/test-budget-guard.js && node scripts/test-workflow-library.js && node scripts/test-variant-manager.js && node scripts/test-generation-count.js && node scripts/test-provenance.js && node scripts/test-short-audio-provenance.js && node scripts/test-workflow-run-contract.js && node scripts/test-batch-delivery.js && node scripts/test-canvas-layout.js && node scripts/test-skill-market.js && node scripts/test-zip-utils.js && node scripts/test-provider-key-pool.js && node scripts/test-provider-key-concurrency.js && node scripts/test-provider-key-recovery.js && node scripts/test-api-settings-simplicity.js && node scripts/test-provider-auto-config.js && node scripts/test-provider-image-size.js && node scripts/test-provider-image-edit-fallback.js && node scripts/test-project-store-save.js && node scripts/test-workspace-restore.js && node scripts/test-operational-contracts.js && node scripts/test-error-paths.js && node scripts/test-provider-runtime.js && node scripts/test-real-api-smoke.js && node scripts/test-build-release-contract.js && node scripts/verify-url-dom-safety.js && node scripts/verify-release-version.js && node scripts/check-release-resources.js && node scripts/test-ffmpeg-runtime.js",
     "test:smoke": "node scripts/smoke-test.js",
+    "test:restored": "node scripts/test-restored-canvas-features.js",
     "test:ui-layout": "node scripts/test-ui-layout.js",
     "test:request-ui": "node scripts/test-image-request-ui.js",
     "test:asset-browser": "node scripts/test-short-asset-browser.js",

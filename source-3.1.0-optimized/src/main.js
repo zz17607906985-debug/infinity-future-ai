@@ -39,6 +39,8 @@ const ShortImports = require('./media/short-import-service');
 const MediaProcessContract = require('./media/media-process-contract');
 const ReviewPackage = require('./review/review-package');
 const { buildOfflineReviewEntries } = require('./review/review-export');
+const WallpaperStore = require('./runtime/wallpaper-store');
+const ProviderBalance = require('./runtime/provider-balance');
 
 app.setName('∞未来 AI');
 
@@ -4115,6 +4117,44 @@ ipcMain.handle('storage:saveMedia', async (event, dir, payload) => {
   return pathToFileURL(file).href;
 });
 
+function wallpaperDirs() {
+  const userDir = path.join(app.getPath('userData'), 'wallpapers');
+  return app.isPackaged ? [path.join(path.dirname(app.getPath('exe')), 'wallpapers'), userDir] : [userDir];
+}
+
+function wallpaperInfo(file) {
+  return file ? {url: pathToFileURL(file).href, dir: path.dirname(file)} : null;
+}
+
+function wallpaperImageExt(bytes) {
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpg';
+  if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+  throw new Error('壁纸仅支持 PNG、JPG 或 WebP 图片');
+}
+
+ipcMain.handle('wallpaper:current', async event => {
+  assertTrustedRenderer(event);
+  return wallpaperInfo(await WallpaperStore.findWallpaper(wallpaperDirs()));
+});
+
+ipcMain.handle('wallpaper:import', async (event, payload = {}) => {
+  assertTrustedRenderer(event);
+  const source = String(payload.sourcePath || '');
+  if (!source || !path.isAbsolute(source)) throw new Error('请选择本地图片文件');
+  const stats = await fs.stat(source);
+  if (!stats.isFile()) throw new Error('请选择本地图片文件');
+  WallpaperStore.assertWallpaperSize(stats.size);
+  const bytes = await fs.readFile(source);
+  return wallpaperInfo(await WallpaperStore.saveWallpaper(wallpaperDirs(), bytes, wallpaperImageExt(bytes)));
+});
+
+ipcMain.handle('wallpaper:delete', async event => {
+  assertTrustedRenderer(event);
+  await WallpaperStore.deleteWallpapers(wallpaperDirs());
+  return null;
+});
+
 ipcMain.handle('media:downloadRemoteImage', async (event, payload = {}) => {
   assertTrustedRenderer(event);
   let url;
@@ -4237,6 +4277,20 @@ ipcMain.handle('secret:removeProviderApiKey', async (event, providerId, keyId) =
 ipcMain.handle('secret:clearProviderApiKey', async (event, providerId) => {
   assertTrustedRenderer(event);
   return await clearProviderApiKey(providerId);
+});
+
+const providerBalance = ProviderBalance.createBalanceService({
+  readKey: ({providerId, useGlobalKey, keyId}) => useGlobalKey ? readApiKeySecret() : readProviderApiKey(providerId, keyId)
+});
+ipcMain.handle('provider:balance', async (event, request = {}) => {
+  assertTrustedRenderer(event);
+  return providerBalance.query({
+    providerId: String(request.providerId || ''),
+    apiUrl: String(request.apiUrl || ''),
+    keyId: String(request.keyId || ''),
+    useGlobalKey: request.useGlobalKey === true,
+    force: request.force === true
+  });
 });
 
 ipcMain.handle('license:getStatus', async event => {
