@@ -141,4 +141,62 @@ assert.ok(center && Math.abs(center.x - 500) < 1 && Math.abs(center.y - 400) < 1
 minimap.setEnabled(false);
 assert.equal(panelClasses.has('hidden'), true, 'minimap can be hidden');
 
-console.log('Canvas drag performance tests passed.');
+let proxyDraws = 0;
+let proxyRectReads = 0;
+let clock = 1000;
+const frames = [];
+const timers = [];
+const proxyCanvas = {
+  style: {},
+  getContext: () => ({
+    setTransform() {}, clearRect() { proxyDraws++; },
+    beginPath() {}, roundRect() {}, rect() {}, fill() {}, stroke() {}, fillText() {}
+  })
+};
+const panCanvas = {
+  classList: {toggle() {}},
+  getBoundingClientRect() {
+    proxyRectReads++;
+    return {width: 1000, height: 800};
+  }
+};
+const panViewport = {style: {setProperty() {}}};
+const panHost = {
+  nodes: new Map([['one', {type: 'prompt', x: 10, y: 20, el: {classList: {contains: () => false}}}]]),
+  selectedNodes: new Set(), scale: 1, offsetX: 0, offsetY: 0, fastCanvasMode: true
+};
+const panContext = {
+  window: {devicePixelRatio: 1}, performance: {now: () => clock},
+  requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
+  cancelAnimationFrame: () => {},
+  setTimeout: fn => { timers.push(fn); return timers.length; },
+  clearTimeout: () => {}
+};
+vm.createContext(panContext);
+vm.runInContext(fs.readFileSync(path.join(root, 'src', 'canvas', 'layout.js'), 'utf8'), panContext);
+const layout = panContext.window.FutureAICanvasLayout.create({
+  host: panHost, $: id => ({canvas: panCanvas, canvasProxyLayer: proxyCanvas, viewport: panViewport})[id],
+  updateZoomLabel() {}, nodeDisplayTitle: () => 'Node'
+});
+const flushFrames = () => { while (frames.length) frames.shift()(); };
+layout.setCanvasProxyActive(true);
+flushFrames();
+assert.equal(proxyDraws, 1, 'proxy starts with one snapshot');
+for (let x = 1; x <= 40; x++) {
+  panHost.offsetX = x * 4;
+  layout.applyTransform(false, false);
+}
+assert.equal(proxyDraws, 1, 'short pan reuses the bitmap snapshot');
+assert.equal(proxyRectReads, 1, 'short pan does not force a layout read per frame');
+assert.match(proxyCanvas.style.transform, /translate3d\(160px, 0px, 0\)/);
+panHost.offsetX = 400;
+layout.applyTransform(false, false);
+assert.equal(timers.length, 1, 'long pan schedules one throttled refresh');
+clock += 120;
+timers.shift()();
+flushFrames();
+assert.equal(proxyDraws, 2, 'long pan refreshes after crossing the buffer');
+layout.setCanvasProxyActive(false);
+assert.equal(panHost.canvasProxySnapshot, null);
+
+console.log('Canvas drag and pan performance tests passed.');

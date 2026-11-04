@@ -5,7 +5,7 @@
   "main": "src/main.js",
   "private": true,
   "scripts": {
-    "pretest": "node scripts/test-restored-canvas-features.js && node scripts/test-image-request-policy.js && node scripts/test-canvas-gestures.js && node scripts/test-canvas-drag-performance.js && node scripts/test-short-import.js && node scripts/test-short-asset-pipeline.js && node scripts/test-image-regeneration-node.js && node scripts/test-window-controls-layout.js",
+    "pretest": "node scripts/test-restored-canvas-features.js && node scripts/test-image-request-policy.js && node scripts/test-canvas-gestures.js && node scripts/test-canvas-drag-performance.js && node scripts/test-dialog-runtime-restoration.js && node scripts/test-short-import.js && node scripts/test-short-asset-pipeline.js && node scripts/test-image-regeneration-node.js && node scripts/test-window-controls-layout.js",
     "build:tools": "npm ci --prefix build-tools --ignore-scripts --no-audit --no-fund",
     "build": "npm run build:tools && npm test && node scripts/build-release.js",
     "build:install": "npm run build:tools && npm test && node scripts/build-release.js --install",

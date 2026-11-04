@@ -84,7 +84,7 @@ const providerUi = read('src/providers/provider-ui.js');
 assert.match(providerUi, /imageCapabilityByKey/);
 assert.match(providerUi, /软件会继续尝试其他可用图片 Key/);
 assert.match(providerUi, /delete provider\.imageCapabilityByKey\[savedId\]/);
-assert.match(providerUi, /Key 池 · \$\{keys\.length\} 把，自动共同使用/);
+assert.match(providerUi, /\$\{keys\.length\} 把 Key 已保存 <span>自动分配<\/span>/);
 assert.doesNotMatch(providerUi, /data-provider-key-select/);
 assert.doesNotMatch(providerUi, /data-provider-model-key/);
 assert.doesNotMatch(providerUi, /模型 Key/);

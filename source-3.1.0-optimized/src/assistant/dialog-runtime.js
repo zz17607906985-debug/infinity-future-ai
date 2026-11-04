@@ -59,6 +59,18 @@
     const messageRunKind = deps.messageRunKind || AssistantAttachments?.messageRunKind;
     const referenceIntent = deps.referenceIntent || AssistantAttachments?.referenceIntent;
     const referenceInstructions = deps.referenceInstructions || AssistantAttachments?.referenceInstructions;
+    const createProviderApiError = deps.createProviderApiError;
+    const clearCurrentDialogConversation = deps.clearCurrentDialogConversation;
+    const downloadImage = deps.downloadImage;
+    const fileToDataUrl = deps.fileToDataUrl;
+    const connectSilently = deps.connectSilently;
+    const drawEdges = deps.drawEdges;
+    const agentProjectSummary = deps.agentProjectSummary;
+    const renderAgentConsole = deps.renderAgentConsole;
+    const codexApiConfig = deps.codexApiConfig;
+    const multimodalVideoUnderstand = deps.multimodalVideoUnderstand;
+    const multimodalImageUnderstand = deps.multimodalImageUnderstand;
+    const optimizeDialogImagePrompt = deps.optimizeDialogImagePrompt;
 
 function dialogEditTargetNode() {
   if (host.dialogEditActiveNodeId && host.nodes.has(host.dialogEditActiveNodeId)) return host.nodes.get(host.dialogEditActiveNodeId);
@@ -125,6 +137,9 @@ function dialogMessageRunKind(text, refUrls = []) {
 }
 
 function fallbackDialogRunPlan(userText = '', refUrls = []) {
+  if (isLocalFileTaskRequest(userText)) {
+    return {kind: 'codex', useLatestContext: false, reason: 'local file task'};
+  }
   if (isPromptWritingRequest(userText)) {
     return {
       kind: 'chat',
@@ -148,8 +163,15 @@ function isPromptWritingRequest(text = '') {
   return /提示词|prompt|咒语|文案|方案|脚本|大纲|帮我写|写一段|整理成|优化.*词|反推.*词|给我.*词|我自己生成|我自己去生成|不要生图|别生图|不用生图/i.test(s);
 }
 
+const LOCAL_PATH_PATTERN = /[A-Za-z]:[\\/]|(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+\/|文件夹|目录|路径|桌面/;
+const LOCAL_FILE_ACTION_PATTERN = /(?:创建|新建|建立|生成|写入|保存|删除|重命名|移动|复制)[^\n]{0,12}(?:文件|文档|文本|txt|md|json|csv|表格|文件夹|目录)/i;
+function isLocalFileTaskRequest(text = '') {
+  const s = String(text || '');
+  return LOCAL_PATH_PATTERN.test(s) && LOCAL_FILE_ACTION_PATTERN.test(s);
+}
 function isCodexTaskRequest(text = '') {
   const s = String(text || '').trim();
+  if (isLocalFileTaskRequest(s)) return true;
   return /改(?:代码|程序|项目)|修复(?:代码|程序|项目|bug)|调试|测试(?:项目|代码|功能)|检查(?:项目|代码|文件)|读取(?:项目|文件|目录)|(?:创建|编辑|删除|移动)(?:文件|目录)|安装(?:插件|技能|skill)|(?:插件|技能|skill).*(?:启用|关闭|配置)|终端|命令行|执行命令|运行脚本|git\b|npm\b|node\b/i.test(s);
 }
 
@@ -157,6 +179,9 @@ async function planDialogRunWithTextModel({apiUrl, apiKey, model, endpoint = '/c
   const s = String(userText || '').trim();
   if (/^(hi|hello|hey|你好|您好|嗨|哈喽|在吗|在不在)[。！!？?\s]*$/i.test(s)) {
     return {kind: 'chat', useLatestContext: false, reason: 'plain greeting'};
+  }
+  if (isLocalFileTaskRequest(s)) {
+    return {kind: 'codex', useLatestContext: false, reason: 'local file task'};
   }
   if (isPromptWritingRequest(s)) {
     return {kind: 'chat', useLatestContext: false, reason: 'prompt writing request'};
@@ -823,7 +848,7 @@ async function handleDialogEditUploads(files) {
       const isReadableText = /\.(md|mdx|txt|json|jsonl|ya?ml|toml|ini|csv|tsv|xml|html?|css|scss|less|jsx?|tsx?|mjs|cjs|py|java|c|h|cpp|hpp|cs|go|rs|php|rb|sh|ps1|bat|cmd|sql|vue|svelte|log)$/i.test(file.name || '') && file.size <= 2 * 1024 * 1024;
       const bytes = file.size <= 32 * 1024 * 1024 ? await file.arrayBuffer() : undefined;
       const persisted = await window.codexBridge?.saveAttachment?.(file, {
-        storageDir,
+        storageDir: host.storageDir,
         name: file.name || '附件',
         mime: file.type || '',
         bytes
@@ -866,7 +891,7 @@ function buildCodexAssistantPrompt(userText, attachments = []) {
   }).join('\n');
   return [
     '【工作目录】',
-    storageDir || '未选择',
+    host.storageDir || '未选择',
     '【项目上下文】',
     JSON.stringify({
       project: summary.projectName,
@@ -897,7 +922,7 @@ async function hydrateDialogTextAttachments(attachments = []) {
   for (const attachment of attachments) {
     if (attachment?.kind !== 'file' || attachment.textContent || !attachment.path) continue;
     try {
-      const result = await window.codexBridge?.readTextAttachment?.({storageDir, path: attachment.path});
+      const result = await window.codexBridge?.readTextAttachment?.({storageDir: host.storageDir, path: attachment.path});
       if (result?.text) {
         attachment.textContent = result.text;
         attachment.recognitionStatus = result.truncated ? '内容已读取（过长已截取）' : '内容已读取';
@@ -916,7 +941,7 @@ async function runDialogCodexAssistant(options = {}) {
     ? options.attachments.map(item => ({...item})).filter(item => item?.path || item?.url)
     : host.dialogEditAttachments.map(item => ({...item})).filter(item => item?.path || item?.url);
   if (!userText && !attachments.length) return toast('请先输入任务', 'warn');
-  if (!storageDir) return toast('请先选择本地存储目录，Codex 会在该目录内工作', 'warn');
+  if (!host.storageDir) return toast('请先选择本地存储目录，Codex 会在该目录内工作', 'warn');
   if (!options.alreadyRecorded) {
     if (host.dialogEditEditingIndex >= 0) applyDialogMessageEdit(userText || '请处理这些附件。', attachments);
     else pushDialogMessage('user', userText || '请处理这些附件。', attachments);
@@ -928,9 +953,9 @@ async function runDialogCodexAssistant(options = {}) {
   run.output = '';
   run.error = '';
   host.codexDialogRun = run;
-  codexExpanded = false;
+  host.codexExpanded = false;
   const prompt = buildCodexAssistantPrompt(userText || '请处理这些附件。', attachments);
-  codexPromptDraft = prompt;
+  host.codexPromptDraft = prompt;
   host.codexOutput = `任务：${userText || '处理附件'}\n\n`;
   host.codexStatus = '运行中';
   host.codexRunning = true;
@@ -939,7 +964,7 @@ async function runDialogCodexAssistant(options = {}) {
   renderAgentConsole();
   try {
     const apiConfig = await codexApiConfig();
-    const result = await window.codexBridge.run({prompt, storageDir, command: host.codexCommand, permission: host.codexPermission, ...apiConfig});
+    const result = await window.codexBridge.run({prompt, storageDir: host.storageDir, command: host.codexCommand, permission: host.codexPermission, ...apiConfig});
     host.codexSessionId = result?.sessionId || '';
   } catch (err) {
     host.codexRunning = false;
@@ -963,6 +988,10 @@ async function stopDialogCodexRun() {
 
 async function runDialogEditGeneration() {
   if (host.dialogEditRunning) return toast('当前任务仍在处理中，请先等待完成或停止任务', 'warn');
+  const directTask = String(host.dialogEditInput || '').trim();
+  if (isLocalFileTaskRequest(directTask) || isCodexTaskRequest(directTask)) {
+    return runDialogCodexAssistant();
+  }
   const profile = activeAssistantProfile();
   const imageProvider = globalProviderForKind('image');
   const chatProvider = globalProviderForKind('chat');
@@ -1050,7 +1079,7 @@ async function runDialogEditGeneration() {
       try {
         const sampledVideos = [];
         for (const attachment of videoAttachments.slice(0, 2)) {
-          const sampled = await window.codexBridge.videoFrames({storageDir, path: attachment.path, frameCount: videoAttachments.length > 1 ? 6 : 10});
+          const sampled = await window.codexBridge.videoFrames({storageDir: host.storageDir, path: attachment.path, frameCount: videoAttachments.length > 1 ? 6 : 10});
           sampledVideos.push({name: attachment.name, ...sampled});
         }
         assertDialogRunActive(run);
@@ -1202,6 +1231,7 @@ function setDialogEditStatus(text) {
       dialogMessageRunKind,
       fallbackDialogRunPlan,
       isPromptWritingRequest,
+      isLocalFileTaskRequest,
       isCodexTaskRequest,
       planDialogRunWithTextModel,
       parseFirstJsonObject,

@@ -678,16 +678,9 @@
       <div class="settings-pane" data-settings-pane="api">
       <section class="settings-section api-settings-modern">
         <h3><i class="fa-solid fa-plug"></i> API 设置</h3>
-        <div class="api-settings-intro"><strong>只需三步：选服务、填地址和 Key、点击自动配置</strong><span>配置成功后会自动读取可用模型；模型选择会在服务卡片里直接显示。</span></div>
-        <section class="api-default-details api-global-defaults-details api-global-defaults-visible">
-          <div class="api-global-section-head"><div><strong><i class="fa-solid fa-route"></i> 默认模型</strong><small>设置画布未指定服务时使用的供应商和模型</small></div></div>
+        <details class="api-default-details api-global-defaults-details api-global-defaults-visible">
+          <summary><span><i class="fa-solid fa-route"></i> 默认模型</span><small>画布未指定服务时使用</small><i class="fa-solid fa-chevron-down"></i></summary>
         <div class="api-global-defaults">
-          <div class="api-global-head">
-            <div>
-              <strong>默认模型</strong>
-              <span>没有单独指定服务的节点，会使用这里的供应商和模型。</span>
-            </div>
-          </div>
           <div class="api-global-row" data-global-model-kind="chat">
             <b>聊天</b>
             <label>供应商<select id="globalChatProvider" data-global-provider="chat"></select></label>
@@ -704,7 +697,7 @@
             <label>模型<input id="globalVideoModel" data-global-model="video" list="globalVideoModelList" placeholder="选择模型，或粘贴 model id"><datalist id="globalVideoModelList"></datalist></label>
           </div>
         </div>
-        </section>
+        </details>
         <details class="api-default-details">
           <summary><span>旧版兼容设置（通常不需要修改）</span><i class="fa-solid fa-chevron-down"></i></summary>
           <p class="api-legacy-note">这些字段用于兼容旧项目。新配置请在下面的供应商卡片中完成，保存后会自动同步。</p>
@@ -738,7 +731,6 @@
           <div class="api-providers-head">
             <div>
               <strong>已连接的服务</strong>
-              <span>通常只需要一个服务。填写地址和 Key 后点击“保存并自动配置”。</span>
             </div>
               <button id="addApiProvider" class="primary-btn" type="button"><i class="fa-solid fa-plus"></i> 添加服务</button>
           </div>

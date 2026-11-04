@@ -396,7 +396,7 @@ function applyTransform(updateVisibility = true, updateToolbar = true) {
   updateZoomLabel();
   if (updateToolbar) updateSelectionToolbar();
   if (updateVisibility) scheduleVisibilityUpdate();
-  if (host.canvasProxyActive) scheduleCanvasProxyDraw();
+  if (host.canvasProxyActive) updateCanvasProxyPosition();
 }
 function proxyNodeSize(node) {
   const width = node.type === 'image' || node.type === 'upload' ? 292 * nodeMediaAspectRatio(node) + 2
@@ -419,11 +419,29 @@ function setCanvasProxyActive(active) {
   if (host.canvasProxyActive) scheduleCanvasProxyDraw();
   else {
     if (host.canvasProxyFrame) cancelAnimationFrame(host.canvasProxyFrame);
+    if (host.canvasProxyRedrawTimer) clearTimeout(host.canvasProxyRedrawTimer);
     host.canvasProxyFrame = null;
+    host.canvasProxyRedrawTimer = null;
+    host.canvasProxySnapshot = null;
     const proxy = $('canvasProxyLayer');
-    const ctx = proxy?.getContext?.('2d');
-    if (ctx) ctx.clearRect(0, 0, proxy.width || 0, proxy.height || 0);
+    if (proxy) proxy.style.transform = '';
   }
+}
+function updateCanvasProxyPosition() {
+  const snapshot = host.canvasProxySnapshot;
+  const proxy = $('canvasProxyLayer');
+  if (!snapshot || !proxy) return;
+  const ratio = host.scale / snapshot.scale;
+  const dx = host.offsetX - ratio * snapshot.offsetX + snapshot.pad * (1 - ratio);
+  const dy = host.offsetY - ratio * snapshot.offsetY + snapshot.pad * (1 - ratio);
+  proxy.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${ratio})`;
+  if (Math.abs(dx) < snapshot.pad * .8 && Math.abs(dy) < snapshot.pad * .8 && ratio > .7 && ratio < 1.4) return;
+  if (host.canvasProxyRedrawTimer || host.canvasProxyFrame) return;
+  const delay = Math.max(0, 120 - (performance.now() - snapshot.drawnAt));
+  host.canvasProxyRedrawTimer = setTimeout(() => {
+    host.canvasProxyRedrawTimer = null;
+    scheduleCanvasProxyDraw();
+  }, delay);
 }
 function scheduleCanvasProxyDraw() {
   if (host.canvasProxyFrame) return;
@@ -438,28 +456,33 @@ function drawCanvasProxy() {
   const proxy = $('canvasProxyLayer');
   if (!canvas || !proxy) return;
   const rect = canvas.getBoundingClientRect();
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  const width = Math.max(1, Math.floor(rect.width * dpr));
-  const height = Math.max(1, Math.floor(rect.height * dpr));
+  const pad = 320;
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+  const width = Math.max(1, Math.floor((rect.width + pad * 2) * dpr));
+  const height = Math.max(1, Math.floor((rect.height + pad * 2) * dpr));
   if (proxy.width !== width || proxy.height !== height) {
     proxy.width = width;
     proxy.height = height;
-    proxy.style.width = rect.width + 'px';
-    proxy.style.height = rect.height + 'px';
+    proxy.style.width = rect.width + pad * 2 + 'px';
+    proxy.style.height = rect.height + pad * 2 + 'px';
   }
+  proxy.style.left = -pad + 'px';
+  proxy.style.top = -pad + 'px';
+  proxy.style.transformOrigin = '0 0';
+  proxy.style.transform = '';
   const ctx = proxy.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.clearRect(0, 0, rect.width + pad * 2, rect.height + pad * 2);
   ctx.lineWidth = 1;
   ctx.font = '12px system-ui, sans-serif';
   host.nodes.forEach(node => {
     if (node.el?.classList.contains('search-hidden')) return;
     const size = proxyNodeSize(node);
-    const x = node.x * host.scale + host.offsetX;
-    const y = node.y * host.scale + host.offsetY;
+    const x = node.x * host.scale + host.offsetX + pad;
+    const y = node.y * host.scale + host.offsetY + pad;
     const w = Math.max(44, size.width * host.scale);
     const h = Math.max(28, size.height * host.scale);
-    if (x > rect.width + 80 || y > rect.height + 80 || x + w < -80 || y + h < -80) return;
+    if (x > rect.width + pad * 2 || y > rect.height + pad * 2 || x + w < 0 || y + h < 0) return;
     const color = node.type === 'image' ? '#f5c842' : node.type === 'video' ? '#6ea8ff' : node.type === 'comfyui' ? '#4ade80' : '#dbe7ef';
     ctx.fillStyle = 'rgba(17, 23, 31, .78)';
     ctx.strokeStyle = color;
@@ -474,6 +497,8 @@ function drawCanvasProxy() {
       ctx.fillText(title, x + 10, y + 20);
     }
   });
+  host.canvasProxySnapshot = {scale: host.scale, offsetX: host.offsetX, offsetY: host.offsetY, pad, drawnAt: performance.now()};
+  updateCanvasProxyPosition();
 }
 function scheduleViewportInteractionEnd() {
   clearTimeout(host.viewportInteractionTimer);

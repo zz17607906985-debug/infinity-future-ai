@@ -466,7 +466,6 @@ function renderApiProviders() {
         </div>
       </aside>
       <section class="api-provider-editor" aria-label="当前 API 服务">
-        <div class="api-provider-editor-head"><span><i class="fa-solid fa-pen-to-square"></i> 当前服务</span><small>修改后会自动保存，密钥只保存在本机安全存储中</small></div>
         ${apiProviderCardHtml(selected, 0)}
       </section>
     </div>`;
@@ -645,17 +644,13 @@ function providerKeyScopeLabel(scope = 'all') {
   return scope === 'chat' ? '文本' : scope === 'image' ? '图片' : scope === 'video' ? '视频' : '全部';
 }
 function providerQuickKeyPoolHtml(provider) {
-  if (provider.useGlobalKey) return '<div class="provider-quick-key-pool"><span><i class="fa-solid fa-key"></i> 当前复用全局 Key</span></div>';
+  if (provider.useGlobalKey) return '<div class="api-provider-key-summary"><i class="fa-solid fa-key"></i> 当前复用全局 Key</div>';
   const keys = provider.keyPool || [];
-  if (!keys.length) return '<div class="provider-quick-key-pool empty"><span><i class="fa-solid fa-key"></i> 尚未添加 Key</span></div>';
-  const automatic = true;
-  return `<div class="api-provider-wide provider-quick-key-pool ${automatic ? 'active' : 'manual'}">
-    <div class="provider-quick-key-pool-head">
-      <span><i class="fa-solid fa-layer-group"></i> Key 池 · ${keys.length} 把，自动共同使用</span>
-      <em>自动分配</em>
-    </div>
+  if (!keys.length) return '';
+  return `<details class="api-provider-wide api-provider-key-pool">
+    <summary><i class="fa-solid fa-layer-group"></i> ${keys.length} 把 Key 已保存 <span>自动分配</span></summary>
     <div class="provider-quick-key-items">${keys.map(item => `<span class="${esc(item.health || 'unknown')}"><b>${esc(item.label || 'Key')}</b><small>${esc(providerKeyScopeLabel(item.scope))} · ${esc(item.masked || '已安全保存')}</small></span>`).join('')}</div>
-  </div>`;
+  </details>`;
 }
 function providerKeyHealthHtml(provider) {
   const keys = provider.keyPool || [];
@@ -852,8 +847,6 @@ function syncProviderCapabilityEditor(card, provider, kind) {
   return true;
 }
 function apiProviderCardHtml(provider, index = 0) {
-  const meta = providerTypeMeta(provider.type);
-  const capabilities = (meta.capabilities || []).map(item => `<span>${esc(item)}</span>`).join('');
   const healthClass = provider.lastTest?.status === 'ok' ? 'ok' : provider.lastTest?.status === 'warn' ? 'warn' : provider.lastTest?.status === 'fail' ? 'fail' : '';
   const healthText = provider.lastTest?.message || '未测试';
   const activeKey = (provider.keyPool || []).find(item => item.id === provider.activeKeyId) || provider.keyPool?.[0] || null;
@@ -873,7 +866,7 @@ function apiProviderCardHtml(provider, index = 0) {
             <span>${esc(provider.apiUrl || '还没有填写服务地址')}</span>
             <small data-provider-protocol-status>${esc(providerProtocolStatusText(provider))} · ${provider.apiKeySaved || provider.useGlobalKey ? 'Key 已配置' : '等待配置 Key'}</small>
           </div>
-          <div class="api-provider-key-state ${provider.apiKeySaved ? 'saved' : 'empty'}"><i class="fa-solid fa-${provider.apiKeySaved ? 'shield-check' : 'circle-info'}"></i> ${provider.apiKeySaved ? 'Key 已安全保存，输入框不会回显明文' : '尚未保存 Key'}</div>
+          <div class="api-provider-key-state ${provider.apiKeySaved ? 'saved' : 'empty'}"><i class="fa-solid fa-${provider.apiKeySaved ? 'shield-check' : 'circle-info'}"></i> ${provider.apiKeySaved ? 'Key 已安全保存' : '尚未保存 Key'}</div>
         </div>
         <div class="api-provider-head-actions">
           <em class="provider-health ${healthClass}">${esc(healthText)}</em>
@@ -881,17 +874,16 @@ function apiProviderCardHtml(provider, index = 0) {
         </div>
       </header>
       <div class="api-provider-body api-provider-flow">
-        <div class="provider-capabilities">${capabilities}</div>
         <section class="api-provider-step api-provider-step-connect">
-          <div class="api-provider-step-head"><span class="api-provider-step-number">1</span><div><strong>连接服务</strong><small>填入接口地址和 Key</small></div></div>
+          <div class="api-provider-step-head"><div><strong>连接服务</strong></div></div>
           <div class="api-provider-grid api-provider-connect-grid">
             <label class="api-provider-wide">API 地址<input data-provider-field="apiUrl" value="${esc(provider.apiUrl)}" placeholder="https://api.example.com/v1"></label>
-            <label class="api-provider-wide api-provider-key-input">API Key<input data-provider-key-input type="password" value="" placeholder="${provider.apiKeySaved ? '粘贴新 Key，自动加入当前服务' : '粘贴 API Key'}"><small>新 Key 会自动追加到当前服务的 Key 池，并参与聊天、生图和视频请求。</small></label>
+            <label class="api-provider-wide api-provider-key-input">API Key<input data-provider-key-input type="password" value="" placeholder="${provider.apiKeySaved ? '粘贴新 Key，加入当前服务' : '粘贴 API Key'}"></label>
             ${providerQuickKeyPoolHtml(provider)}
           </div>
         </section>
         <section class="api-provider-step api-provider-step-model">
-          <div class="api-provider-step-head"><span class="api-provider-step-number">2</span><div><strong>读取模型</strong><small>Key 保存后按需读取模型并选择可用能力</small></div></div>
+          <div class="api-provider-step-head"><div><strong>模型</strong></div></div>
           <div class="api-provider-model-choice">
             <label><span>聊天模型</span><select data-provider-field="chatModel">${providerModelSelectOptionsHtml(provider, 'chat')}</select></label>
             <label><span>图片模型</span><select data-provider-field="imageModel">${providerModelSelectOptionsHtml(provider, 'image')}</select></label>
@@ -901,8 +893,10 @@ function apiProviderCardHtml(provider, index = 0) {
         <section class="api-provider-flow-actions">
           <button class="primary-btn" data-provider-auto-configure type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> 保存并自动配置</button>
           <button class="ghost-btn" data-provider-test-image type="button"><i class="fa-regular fa-image"></i> 测试生图</button>
-          <button class="ghost-btn" data-provider-import-models type="button"><i class="fa-solid fa-cloud-arrow-down"></i> 重新读取模型</button>
-          <button class="ghost-btn" data-provider-detect-models type="button"><i class="fa-solid fa-list-check"></i> 检测模型列表</button>
+          <details class="api-provider-secondary-actions"><summary><i class="fa-solid fa-ellipsis"></i> 更多操作</summary>
+            <button class="ghost-btn" data-provider-import-models type="button"><i class="fa-solid fa-cloud-arrow-down"></i> 重新读取模型</button>
+            <button class="ghost-btn" data-provider-detect-models type="button"><i class="fa-solid fa-list-check"></i> 检测模型列表</button>
+          </details>
         </section>
         ${providerAvailabilityHtml(provider)}
         ${imageCapabilityNote}
