@@ -684,6 +684,7 @@
         nodeDisplayTitle,
         nodeSize,
         hydrateNode,
+        hydrateCanvasPreviews,
         selectSingleNode,
         clearSelection,
         releaseDrags,
@@ -3876,6 +3877,7 @@
   function applyCanvasFilters(...args) { const result = canvasRuntime()?.applyCanvasFilters?.(...args); canvasMinimap?.schedule(); return result; }
   function focusCanvasSearchResult(...args) { return canvasRuntime()?.focusCanvasSearchResult?.(...args); }
   function hydrateNode(...args) { return canvasRuntime()?.hydrateNode?.(...args); }
+  function hydrateCanvasPreviews(...args) { return canvasRuntime()?.hydrateCanvasPreviews?.(...args); }
   function deleteNode(...args) { return canvasRuntime()?.deleteNode?.(...args); }
   function duplicateNode(...args) { return canvasRuntime()?.duplicateNode?.(...args); }
   async function renameNode(...args) { return canvasRuntime()?.renameNode?.(...args); }

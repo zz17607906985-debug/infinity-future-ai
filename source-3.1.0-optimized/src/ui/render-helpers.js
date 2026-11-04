@@ -79,7 +79,7 @@
     const key = esc(item.key || String(index));
     const media = isVideo('', url)
       ? `<video src="${url}"></video>`
-      : `<img src="${url}" alt="${esc(title)}">`;
+      : `<img ${url.startsWith('file:') ? `data-canvas-preview-src="${esc(url)}"` : `src="${url}"`} alt="${esc(title)}">`;
     return `<div class="ref-item" data-ref-item data-ref-key="${key}"><button type="button" class="ref-thumb" data-open-ref data-ref-index="${index}" data-ref-key="${key}" title="${esc(title)}：双击查看完整参考，可拖动调整顺序">${media}<span>${esc(title)}</span></button>${roleOptions ? `<select class="ref-role-select" data-reference-role data-ref-key="${key}" title="设置这份参考素材的用途" aria-label="${esc(title)}用途">${roleOptions}</select>` : ''}${timeControl}</div>`;
   }
 

@@ -5,6 +5,7 @@ const fsSync = require('fs');
 const path = require('path');
 const { fileURLToPath, pathToFileURL } = require('url');
 const crypto = require('crypto');
+const {createCanvasPreviewCache} = require('./runtime/canvas-preview-cache');
 const dns = require('dns').promises;
 const net = require('net');
 const APP_PACKAGE_METADATA = require('../package.json');
@@ -3432,6 +3433,16 @@ function runFfmpeg(args, onProgress) {
   });
 }
 
+const canvasPreviewCache = createCanvasPreviewCache({
+  cacheDir: path.join(LOCAL_RUNTIME_PATHS.userData, 'canvas-previews'),
+  resolveSource: safeExistingMediaPathReal,
+  convert: (source, output) => runFfmpeg([
+    '-y', '-threads', '1', '-i', source, '-frames:v', '1', '-threads', '1',
+    '-vf', 'scale=768:768:force_original_aspect_ratio=decrease:flags=fast_bilinear,format=rgba',
+    '-c:v', 'png', '-compression_level', '3', output
+  ])
+});
+
 function mediaProcessExtension(payload) {
   if (payload.operation.startsWith('extract-') || payload.operation.startsWith('image-')) return payload.format === 'jpg' || payload.format === 'webp' ? payload.format : 'png';
   if (payload.operation === 'audio-extract' || payload.operation === 'audio-volume' || payload.operation === 'audio-mix' || payload.operation === 'audio-align') return 'm4a';
@@ -4209,6 +4220,11 @@ ipcMain.handle('storage:readMedia', async (event, target) => {
   const file = safeExistingMediaPath(target);
   const data = await fs.readFile(file);
   return `data:${mimeFromPath(file)};base64,${data.toString('base64')}`;
+});
+
+ipcMain.handle('storage:canvasPreview', async (event, target) => {
+  assertTrustedRenderer(event);
+  return await canvasPreviewCache.previewUrl(target);
 });
 
 ipcMain.handle('media:index', async (event, payload) => {

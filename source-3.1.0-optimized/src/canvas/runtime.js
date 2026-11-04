@@ -1275,13 +1275,14 @@ function renderImageVariantPreview(preview, urls, activeUrl, node) {
     button.dataset.selectVariant = String(index);
     button.dataset.zoom = '';
     const img = document.createElement('img');
-    img.src = url;
+    loadCanvasPreview(img, url);
     img.alt = `第 ${index + 1} 张`;
     if (url === activeUrl) observePreviewImage(node, img, url);
     const badge = document.createElement('span');
     badge.textContent = `${index + 1}/${urls.length}`;
     button.append(img, badge);
     preview.appendChild(button);
+    hydrateCanvasPreviews(img);
   });
 }
 
@@ -1299,14 +1300,39 @@ function observePreviewImage(node, img, url) {
   if (img.complete) update();
 }
 
+function loadCanvasPreview(img, url) {
+  if (!img) return;
+  img.loading = 'lazy';
+  if (!url.startsWith('file:') || !window.localStorageBridge?.canvasPreview) {
+    img.src = url;
+    return;
+  }
+  img.dataset.originalUrl = url;
+  hydrateCanvasPreviews(img);
+}
+function hydrateCanvasPreviews(root) {
+  const images = root.matches?.('img[data-original-url]') ? [root] : root.querySelectorAll?.('img[data-original-url]') || [];
+  images.forEach(img => {
+    if (!img.isConnected || img.closest('.node-offscreen') || img.closest('.canvas.is-panning,.canvas.is-zooming') || img.dataset.previewLoading === '1') return;
+    const url = img.dataset.originalUrl;
+    img.dataset.previewLoading = '1';
+    window.localStorageBridge.canvasPreview(url).then(previewUrl => {
+      if (img.dataset.originalUrl === url) img.src = previewUrl || url;
+    }).catch(() => {
+      if (img.dataset.originalUrl === url) img.src = url;
+    });
+  });
+}
 function replacePreviewMedia(preview, tagName, value, {controls = false, zoom = false, label = ''} = {}) {
   const url = safeMediaUrl(value);
   if (!preview || !url || !['img', 'video'].includes(tagName)) return null;
   const media = document.createElement(tagName);
-  media.src = url;
+  if (tagName === 'img') loadCanvasPreview(media, url);
+  else media.src = url;
   if (tagName === 'video') media.controls = controls;
   if (zoom) media.dataset.zoom = '';
   preview.replaceChildren(media);
+  if (tagName === 'img') hydrateCanvasPreviews(media);
   if (label) {
     const title = document.createElement('strong');
     title.textContent = String(label);
@@ -1603,6 +1629,7 @@ function renderReferenceBox(refbox, refs, kind = 'image') {
   }
   refbox.classList.add('has-refs');
   refbox.innerHTML = list.map((item, i) => referencePreviewHtml(Object.assign({}, item, {targetDuration: refbox.closest('.node') ? host.nodes.get(refbox.closest('.node').dataset.node)?.data?.duration : 5}), ReferenceRoles?.roleLabel(item.role) || (i === 0 ? '主体图' : '参考图'), i)).join('');
+  refbox.querySelectorAll('img[data-canvas-preview-src]').forEach(img => loadCanvasPreview(img, img.dataset.canvasPreviewSrc));
   if (host.refSorting?.node?.id === refbox.closest('.node')?.dataset.node) {
     refbox.classList.add('sorting');
     refbox.querySelector(`[data-ref-key="${CSS.escape(host.refSorting.key)}"]`)?.classList.add('sorting');
@@ -2052,6 +2079,7 @@ function scheduleDrawEdges() {
       applyCanvasFilters,
       focusCanvasSearchResult,
       hydrateNode,
+      hydrateCanvasPreviews,
       imagePreviewUrls,
       applyNodeMediaLayout,
       deleteNode,

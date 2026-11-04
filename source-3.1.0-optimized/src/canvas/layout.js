@@ -23,6 +23,7 @@
     const nodeDisplayTitle = deps.nodeDisplayTitle;
     const nodeSize = deps.nodeSize;
     const hydrateNode = deps.hydrateNode;
+    const hydrateCanvasPreviews = deps.hydrateCanvasPreviews || (() => {});
     const selectSingleNode = deps.selectSingleNode;
     const clearSelection = deps.clearSelection;
     const releaseDrags = deps.releaseDrags;
@@ -528,9 +529,16 @@ function scheduleViewportInteractionEnd() {
     setCanvasProxyActive(false);
     updateSelectionToolbar();
     scheduleVisibilityUpdate();
+    hydrateVisibleCanvasPreviews();
     scheduleMinimap();
     queueSave();
   }, 140);
+}
+function hydrateVisibleCanvasPreviews() {
+  const view = currentWorldBounds(900);
+  host.nodes.forEach(node => {
+    if (node.mounted && nodeIntersectsView(node, view)) hydrateCanvasPreviews(node.el);
+  });
 }
 function currentWorldBounds(pad = 0) {
   const r = $('canvas').getBoundingClientRect();
@@ -571,6 +579,7 @@ function scheduleVisibilityUpdate() {
       else mountNode(node);
       if (wasMounted !== !!node.mounted) changed = true;
       node.el.classList.toggle('node-offscreen', node.mounted && !nodeIntersectsView(node, detailView));
+      if (node.mounted && !node.el.classList.contains('node-offscreen')) hydrateCanvasPreviews(node.el);
     });
     if (changed) scheduleDrawEdges();
   });
