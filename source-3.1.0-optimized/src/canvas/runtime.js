@@ -1008,6 +1008,24 @@ function beginNodeDrag(node, e, pointerId = null) {
     .filter(Boolean)
     .map(item => ({node: item, startX: item.x, startY: item.y}));
   host.dragging = {node, items, x: e.clientX, y: e.clientY, pointerId};
+  const moved = new Set(items.map(item => item.node.id));
+  host.dragging.sizeById = new Map();
+  host.groups?.forEach(group => {
+    if (!group.nodeIds.some(id => moved.has(id))) return;
+    group.nodeIds.forEach(id => {
+      const member = host.nodes.get(id);
+      if (member && !host.dragging.sizeById.has(id)) host.dragging.sizeById.set(id, nodeSize(member));
+    });
+  });
+  const visiblePaths = new Map([...($('edges')?.querySelectorAll('[data-edge-index]') || [])]
+    .map(path => [Number(path.dataset.edgeIndex), path]));
+  host.dragging.edgePaths = host.edges.flatMap((edge, index) => {
+    const path = visiblePaths.get(index);
+    if (!path || (!moved.has(edge.from) && !moved.has(edge.to))) return [];
+    const from = portCenter(edge.from, edge.fromPort, 'out');
+    const to = portCenter(edge.to, edge.toPort, 'in');
+    return from && to ? [{path, from, to, moveFrom: moved.has(edge.from), moveTo: moved.has(edge.to)}] : [];
+  });
   items.forEach(item => item.node.el?.classList.add('drag-active'));
   document.body.style.cursor = 'grabbing';
   try {
@@ -1954,42 +1972,47 @@ function updatePortConnectionStates() {
   });
 }
 function drawEdges() {
+  if (host.dragging) return updateDragEdges();
   const svg = $('edges');
-  if (!host.dragging) updatePortConnectionStates();
+  updatePortConnectionStates();
   const view = currentWorldBounds(180);
-  const fast = !!host.dragging;
-  const viewportRect = fast ? null : $('viewport').getBoundingClientRect();
+  const viewportRect = $('viewport').getBoundingClientRect();
   const paths = document.createDocumentFragment();
-  host.edges.forEach(edge => {
+  host.edges.forEach((edge, index) => {
     const fromNode = host.nodes.get(edge.from);
     const toNode = host.nodes.get(edge.to);
     if (!fromNode || !toNode) return;
     if (!fromNode.mounted || !toNode.mounted) return;
     if (fromNode.el?.classList.contains('search-hidden') || toNode.el?.classList.contains('search-hidden')) return;
-    const a = portCenter(edge.from, edge.fromPort, 'out', viewportRect, fast);
-    const b = portCenter(edge.to, edge.toPort, 'in', viewportRect, fast);
+    const a = portCenter(edge.from, edge.fromPort, 'out', viewportRect);
+    const b = portCenter(edge.to, edge.toPort, 'in', viewportRect);
     if (!a || !b) return;
     if (!segmentIntersectsView(a, b, view)) return;
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', edgePathD(a, b));
     path.setAttribute('class', edgeClassName(edge.toPort));
+    path.dataset.edgeIndex = String(index);
     paths.appendChild(path);
   });
   svg.replaceChildren(paths);
 }
+function updateDragEdges() {
+  const drag = host.dragging;
+  if (!drag?.edgePaths?.length) return;
+  const dx = drag.items[0].node.x - drag.items[0].startX;
+  const dy = drag.items[0].node.y - drag.items[0].startY;
+  drag.edgePaths.forEach(({path, from, to, moveFrom, moveTo}) => {
+    const a = moveFrom ? {x: from.x + dx, y: from.y + dy} : from;
+    const b = moveTo ? {x: to.x + dx, y: to.y + dy} : to;
+    path.setAttribute('d', edgePathD(a, b));
+  });
+}
 function scheduleDrawEdges() {
-  if (host.edgeFrame) return;
   if (host.dragging) {
-    const now = performance.now();
-    const wait = Math.max(0, 52 - (now - host.edgeDrawLastAt));
-    if (host.edgeThrottleTimer) return;
-    host.edgeThrottleTimer = setTimeout(() => {
-      host.edgeThrottleTimer = null;
-      host.edgeDrawLastAt = performance.now();
-      drawEdges();
-    }, wait);
+    updateDragEdges();
     return;
   }
+  if (host.edgeFrame) return;
   host.edgeFrame = requestAnimationFrame(() => {
     host.edgeFrame = null;
     host.edgeDrawLastAt = performance.now();

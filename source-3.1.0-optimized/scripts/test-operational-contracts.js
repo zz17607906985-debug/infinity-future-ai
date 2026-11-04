@@ -118,7 +118,8 @@ assert.match(providerUi, /providerApiKey\(provider, capability = 'all'(?:, reque
 assert.match(providerUi, /item\.scope === 'all' \|\| item\.scope === capability/);
 assert.doesNotMatch(providerUi, /data-provider-key-scope/);
 assert.doesNotMatch(providerUi, /data-provider-model-key/);
-assert.match(providerUi, /聊天、图片和视频模型自动共用当前服务的 Key 池/);
+assert.match(providerUi, /providerQuickKeyPoolHtml\(provider\)/);
+assert.doesNotMatch(providerUi, /class="api-provider-more-options"/);
 assert.match(providerUi, /当前并发/);
 assert.match(providerUi, /providerKeyRunningCounts = new Map\(\)/);
 assert.match(providerUi, /selectKeyIdForRequest\?\.\(provider, capability, requestedModel, now, runningCounts\)/);
@@ -134,7 +135,7 @@ assert.match(queue, /data-queue-empty-canvas/);
 assert.match(read('src/history/history.js'), /data-history-empty-action="image"/);
 assert.match(mediaWorkbench, /data-asset-empty-action="import"/);
 assert.match(providerUi, /keyRotationMode/);
-assert.match(providerUi, /测试一把 Key/);
+assert.match(providerUi, /async function testSelectedProviderKey\(/);
 assert.match(providerUi, /updateProviderApiKeyMetadata/);
 assert.match(canvasEvents, /function bindCanvas\(\)/);
 assert.match(canvasEvents, /state\.scale/);

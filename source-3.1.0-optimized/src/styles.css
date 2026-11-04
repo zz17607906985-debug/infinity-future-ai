@@ -2553,7 +2553,7 @@ a,
   bottom:auto!important;
   height:32px!important;
   min-width:0!important;
-  width:238px!important;
+  width:266px!important;
   padding:0 8px!important;
   gap:7px!important;
   border-radius:7px!important;
@@ -2613,7 +2613,7 @@ a,
 }
 @media(max-width:780px){
   .bottom-canvas-tools{left:10px;bottom:10px;}
-  .bottom-canvas-tools .zoom-control{width:214px!important;}
+  .bottom-canvas-tools .zoom-control{width:242px!important;}
   .bottom-canvas-tools #zoomSlider{width:60px!important;}
   .canvas-tidy-btn,.canvas-fast-btn{min-width:58px;padding:0 8px;}
 }
@@ -2654,8 +2654,9 @@ body.fast-canvas-mode .canvas.proxy-active #edges{
 .canvas.is-zooming .node,
 .canvas.is-dragging-node .node{
   transition:none!important;
-  box-shadow:0 10px 26px rgba(0,0,0,.24),0 0 0 1px rgba(223,232,238,.1)!important;
+  box-shadow:none!important;
 }
+.canvas.is-dragging-node .node.drag-active{will-change:transform}
 .canvas.is-panning .edge,
 .canvas.is-zooming .edge,
 .canvas.is-dragging-node .edge,
@@ -2680,41 +2681,33 @@ body.fast-canvas-mode .canvas.is-zooming::after{
   opacity:.08!important;
 }
 body.fast-canvas-mode .canvas.is-panning .node-content,
-body.fast-canvas-mode .canvas.is-zooming .node-content,
-body.fast-canvas-mode .canvas.is-dragging-node .node-content{
+body.fast-canvas-mode .canvas.is-zooming .node-content{
   content-visibility:hidden!important;
   contain-intrinsic-size:320px 220px;
   opacity:1!important;
 }
 body.fast-canvas-mode .canvas.is-panning .node-tags,
 body.fast-canvas-mode .canvas.is-zooming .node-tags,
-body.fast-canvas-mode .canvas.is-dragging-node .node-tags,
 body.fast-canvas-mode .canvas.is-panning .node-quick-toolbar,
-body.fast-canvas-mode .canvas.is-zooming .node-quick-toolbar,
-body.fast-canvas-mode .canvas.is-dragging-node .node-quick-toolbar{
+body.fast-canvas-mode .canvas.is-zooming .node-quick-toolbar{
   display:none!important;
 }
 body.fast-canvas-mode .canvas.is-panning .image-preview img,
 body.fast-canvas-mode .canvas.is-zooming .image-preview img,
-body.fast-canvas-mode .canvas.is-dragging-node .image-preview img,
 body.fast-canvas-mode .canvas.is-panning .image-preview video,
 body.fast-canvas-mode .canvas.is-zooming .image-preview video,
-body.fast-canvas-mode .canvas.is-dragging-node .image-preview video,
 body.fast-canvas-mode .canvas.is-panning .waiting-animation-video,
-body.fast-canvas-mode .canvas.is-zooming .waiting-animation-video,
-body.fast-canvas-mode .canvas.is-dragging-node .waiting-animation-video{
+body.fast-canvas-mode .canvas.is-zooming .waiting-animation-video{
   visibility:hidden!important;
 }
 body.fast-canvas-mode .canvas.is-panning .image-preview,
-body.fast-canvas-mode .canvas.is-zooming .image-preview,
-body.fast-canvas-mode .canvas.is-dragging-node .image-preview{
+body.fast-canvas-mode .canvas.is-zooming .image-preview{
   content-visibility:hidden!important;
   contain-intrinsic-size:520px 260px;
   background:rgba(15,20,26,.72)!important;
 }
 body.fast-canvas-mode .canvas.is-panning .node-actions,
-body.fast-canvas-mode .canvas.is-zooming .node-actions,
-body.fast-canvas-mode .canvas.is-dragging-node .node-actions{
+body.fast-canvas-mode .canvas.is-zooming .node-actions{
   opacity:0!important;
   pointer-events:none!important;
 }
@@ -8214,6 +8207,18 @@ html body[class] .bottom-canvas-tools .canvas-search-btn{width:32px;min-width:32
 .canvas-search-popover .icon-btn{flex:none;width:28px;height:28px;min-width:28px;border-radius:6px}
 .canvas-search-popover .mini-pill{flex:none;height:28px;min-height:28px;padding:0 8px;font-size:12px}
 .bottom-canvas-tools .canvas-search-btn.active{color:var(--theme-accent)}
+.bottom-canvas-tools .canvas-minimap{
+  position:absolute;left:0;bottom:calc(100% + 8px);z-index:125;
+  width:200px;height:128px;overflow:hidden;
+  border:1px solid var(--theme-surface-line,rgba(223,232,238,.14));border-radius:8px;
+  background:rgba(8,11,14,.9);box-shadow:0 12px 28px rgba(0,0,0,.3);
+}
+.bottom-canvas-tools .canvas-minimap.hidden{display:none}
+.bottom-canvas-tools .canvas-minimap canvas{display:block;width:100%;height:100%;cursor:pointer;touch-action:none}
+html body[class] .bottom-canvas-tools #toggleMinimapBtn[aria-pressed="true"]{
+  color:var(--theme-accent)!important;
+  border-color:color-mix(in srgb,var(--theme-accent) 60%,transparent)!important;
+}
 html body.nexus-layout[class] .manju-head{
   display:grid!important;
   grid-template-columns:minmax(240px,1fr) minmax(0,auto)!important;

@@ -265,7 +265,11 @@
         </div>
         <canvas id="canvasProxyLayer" class="canvas-proxy-layer" aria-hidden="true"></canvas>
         <div class="bottom-canvas-tools">
+          <section id="canvasMinimap" class="canvas-minimap hidden" aria-label="画布缩略地图" aria-hidden="true">
+            <canvas id="canvasMinimapCanvas" title="点击或拖动跳转画布位置"></canvas>
+          </section>
           <div class="zoom-control">
+            <button id="toggleMinimapBtn" class="zoom-icon" type="button" title="缩略地图" aria-label="缩略地图" aria-pressed="false" aria-controls="canvasMinimap"><i class="fa-regular fa-map"></i></button>
             <button id="zoomFitBtn" class="zoom-icon" type="button" title="适配画布"><i class="fa-regular fa-window-maximize"></i></button>
             <button id="zoomMinusBtn" class="zoom-icon" type="button" title="缩小">-</button>
             <input id="zoomSlider" type="range" min="25" max="160" value="100" aria-label="画布缩放">
@@ -1174,6 +1178,7 @@
   <script defer src="./canvas/camera.js"></script>
   <script defer src="./canvas/runtime.js"></script>
   <script defer src="./canvas/layout.js"></script>
+  <script defer src="./canvas/minimap.js"></script>
   <script defer src="./canvas/events.js"></script>
   <script defer src="./workflows/workflow-library.js"></script>
   <script defer src="./ui/render-helpers.js"></script>

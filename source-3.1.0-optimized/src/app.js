@@ -136,6 +136,8 @@
   let canvasTypeFilter = 'all';
   let canvasFavoritesOnly = false;
   let fastCanvasMode = localStorage.getItem('futureai.fastCanvasMode') !== 'off';
+  let canvasMinimapEnabled = localStorage.getItem('futureai.canvasMinimap') !== 'off';
+  let canvasMinimap = null;
   // Default off; OS reduce-motion still soft-hints. Explicit setting wins.
   let reduceMotionMode = localStorage.getItem('futureai.reduceMotion') === 'on';
   let assetLibrarySearch = '';
@@ -1480,6 +1482,7 @@
     $('shortWorkbench')?.remove();
     $('musicWorkbench')?.remove();
     applyFastCanvasMode();
+    installCanvasMinimap();
     applyReduceMotionMode();
     canvasWallpaper = window.FutureAICanvasWallpaper?.createCanvasWallpaper({
       document, bridge: window.wallpaperBridge, onChange: saveSettings, toast
@@ -1884,6 +1887,7 @@
     }, true);
     $('focusCanvasSearchResult')?.addEventListener('click', () => focusCanvasSearchResult());
     $('zoomFitBtn')?.addEventListener('click', () => fitView(true));
+    $('toggleMinimapBtn')?.addEventListener('click', toggleCanvasMinimap);
     $('zoomMinusBtn')?.addEventListener('click', () => zoomCanvas(.87));
     $('zoomPlusBtn')?.addEventListener('click', () => zoomCanvas(1.15));
     $('zoomSlider')?.addEventListener('input', e => setCanvasZoom(Number(e.target.value) / 100));
@@ -2673,6 +2677,37 @@
     card.dataset.movedPanels = '1';
   }
 
+  function installCanvasMinimap() {
+    canvasMinimap = window.FutureAICanvasMinimap?.create({
+      panel: $('canvasMinimap'),
+      canvas: $('canvasMinimapCanvas'),
+      observeTarget: $('viewport'),
+      nodeSize: proxyNodeSize,
+      isSelected: id => selectedNodes.has(id),
+      getView: () => ({nodes, scale, offsetX, offsetY, canvasRect: $('canvas').getBoundingClientRect()}),
+      setViewCenter: (worldX, worldY) => {
+        const rect = $('canvas').getBoundingClientRect();
+        offsetX = rect.width / 2 - worldX * scale;
+        offsetY = rect.height / 2 - worldY * scale;
+        scheduleTransform();
+        scheduleDrawEdges();
+        scheduleViewportInteractionEnd();
+      }
+    }) || null;
+    applyCanvasMinimap();
+  }
+  function applyCanvasMinimap() {
+    canvasMinimap?.setEnabled(canvasMinimapEnabled);
+    const btn = $('toggleMinimapBtn');
+    if (!btn) return;
+    btn.setAttribute('aria-pressed', canvasMinimapEnabled ? 'true' : 'false');
+    btn.title = canvasMinimapEnabled ? '隐藏缩略地图' : '显示缩略地图';
+  }
+  function toggleCanvasMinimap() {
+    canvasMinimapEnabled = !canvasMinimapEnabled;
+    localStorage.setItem('futureai.canvasMinimap', canvasMinimapEnabled ? 'on' : 'off');
+    applyCanvasMinimap();
+  }
   function applyFastCanvasMode() {
     document.body.classList.toggle('fast-canvas-mode', fastCanvasMode);
     const btn = $('fastCanvasBtn');
@@ -2706,6 +2741,7 @@
     if (commit && (panning || dragging)) saveProject();
     panning = null;
     dragging = null;
+    if (wasDragging) canvasMinimap?.schedule();
     mascotDrag = null;
     $('canvas')?.classList.remove('is-panning', 'is-zooming', 'is-dragging-node');
     setCanvasProxyActive(false);
@@ -3809,7 +3845,7 @@
   function clearCanvasSearch(...args) { return canvasRuntime()?.clearCanvasSearch?.(...args); }
   function canvasSearchText(...args) { return canvasRuntime()?.canvasSearchText?.(...args); }
   function nodeMatchesCanvasFilters(...args) { return canvasRuntime()?.nodeMatchesCanvasFilters?.(...args); }
-  function applyCanvasFilters(...args) { return canvasRuntime()?.applyCanvasFilters?.(...args); }
+  function applyCanvasFilters(...args) { const result = canvasRuntime()?.applyCanvasFilters?.(...args); canvasMinimap?.schedule(); return result; }
   function focusCanvasSearchResult(...args) { return canvasRuntime()?.focusCanvasSearchResult?.(...args); }
   function hydrateNode(...args) { return canvasRuntime()?.hydrateNode?.(...args); }
   function deleteNode(...args) { return canvasRuntime()?.deleteNode?.(...args); }
@@ -6154,9 +6190,9 @@
   function fitView(...args) { return canvasLayout()?.fitView?.(...args); }
   function fitNodeIntoView(...args) { return canvasLayout()?.fitNodeIntoView?.(...args); }
   function resetView(...args) { return canvasLayout()?.resetView?.(...args); }
-  function moveNode(...args) { return canvasLayout()?.moveNode?.(...args); }
-  function scheduleTransform(...args) { return canvasLayout()?.scheduleTransform?.(...args); }
-  function applyTransform(...args) { return canvasLayout()?.applyTransform?.(...args); }
+  function moveNode(...args) { const result = canvasLayout()?.moveNode?.(...args); canvasMinimap?.schedule(); return result; }
+  function scheduleTransform(...args) { canvasMinimap?.schedule(); return canvasLayout()?.scheduleTransform?.(...args); }
+  function applyTransform(...args) { const result = canvasLayout()?.applyTransform?.(...args); canvasMinimap?.schedule(); return result; }
   function proxyNodeSize(...args) { return canvasLayout()?.proxyNodeSize?.(...args); }
   function setCanvasProxyActive(...args) { return canvasLayout()?.setCanvasProxyActive?.(...args); }
   function scheduleCanvasProxyDraw(...args) { return canvasLayout()?.scheduleCanvasProxyDraw?.(...args); }

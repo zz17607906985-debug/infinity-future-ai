@@ -535,8 +535,8 @@ function groupBounds(group) {
   const pad = 28;
   const left = Math.min(...items.map(n => n.x)) - pad;
   const top = Math.min(...items.map(n => n.y)) - pad;
-  const right = Math.max(...items.map(n => n.x + nodeSize(n).width)) + pad;
-  const bottom = Math.max(...items.map(n => n.y + nodeSize(n).height)) + pad;
+  const right = Math.max(...items.map(n => n.x + (host.dragging?.sizeById?.get(n.id) || nodeSize(n)).width)) + pad;
+  const bottom = Math.max(...items.map(n => n.y + (host.dragging?.sizeById?.get(n.id) || nodeSize(n)).height)) + pad;
   return {left, top, width: right - left, height: bottom - top};
 }
 function addGroup(nodeIds, id = null, name = '', save = true, metadata = {}) {

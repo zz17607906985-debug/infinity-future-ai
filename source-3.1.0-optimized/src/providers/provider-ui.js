@@ -216,7 +216,7 @@ async function detectProviderProtocol(provider, apiUrl, apiKey = '') {
     // Address signals remain useful when a gateway does not expose /models.
   }
   if (hintedType) return result;
-  result.message = '未能确认接口协议，将按 OpenAI 兼容方式尝试；如请求失败请到高级接口设置手动选择。';
+  result.message = '未能确认接口协议，将按 OpenAI 兼容方式尝试；请检查服务地址和模型是否正确。';
   return result;
 }
 function applyDetectedProviderProtocol(provider, detected = {}) {
@@ -852,7 +852,6 @@ function syncProviderCapabilityEditor(card, provider, kind) {
   return true;
 }
 function apiProviderCardHtml(provider, index = 0) {
-  const typeOptions = providerTypeOptionsHtml(provider.type, providerProtocolMode(provider));
   const meta = providerTypeMeta(provider.type);
   const capabilities = (meta.capabilities || []).map(item => `<span>${esc(item)}</span>`).join('');
   const healthClass = provider.lastTest?.status === 'ok' ? 'ok' : provider.lastTest?.status === 'warn' ? 'warn' : provider.lastTest?.status === 'fail' ? 'fail' : '';
@@ -864,9 +863,6 @@ function apiProviderCardHtml(provider, index = 0) {
     : imageCapability?.status === 'available'
       ? '<p class="provider-note api-provider-success">图片能力已验证，可以开始生图。</p>'
       : '';
-  const customHelp = provider.type === 'custom-sync' || provider.type === 'dashscope-wanx' || provider.type === 'volcengine-ark'
-    ? '<p class="provider-note">当前接口使用自定义或异步协议。普通中转站一般请选择“API 中转站 / OpenAI 兼容”。</p>'
-    : '';
   return `
     <article class="api-provider-card api-provider-row active-provider" data-provider-id="${esc(provider.id)}">
       <header class="api-provider-card-head">
@@ -910,42 +906,6 @@ function apiProviderCardHtml(provider, index = 0) {
         </section>
         ${providerAvailabilityHtml(provider)}
         ${imageCapabilityNote}
-        <details class="api-provider-more-options">
-          <summary><span><i class="fa-solid fa-sliders"></i> 高级接口设置</span><small>仅在接口不兼容时修改</small></summary>
-          <div class="api-provider-advanced-body">
-            <div class="api-provider-actions api-provider-actions-top">
-              <button class="ghost-btn" data-provider-save-key type="button"><i class="fa-solid fa-key"></i> 保存密钥</button>
-              <button class="ghost-btn" data-provider-test type="button"><i class="fa-solid fa-vial"></i> 测试文本</button>
-              <button class="ghost-btn" data-provider-test-key type="button"><i class="fa-solid fa-key"></i> 测试一把 Key</button>
-              <button class="ghost-btn" data-provider-conformance type="button"><i class="fa-solid fa-clipboard-check"></i> 接口验收</button>
-              <button class="ghost-btn" data-provider-remove-key type="button"><i class="fa-regular fa-trash-can"></i> 删除最近使用 Key</button>
-            </div>
-            <div class="api-provider-section"><b>服务选项</b><div class="api-provider-grid">
-              <label>服务名称<input data-provider-field="name" value="${esc(provider.name)}"></label>
-              <label>接口协议<select data-provider-field="type">${typeOptions}</select><small>普通 API 中转站保持默认即可。</small></label>
-              <label>密钥策略<select data-provider-field="useGlobalKey"><option value="true" ${provider.useGlobalKey ? 'selected' : ''}>复用全局 Key</option><option value="false" ${!provider.useGlobalKey ? 'selected' : ''}>使用独立 Key</option></select></label>
-              <label>队列并发<input data-provider-field="concurrency" type="number" min="1" max="4" step="1" value="${esc(provider.concurrency || 1)}"></label>
-              <div class="api-provider-wide" data-provider-key-health>${providerKeyHealthHtml(provider)}</div>
-            </div></div>
-            <div class="api-provider-section"><b>聊天接口</b><div class="api-provider-grid"><p class="provider-note api-provider-wide">聊天、图片和视频模型自动共用当前服务的 Key 池。</p><label>聊天路径<input data-provider-field="chatEndpoint" value="${esc(provider.chatEndpoint)}" placeholder="/chat/completions"></label></div></div>
-            <div class="api-provider-section"><b>图片接口</b><div class="api-provider-grid">
-              <label>生图路径<input data-provider-field="imageEndpoint" value="${esc(provider.imageEndpoint)}" placeholder="/images/generations"></label>
-              <label>尺寸字段<select data-provider-field="imageRequestFormat"><option value="auto" ${provider.imageRequestFormat === 'auto' ? 'selected' : ''}>自动</option><option value="size" ${provider.imageRequestFormat === 'size' ? 'selected' : ''}>size</option><option value="width-height" ${provider.imageRequestFormat === 'width-height' ? 'selected' : ''}>width + height</option><option value="aspect-ratio" ${provider.imageRequestFormat === 'aspect-ratio' ? 'selected' : ''}>aspect_ratio</option><option value="size-and-aspect" ${provider.imageRequestFormat === 'size-and-aspect' ? 'selected' : ''}>size + aspect_ratio</option></select></label>
-              <label>图生图路径<input data-provider-field="editEndpoint" value="${esc(provider.editEndpoint)}" placeholder="/images/edits"></label>
-              <label>返回字段<input data-provider-field="responsePath" value="${esc(provider.responsePath)}" placeholder="data.0.url / output.images.0.url"></label>
-              <label>任务协议<select data-provider-field="imageTaskMode"><option value="sync" ${provider.imageTaskMode === 'sync' ? 'selected' : ''}>同步返回</option><option value="async" ${provider.imageTaskMode === 'async' ? 'selected' : ''}>异步轮询</option></select></label>
-              <label class="api-provider-wide">已知原生尺寸<input data-provider-field="imageAcceptedSizes" value="${esc((provider.imageAcceptedSizes || []).join(', '))}" placeholder="1024x1024, 1536x1024, 1024x1536"></label>
-              <label>异步查询路径<input data-provider-field="imageQueryEndpoint" value="${esc(provider.imageQueryEndpoint)}" placeholder="/tasks/{id}"></label>
-              <label>任务 ID 字段<input data-provider-field="imageTaskIdPath" value="${esc(provider.imageTaskIdPath)}" placeholder="task_id / data.id"></label>
-              <label>任务状态字段<input data-provider-field="imageTaskStatusPath" value="${esc(provider.imageTaskStatusPath)}" placeholder="status / data.state"></label>
-              <label>异步结果字段<input data-provider-field="imageTaskResultPath" value="${esc(provider.imageTaskResultPath)}" placeholder="data.0.url / output.url"></label>
-              <label>轮询间隔（毫秒）<input data-provider-field="imagePollIntervalMs" type="number" min="1000" max="30000" step="500" value="${esc(provider.imagePollIntervalMs)}"></label>
-              <label>最多轮询次数<input data-provider-field="imageMaxPollAttempts" type="number" min="1" max="300" step="1" value="${esc(provider.imageMaxPollAttempts)}"></label>
-            </div>${providerCapabilityEditorHtml(provider, 'image')}</div>
-            <div class="api-provider-section"><b>视频接口</b><div class="api-provider-grid"><label>视频路径<input data-provider-field="videoEndpoint" value="${esc(provider.videoEndpoint)}" placeholder="/videos"></label><label>查询路径<input data-provider-field="videoQueryEndpoint" value="${esc(provider.videoQueryEndpoint)}" placeholder="/video/query"></label><label class="api-provider-wide">视频返回字段<input data-provider-field="videoResponsePath" value="${esc(provider.videoResponsePath)}" placeholder="data.0.url / output.video_url"></label></div>${providerCapabilityEditorHtml(provider, 'video')}</div>
-            ${customHelp}
-          </div>
-        </details>
       </div>
     </article>`;
 }
