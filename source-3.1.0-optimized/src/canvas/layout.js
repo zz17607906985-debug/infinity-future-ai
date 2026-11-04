@@ -31,6 +31,8 @@
     const renderSelection = deps.renderSelection || (() => {});
     const queueSave = deps.queueSave || (() => {});
     const runWorkflowGroup = deps.runWorkflowGroup || (() => {});
+    const scheduleMinimap = deps.scheduleMinimap || (() => {});
+    let committedScale = NaN;
     // setCanvasProxyActive / scheduleViewportInteractionEnd / scheduleTransform / applyTransform are defined in this module body
 
 async function autoLayout(show) {
@@ -392,8 +394,12 @@ function scheduleTransform(updateVisibility = true, updateToolbar = true) {
 function commitViewportTransform() {
   const viewport = $('viewport');
   viewport.style.transform = `translate(${host.offsetX}px, ${host.offsetY}px) scale(${host.scale})`;
-  viewport.style.setProperty('--port-inverse-scale', String(1 / Math.max(host.scale, .2)));
-  viewport.style.setProperty('--canvas-zoom-inverse', String(1 / Math.max(host.scale, .2)));
+  if (host.scale !== committedScale) {
+    const inverse = String(1 / Math.max(host.scale, .2));
+    viewport.style.setProperty('--port-inverse-scale', inverse);
+    viewport.style.setProperty('--canvas-zoom-inverse', inverse);
+    committedScale = host.scale;
+  }
   updateZoomLabel();
 }
 function applyTransform(updateVisibility = true, updateToolbar = true) {
@@ -522,6 +528,7 @@ function scheduleViewportInteractionEnd() {
     setCanvasProxyActive(false);
     updateSelectionToolbar();
     scheduleVisibilityUpdate();
+    scheduleMinimap();
     queueSave();
   }, 140);
 }

@@ -2627,6 +2627,10 @@ a,
   will-change:auto!important;
   backface-visibility:hidden;
 }
+.canvas.is-panning .viewport,
+.canvas.is-zooming .viewport{
+  will-change:transform!important;
+}
 .canvas-proxy-layer{
   position:absolute;
   z-index:4;
@@ -2646,6 +2650,7 @@ body.fast-canvas-mode .canvas.proxy-active #edges{
 .node{
   transition:box-shadow .16s ease,outline-color .16s ease!important;
   contain:layout style paint;
+  will-change:auto;
 }
 .node-virtual-hidden{
   display:none!important;

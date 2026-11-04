@@ -695,7 +695,8 @@
         updateSelectionToolbar,
         renderSelection,
         queueSave,
-        runWorkflowGroup
+        runWorkflowGroup,
+        scheduleMinimap: () => canvasMinimap?.schedule()
       },
       canvasEvents: {
         $,
@@ -2745,6 +2746,7 @@
 
   function releaseDrags(commit) {
     const wasDragging = !!dragging;
+    const wasPanning = !!panning;
     if (dragging && dragPoint) flushNodeDrag();
     dragging?.items?.forEach(item => item.node.el?.classList.remove('drag-active'));
     if (dragFrame) {
@@ -2757,16 +2759,23 @@
     }
     dragPoint = null;
     if (commit && (panning || dragging)) saveProject();
+    if (wasPanning && transformFrame) {
+      cancelAnimationFrame(transformFrame);
+      transformFrame = null;
+      applyTransform(false, false);
+    }
     panning = null;
     dragging = null;
-    if (wasDragging) canvasMinimap?.schedule();
+    if (wasDragging || wasPanning) canvasMinimap?.schedule();
     mascotDrag = null;
     $('canvas')?.classList.remove('is-panning', 'is-zooming', 'is-dragging-node');
     setCanvasProxyActive(false);
     if (wasDragging) drawEdges();
     document.body.style.cursor = '';
-    updateSelectionToolbar();
-    scheduleVisibilityUpdate();
+    if (wasDragging || wasPanning) {
+      updateSelectionToolbar();
+      scheduleVisibilityUpdate();
+    }
   }
 
   function updateNodeDrag(clientX, clientY) {
@@ -3117,6 +3126,7 @@
     requestAnimationFrame(drawEdges);
   }
   function clearSelection() {
+    if (!selectedNodes.size) return;
     selectedNodes.clear();
     renderSelection();
   }
@@ -6210,7 +6220,7 @@
   function resetView(...args) { return canvasLayout()?.resetView?.(...args); }
   function moveNode(...args) { const result = canvasLayout()?.moveNode?.(...args); canvasMinimap?.schedule(); return result; }
   function scheduleTransform(...args) {
-    if (!canvasProxyActive) canvasMinimap?.schedule();
+    if (!panning && !canvasProxyActive && !viewportInteractionTimer) canvasMinimap?.schedule();
     return canvasLayout()?.scheduleTransform?.(...args);
   }
   function applyTransform(...args) { const result = canvasLayout()?.applyTransform?.(...args); canvasMinimap?.schedule(); return result; }

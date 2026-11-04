@@ -220,4 +220,18 @@ assert.equal(viewportVariableWrites, 2, 'release commits the zoom variables exac
 assert.match(panViewport.style.currentTransform, /translate\(450px, 0px\) scale\(1\.2\)/);
 assert.equal(panHost.canvasProxySnapshot, null);
 
+const normalDraws = proxyDraws;
+for (let x = 0; x < 40; x++) {
+  panHost.offsetX += 4;
+  layout.applyTransform(false, false);
+}
+assert.equal(viewportTransformWrites, 41, 'normal pan moves the full viewport');
+assert.equal(viewportVariableWrites, 2, 'normal pan does not recalculate inherited zoom variables');
+assert.equal(proxyDraws, normalDraws, 'normal pan never replaces nodes with the proxy');
+panHost.scale = 1.3;
+layout.applyTransform(false, false);
+assert.equal(viewportVariableWrites, 4, 'normal zoom updates inherited variables once');
+assert.match(styles, /\.canvas\.is-panning \.viewport,[\s\S]*?will-change:transform!important/);
+assert.match(styles, /\.node\{[\s\S]*?will-change:auto;/);
+
 console.log('Canvas drag and pan performance tests passed.');
