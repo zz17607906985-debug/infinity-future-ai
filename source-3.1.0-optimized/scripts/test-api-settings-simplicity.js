@@ -13,7 +13,7 @@ const advanced = providerUi.indexOf('class="api-provider-more-options"');
 assert.ok(connect >= 0 && model > connect, 'connection and model steps must follow the setup flow');
 assert.equal(advanced, -1, 'advanced interface settings must not appear in the provider card');
 assert.doesNotMatch(providerUi, /data-provider-field="concurrency"/, 'concurrency control must not be exposed');
-assert.match(providerUi, /concurrency: Math\.max\(1, Math\.min\(4, Number\(provider\.concurrency \|\| 1\)\)\)/, 'saved concurrency remains intact');
+assert.match(providerUi, /concurrency: Math\.max\(1, Math\.min\(4, Number\(provider\.concurrency \|\| 1\)\)\)/, 'legacy saved values remain readable for compatibility');
 assert.match(providerUi, /data-provider-save-key/);
 assert.match(providerUi, /data-provider-import-models/);
 assert.match(providerUi, /providerQuickKeyPoolHtml\(provider\)/);

@@ -656,9 +656,8 @@ function providerKeyHealthHtml(provider) {
   const keys = provider.keyPool || [];
   const keyRunningTotal = keys.reduce((sum, item) => sum + providerKeyRunningCount(provider, item.id), 0);
   const running = Math.max(Number(host.providerRunningCounts?.get?.(provider.id) || 0), keyRunningTotal);
-  const limit = Math.max(1, Math.min(4, Number(provider.concurrency || 1)));
-  if (!keys.length) return `<div class="provider-key-health-empty">尚未保存独立 Key · 并发 ${running}/${limit}</div>`;
-  return `<div class="provider-key-health-summary">当前并发 ${running}/${limit}</div><div class="provider-key-health-list">${keys.map(item => {
+  if (!keys.length) return `<div class="provider-key-health-empty">尚未保存独立 Key · 当前请求 ${running}</div>`;
+  return `<div class="provider-key-health-summary">当前请求 ${running} · 软件不设并发上限</div><div class="provider-key-health-list">${keys.map(item => {
     const lastError = item.lastError ? ` · 最近错误：${item.lastError}` : '';
     const keyRunning = providerKeyRunningCount(provider, item.id);
     return `<div class="provider-key-health-row ${esc(item.health || 'unknown')}" title="${esc(lastError.replace(/^ · /, '') || '暂无最近错误')}"><span><strong>${esc(item.label || 'Key')}</strong><small>${esc(item.masked || '已安全保存')} · ${esc(item.scope || 'all')} · 并发 ${keyRunning}${lastError}</small></span><em>${esc(providerKeyStatusText(item))}</em></div>`;

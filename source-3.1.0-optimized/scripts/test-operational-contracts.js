@@ -120,7 +120,7 @@ assert.doesNotMatch(providerUi, /data-provider-key-scope/);
 assert.doesNotMatch(providerUi, /data-provider-model-key/);
 assert.match(providerUi, /providerQuickKeyPoolHtml\(provider\)/);
 assert.doesNotMatch(providerUi, /class="api-provider-more-options"/);
-assert.match(providerUi, /当前并发/);
+assert.match(providerUi, /当前请求 \$\{running\} · 软件不设并发上限/);
 assert.match(providerUi, /providerKeyRunningCounts = new Map\(\)/);
 assert.match(providerUi, /selectKeyIdForRequest\?\.\(provider, capability, requestedModel, now, runningCounts\)/);
 assert.match(providerUi, /recordProviderKeyLease\(provider, capability, selected\.id\)/);

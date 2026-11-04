@@ -50,15 +50,39 @@ assert.equal(KeyPool.selectKeyIdForRequest({
 }, 'image', '', 1000, {}), 'legacy-image');
 
 const generationQueue = read('src/generation/generation-queue.js');
+vm.runInNewContext(generationQueue, sandbox, {filename: 'generation-queue.js'});
+const queue = sandbox.window.FutureAIGenerationQueue.create({host: {
+  apiProviders: [{id: 'provider', concurrency: 1, keyPool: [{id: 'only-key'}]}],
+  providerConcurrency: new Map([['provider', 1]])
+}});
+assert.equal(queue.providerConcurrencyLimit('provider'), Infinity, 'legacy provider limits cannot throttle the queue');
+const pendingQueue = Array.from({length: 10}, (_, index) => ({
+  id: `q-${index}`, nodeId: `image-${index}`, providerId: 'provider', status: 'queued', attempts: 0
+}));
+const queueHost = {
+  generationQueue: pendingQueue, providerRunningCounts: new Map(),
+  queuePaused: true
+};
+const unlimitedQueue = sandbox.window.FutureAIGenerationQueue.create({
+  host: queueHost, $: () => null, getNode: () => ({data: {prompt: 'test'}}),
+  getInputPrompt: () => '', ensureInputImageRefs: () => new Promise(() => {}),
+  saveProject: () => {}
+});
+unlimitedQueue.pumpGenerationQueue();
+assert.ok(pendingQueue.every(item => item.status === 'queued'), 'pause still holds submitted tasks');
+queueHost.queuePaused = false;
+unlimitedQueue.pumpGenerationQueue();
+assert.ok(pendingQueue.every(item => item.status === 'running'), 'all ten tasks start without a provider cap');
+assert.equal(queueHost.providerRunningCounts.get('provider'), 10);
 assert.match(generationQueue, /const requestApiKey = provider\.type === 'custom-sync' \? '' : await providerApiKey\(provider, 'image', imageModel\)/);
 assert.match(generationQueue, /apiKey: requestApiKey/);
 assert.match(generationQueue, /reportProviderKeyResult\?\.\(provider, 'image', requestError, requestApiKey\)/);
-assert.match(generationQueue, /const automaticKeyConcurrency = Math\.max\(1, availableImageKeyCount\)/);
+assert.match(generationQueue, /Array\.from\(\{length: batchSubmitted \? 0 : count\}/, 'every requested image can start without a software worker cap');
 assert.match(generationQueue, /Promise\.allSettled\(workers\)/);
 assert.match(generationQueue, /正在自动尝试下一把 Key/);
-assert.match(generationQueue, /provider\.imageCapabilityByKey\?\.\[item\.id\]\?\.status !== 'blocked'/);
-assert.match(generationQueue, /function providerConcurrencyLimit\(providerId\)[\s\S]*?availableImageKeys/);
-assert.match(generationQueue, /Math\.max\(configured, availableImageKeys\)/);
+assert.match(read('src/providers/key-pool.js'), /!isKeyCapabilityBlocked\(provider, item\.id, capability\)/);
+assert.doesNotMatch(generationQueue, /running >= providerConcurrencyLimit/, 'queued nodes must not wait for a provider slot');
+assert.doesNotMatch(generationQueue, /provider\.concurrency \|\| 1/, 'saved legacy concurrency must not cap requests');
 assert.match(generationQueue, /errors\[requestIndex\] = err/);
 assert.match(generationQueue, /const completedUrls = urls\.filter\(Boolean\)/);
 assert.match(generationQueue, /已保留 \$\{completedUrls\.length\} 张成功结果/);

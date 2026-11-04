@@ -108,18 +108,8 @@ function assertImageModelCapability(node, provider, model, references) {
   return {profile, result};
 }
 
-function providerConcurrencyLimit(providerId) {
-  const provider = host.apiProviders.find(item => item.id === providerId);
-  const configured = Number(provider?.concurrency || host.providerConcurrency.get(providerId) || 1);
-  const availableImageKeys = provider?.useGlobalKey
-    ? 1
-    : (provider?.keyPool || []).filter(item => (
-      (item.scope === 'all' || item.scope === 'image')
-      && item.health !== 'blocked'
-      && Number(item.cooldownUntil || 0) <= Date.now()
-      && provider.imageCapabilityByKey?.[item.id]?.status !== 'blocked'
-    )).length;
-  return Math.max(1, Math.min(4, Math.max(configured, availableImageKeys)));
+function providerConcurrencyLimit() {
+  return Number.POSITIVE_INFINITY;
 }
 function enqueueImageGeneration(id, options = {}) {
   const node = getNode(id);
@@ -174,8 +164,6 @@ function pumpGenerationQueue() {
   let started = false;
   for (const item of host.generationQueue) {
     if (item.status !== 'queued') continue;
-    const running = host.providerRunningCounts.get(item.providerId) || 0;
-    if (running >= providerConcurrencyLimit(item.providerId)) continue;
     startQueueItem(item);
     started = true;
   }
@@ -615,17 +603,7 @@ async function runImageNow(id, visiting = new Set()) {
       }
     }
     let nextRequestIndex = 0;
-    const availableImageKeyCount = provider.useGlobalKey
-      ? 1
-      : (provider.keyPool || []).filter(item => (
-        (item.scope === 'all' || item.scope === 'image')
-        && item.health !== 'blocked'
-        && Number(item.cooldownUntil || 0) <= Date.now()
-        && provider.imageCapabilityByKey?.[item.id]?.status !== 'blocked'
-      )).length;
-    const automaticKeyConcurrency = Math.max(1, availableImageKeyCount);
-    const requestConcurrency = Math.max(1, Math.min(count, Math.max(Number(provider.concurrency || 1), automaticKeyConcurrency)));
-    const workers = Array.from({length: batchSubmitted ? 0 : requestConcurrency}, async () => {
+    const workers = Array.from({length: batchSubmitted ? 0 : count}, async () => {
       while (nextRequestIndex < count) {
         const requestIndex = nextRequestIndex++;
         try {
