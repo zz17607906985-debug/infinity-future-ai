@@ -690,17 +690,25 @@ function bindNode(node) {
     portClick(node, port);
   });
   el.addEventListener('pointerdown', e => {
+    if (host.spacePanning) return;
     const refThumb = e.target.closest('.ref-thumb');
     if (refThumb) return startReferenceSort(e, node, refThumb);
     const port = e.target.closest('.port');
     if (port) return startPortDrag(e, node, port);
     if (isNodeInteractiveTarget(e.target) && !isNodeDragSurface(node, e.target)) return;
     if (e.button !== 0) return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      if (host.selectedNodes.has(node.id)) host.selectedNodes.delete(node.id);
+      else host.selectedNodes.add(node.id);
+      renderSelection();
+      e.preventDefault();
+      return;
+    }
     beginNodeDrag(node, e, e.pointerId);
     e.preventDefault();
   });
   el.addEventListener('mousedown', e => {
-    if (host.dragging || e.button !== 0) return;
+    if (host.dragging || host.spacePanning || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey) return;
     if (e.target.closest('.ref-thumb,.port')) return;
     if (isNodeInteractiveTarget(e.target) && !isNodeDragSurface(node, e.target)) return;
     beginNodeDrag(node, e, null);
@@ -781,6 +789,8 @@ function bindNode(node) {
   el.addEventListener('click', e => {
     const port = e.target.closest('.port');
     if (port) return portClick(node, port);
+    if (host.spacePanning) return;
+    if ((e.shiftKey || e.ctrlKey || e.metaKey) && (!isNodeInteractiveTarget(e.target) || isNodeDragSurface(node, e.target))) return;
     closeNodeContextMenu();
     const quick = e.target.closest('[data-quick]');
     if (quick) return runNodeContextAction(node, quick.dataset.quick);

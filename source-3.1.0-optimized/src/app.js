@@ -128,6 +128,7 @@
   let mascotDrag = null;
   let mascotWasDragged = false;
   let linkMode = false;
+  let spacePanning = false;
   let nodeTypeMenuCloser = null;
   let nodeContextMenuCloser = null;
   let selectedProjectTemplate = 'default';
@@ -533,6 +534,7 @@
           get dragging() { return dragging; },
           set dragging(v) { dragging = v; },
           get selectedNodes() { return selectedNodes; },
+          get spacePanning() { return spacePanning; },
           get selectedPort() { return selectedPort; },
           set selectedPort(v) { selectedPort = v; },
           get suppressPortClickUntil() { return suppressPortClickUntil; },
@@ -694,6 +696,8 @@
         $,
         state: {
           get activeWorkspace() { return activeWorkspace; },
+          get spacePanning() { return spacePanning; },
+          set spacePanning(v) { spacePanning = v; },
           get scale() { return scale; },
           set scale(v) { scale = v; },
           get offsetX() { return offsetX; },
@@ -2758,6 +2762,11 @@
   }
   function handleGlobalKeydown(e) {
     if (trapVisibleDialogFocus(e)) return;
+    if (activeWorkspace === 'canvas' && !$('appShell')?.classList.contains('hidden') && !isEditableTarget(e.target) && !e.target.closest?.('[role="dialog"],.command-palette') && $('modal')?.classList.contains('hidden') && e.key === 'Delete' && selectedNodes.size) {
+      e.preventDefault();
+      deleteSelectedNodes();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       openCommandPalette();
@@ -3041,6 +3050,7 @@
     [...selectedNodes].forEach(id => deleteNode(id, false));
     selectedNodes.clear();
     drawEdges();
+    renderSelection();
     saveProject();
     toast('已删除选中节点', 'success');
   }

@@ -7999,6 +7999,10 @@ html body.nexus-layout .workspace-menu button{min-height:36px;padding:8px 10px;b
 html body.nexus-layout .workspace-menu button:hover,html body.nexus-layout .workspace-menu button:focus-visible{background:#294454}
 
 /* A fixed canvas footprint keeps portrait, landscape and reference media aligned. */
+#canvas.is-space-pan,
+#canvas.is-space-pan .node{cursor:grab!important}
+#canvas.is-space-pan.is-panning,
+#canvas.is-space-pan.is-panning .node{cursor:grabbing!important}
 html body .image-node,
 html body .upload-node{
   width:520px!important;
