@@ -31,6 +31,9 @@ assert.match(preload, /getProviderBalance: request => ipcRenderer\.invoke\('prov
 const providerUi = read('src/providers/provider-ui.js');
 assert.match(providerUi, /provider\.useGlobalKey \? \$\('apiKey'\)\?\.value\.trim\(\)/);
 assert.doesNotMatch(providerUi, /FutureAIApiDefaults/);
+assert.match(providerUi, /data-provider-detect-models/);
+assert.match(providerUi, /function providerAvailabilityHtml\(provider\)/);
+assert.match(providerUi, /async function detectAvailableModelsForCard\(card\)/);
 assert.match(runtime, /data-background-toggle/);
 assert.match(runtime, /node\.data\.backgroundMode === 'transparent' \? 'opaque' : 'transparent'/);
 assert.match(styles, /\.image-node\.transparent-preview \.image-preview/);

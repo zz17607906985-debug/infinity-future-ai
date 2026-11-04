@@ -599,6 +599,19 @@ function providerKeyStatusText(item = {}) {
   if (item.health === 'ok') return '正常';
   return item.failureCount ? `失败 ${item.failureCount} 次` : '未检测';
 }
+function providerAvailabilityHtml(provider) {
+  const available = provider.availableModels;
+  if (!available?.checkedAt) return '';
+  const groups = ['chat', 'image', 'video'];
+  const labels = {chat: '聊天', image: '图片', video: '视频'};
+  const rows = groups.map(kind => {
+    const models = Array.isArray(available[kind]) ? available[kind] : [];
+    return `<div class="provider-availability-row"><strong>${labels[kind]} ${models.length}</strong><span>${models.length
+      ? models.slice(0, 16).map(model => `<em title="${esc(model)}">${esc(model)}</em>`).join('')
+      : '未识别到模型'}</span></div>`;
+  }).join('');
+  return `<section class="provider-availability"><header><strong>接口模型列表</strong><small>检测于 ${esc(new Date(available.checkedAt).toLocaleString('zh-CN'))} · 列出不代表已开通生成权限</small></header>${rows}</section>`;
+}
 function providerKeyUnavailableMessage(provider, capability = 'all') {
   if (!provider) return '当前 API 配置不存在，请重新打开设置。';
   if (provider.useGlobalKey) return '当前配置使用全局 Key，但全局 Key 为空。请填写全局 API Key。';
@@ -893,7 +906,9 @@ function apiProviderCardHtml(provider, index = 0) {
           <button class="primary-btn" data-provider-auto-configure type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> 保存并自动配置</button>
           <button class="ghost-btn" data-provider-test-image type="button"><i class="fa-regular fa-image"></i> 测试生图</button>
           <button class="ghost-btn" data-provider-import-models type="button"><i class="fa-solid fa-cloud-arrow-down"></i> 重新读取模型</button>
+          <button class="ghost-btn" data-provider-detect-models type="button"><i class="fa-solid fa-list-check"></i> 检测模型列表</button>
         </section>
+        ${providerAvailabilityHtml(provider)}
         ${imageCapabilityNote}
         <details class="api-provider-more-options">
           <summary><span><i class="fa-solid fa-sliders"></i> 高级接口设置</span><small>仅在接口不兼容时修改</small></summary>
@@ -1129,6 +1144,13 @@ function handleApiProviderClick(e) {
     return;
   }
   const actionCard = e.target.closest('[data-provider-id]');
+  const detectModels = e.target.closest('[data-provider-detect-models]');
+  if (detectModels) {
+    detectModels.disabled = true;
+    return detectAvailableModelsForCard(actionCard).finally(() => {
+      if (detectModels.isConnected) detectModels.disabled = false;
+    });
+  }
   const findUsage = e.target.closest('[data-provider-find-model-usage]');
   const migrateModel = e.target.closest('[data-provider-migrate-model]');
   if (findUsage || migrateModel) {
@@ -1226,6 +1248,35 @@ function handleApiProviderClick(e) {
   renderApiProviders();
   refreshNodeProviderSelects();
   saveProject();
+}
+async function detectAvailableModelsForCard(card) {
+  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
+  if (!provider) return;
+  syncApiProviderCardFields(card, provider);
+  await saveTypedProviderKeyIfNeeded(card);
+  const apiKey = await providerApiKey(provider);
+  if (!provider.apiUrl) return toast('请先填写 API 地址', 'warn');
+  if (!apiKey) return toast('请先保存当前服务的 Key', 'warn');
+  try {
+    assertUsableApiBaseAddress(provider.apiUrl);
+    const {res} = await fetchApiWithBaseFallback(provider.apiUrl, '/models', {
+      timeoutMs: API_TIMEOUTS.text, retries: 0, headers: {Authorization: `Bearer ${apiKey}`}
+    });
+    const data = await safeJson(res);
+    if (!res.ok) throw new Error(data?.error?.message || data?.message || `HTTP ${res.status}`);
+    const available = {chat: [], image: [], video: [], checkedAt: Date.now()};
+    extractModelRecords(data).forEach(record => {
+      const id = String(record.id || '').trim();
+      const kind = ['chat', 'image', 'video'].includes(record.kind) ? record.kind : classifyModelKind(id);
+      if (id && available[kind] && !available[kind].includes(id)) available[kind].push(id);
+    });
+    provider.availableModels = available;
+    saveSettings();
+    renderApiProviders();
+    toast(`模型列表：聊天 ${available.chat.length} · 图片 ${available.image.length} · 视频 ${available.video.length}`, 'success');
+  } catch (error) {
+    toast(`检测模型列表失败：${error?.message || error}`, 'error');
+  }
 }
 function useProviderModelFromCard(card, kind, model) {
   const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);

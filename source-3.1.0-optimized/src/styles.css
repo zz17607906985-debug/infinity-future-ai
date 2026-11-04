@@ -8044,6 +8044,12 @@ html body[class] .canvas.canvas-grid-off{background-image:none!important}
 .api-provider-list-balance.ok{color:#7dd3fc}.api-provider-list-balance.fail{color:#fb7185}
 .api-provider-list-rename{width:22px;height:22px;display:grid;place-items:center;border-radius:5px;color:#8d9aa4;font-size:10px;opacity:.75}
 .api-provider-list-rename:hover{background:rgba(255,255,255,.08);color:#e6eef4;opacity:1}
+.provider-availability{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:7px;background:var(--soft)}
+.provider-availability header{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px}
+.provider-availability header small{color:var(--muted);font-size:10px}
+.provider-availability-row{display:grid;grid-template-columns:52px minmax(0,1fr);gap:8px;align-items:start;font-size:11px}
+.provider-availability-row>span{display:flex;gap:4px;flex-wrap:wrap;min-width:0;color:var(--muted)}
+.provider-availability-row em{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 5px;border:1px solid var(--line);border-radius:4px;font-style:normal;color:var(--text)}
 html body .image-node,
 html body .upload-node{
   width:calc(var(--node-preview-height,292px) * var(--node-media-ratio,1.77778) + 2px)!important;
