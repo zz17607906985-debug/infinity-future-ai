@@ -143,9 +143,12 @@ assert.equal(panelClasses.has('hidden'), true, 'minimap can be hidden');
 
 let proxyDraws = 0;
 let proxyRectReads = 0;
+let viewportTransformWrites = 0;
+let viewportVariableWrites = 0;
 let clock = 1000;
 const frames = [];
 const timers = [];
+let nextFrame = 0;
 const proxyCanvas = {
   style: {},
   getContext: () => ({
@@ -154,21 +157,27 @@ const proxyCanvas = {
   })
 };
 const panCanvas = {
-  classList: {toggle() {}},
+  classList: {add() {}, remove() {}, toggle() {}},
   getBoundingClientRect() {
     proxyRectReads++;
     return {width: 1000, height: 800};
   }
 };
-const panViewport = {style: {setProperty() {}}};
+const panViewport = {style: {
+  set transform(value) {
+    viewportTransformWrites++;
+    this.currentTransform = value;
+  },
+  setProperty() { viewportVariableWrites++; }
+}};
 const panHost = {
   nodes: new Map([['one', {type: 'prompt', x: 10, y: 20, el: {classList: {contains: () => false}}}]]),
   selectedNodes: new Set(), scale: 1, offsetX: 0, offsetY: 0, fastCanvasMode: true
 };
 const panContext = {
   window: {devicePixelRatio: 1}, performance: {now: () => clock},
-  requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
-  cancelAnimationFrame: () => {},
+  requestAnimationFrame: fn => { const id = ++nextFrame; frames.push({id, fn}); return id; },
+  cancelAnimationFrame: id => { const index = frames.findIndex(frame => frame.id === id); if (index >= 0) frames.splice(index, 1); },
   setTimeout: fn => { timers.push(fn); return timers.length; },
   clearTimeout: () => {}
 };
@@ -178,17 +187,23 @@ const layout = panContext.window.FutureAICanvasLayout.create({
   host: panHost, $: id => ({canvas: panCanvas, canvasProxyLayer: proxyCanvas, viewport: panViewport})[id],
   updateZoomLabel() {}, nodeDisplayTitle: () => 'Node'
 });
-const flushFrames = () => { while (frames.length) frames.shift()(); };
+const flushFrames = () => { while (frames.length) frames.shift().fn(); };
 layout.setCanvasProxyActive(true);
-flushFrames();
 assert.equal(proxyDraws, 1, 'proxy starts with one snapshot');
+assert.equal(viewportTransformWrites, 0, 'opening proxy does not transform the real viewport');
 for (let x = 1; x <= 40; x++) {
   panHost.offsetX = x * 4;
   layout.applyTransform(false, false);
 }
 assert.equal(proxyDraws, 1, 'short pan reuses the bitmap snapshot');
 assert.equal(proxyRectReads, 1, 'short pan does not force a layout read per frame');
+assert.equal(viewportTransformWrites, 0, 'pan does not transform the hidden viewport');
+assert.equal(viewportVariableWrites, 0, 'pan does not cascade viewport CSS variables');
 assert.match(proxyCanvas.style.transform, /translate3d\(160px, 0px, 0\)/);
+panHost.scale = 1.2;
+layout.applyTransform(false, false);
+assert.match(proxyCanvas.style.transform, /scale\(1\.2\)/, 'zoom scales the proxy');
+assert.equal(viewportTransformWrites, 0, 'zoom leaves the hidden viewport untouched');
 panHost.offsetX = 400;
 layout.applyTransform(false, false);
 assert.equal(timers.length, 1, 'long pan schedules one throttled refresh');
@@ -196,7 +211,13 @@ clock += 120;
 timers.shift()();
 flushFrames();
 assert.equal(proxyDraws, 2, 'long pan refreshes after crossing the buffer');
+panHost.offsetX = 450;
+layout.scheduleTransform(false, false);
 layout.setCanvasProxyActive(false);
+flushFrames();
+assert.equal(viewportTransformWrites, 1, 'release commits the real viewport exactly once');
+assert.equal(viewportVariableWrites, 2, 'release commits the zoom variables exactly once');
+assert.match(panViewport.style.currentTransform, /translate\(450px, 0px\) scale\(1\.2\)/);
 assert.equal(panHost.canvasProxySnapshot, null);
 
 console.log('Canvas drag and pan performance tests passed.');

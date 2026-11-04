@@ -6209,10 +6209,18 @@
   function fitNodeIntoView(...args) { return canvasLayout()?.fitNodeIntoView?.(...args); }
   function resetView(...args) { return canvasLayout()?.resetView?.(...args); }
   function moveNode(...args) { const result = canvasLayout()?.moveNode?.(...args); canvasMinimap?.schedule(); return result; }
-  function scheduleTransform(...args) { canvasMinimap?.schedule(); return canvasLayout()?.scheduleTransform?.(...args); }
+  function scheduleTransform(...args) {
+    if (!canvasProxyActive) canvasMinimap?.schedule();
+    return canvasLayout()?.scheduleTransform?.(...args);
+  }
   function applyTransform(...args) { const result = canvasLayout()?.applyTransform?.(...args); canvasMinimap?.schedule(); return result; }
   function proxyNodeSize(...args) { return canvasLayout()?.proxyNodeSize?.(...args); }
-  function setCanvasProxyActive(...args) { return canvasLayout()?.setCanvasProxyActive?.(...args); }
+  function setCanvasProxyActive(...args) {
+    const wasActive = canvasProxyActive;
+    const result = canvasLayout()?.setCanvasProxyActive?.(...args);
+    if (wasActive && !canvasProxyActive) canvasMinimap?.schedule();
+    return result;
+  }
   function scheduleCanvasProxyDraw(...args) { return canvasLayout()?.scheduleCanvasProxyDraw?.(...args); }
   function drawCanvasProxy(...args) { return canvasLayout()?.drawCanvasProxy?.(...args); }
   function scheduleViewportInteractionEnd(...args) { return canvasLayout()?.scheduleViewportInteractionEnd?.(...args); }

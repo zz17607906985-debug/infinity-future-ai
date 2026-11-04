@@ -389,14 +389,22 @@ function scheduleTransform(updateVisibility = true, updateToolbar = true) {
     applyTransform(updateVisibility, updateToolbar);
   });
 }
-function applyTransform(updateVisibility = true, updateToolbar = true) {
-  $('viewport').style.transform = `translate(${host.offsetX}px, ${host.offsetY}px) scale(${host.scale})`;
-  $('viewport').style.setProperty('--port-inverse-scale', String(1 / Math.max(host.scale, .2)));
-  $('viewport').style.setProperty('--canvas-zoom-inverse', String(1 / Math.max(host.scale, .2)));
+function commitViewportTransform() {
+  const viewport = $('viewport');
+  viewport.style.transform = `translate(${host.offsetX}px, ${host.offsetY}px) scale(${host.scale})`;
+  viewport.style.setProperty('--port-inverse-scale', String(1 / Math.max(host.scale, .2)));
+  viewport.style.setProperty('--canvas-zoom-inverse', String(1 / Math.max(host.scale, .2)));
   updateZoomLabel();
+}
+function applyTransform(updateVisibility = true, updateToolbar = true) {
+  if (host.canvasProxyActive) {
+    updateCanvasProxyPosition();
+    updateZoomLabel();
+    return;
+  }
+  commitViewportTransform();
   if (updateToolbar) updateSelectionToolbar();
   if (updateVisibility) scheduleVisibilityUpdate();
-  if (host.canvasProxyActive) updateCanvasProxyPosition();
 }
 function proxyNodeSize(node) {
   const width = node.type === 'image' || node.type === 'upload' ? 292 * nodeMediaAspectRatio(node) + 2
@@ -414,10 +422,16 @@ function nodeMediaAspectRatio(node) {
 function setCanvasProxyActive(active) {
   const shouldUseProxy = !!active && host.fastCanvasMode;
   if (host.canvasProxyActive === shouldUseProxy) return;
+  if (shouldUseProxy && (!$('canvas') || !$('canvasProxyLayer'))) return;
   host.canvasProxyActive = shouldUseProxy;
-  $('canvas')?.classList.toggle('proxy-active', host.canvasProxyActive);
-  if (host.canvasProxyActive) scheduleCanvasProxyDraw();
-  else {
+  if (shouldUseProxy) {
+    drawCanvasProxy();
+    $('canvas')?.classList.add('proxy-active');
+  } else {
+    if (host.transformFrame) cancelAnimationFrame(host.transformFrame);
+    host.transformFrame = null;
+    commitViewportTransform();
+    $('canvas')?.classList.remove('proxy-active');
     if (host.canvasProxyFrame) cancelAnimationFrame(host.canvasProxyFrame);
     if (host.canvasProxyRedrawTimer) clearTimeout(host.canvasProxyRedrawTimer);
     host.canvasProxyFrame = null;
