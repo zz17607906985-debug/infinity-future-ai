@@ -12,7 +12,7 @@ const {createActivationRequest} = require(path.join(appRoot, 'src', 'licensing',
 const {compareVersions} = require(path.join(appRoot, 'src', 'update', 'installer-update'));
 const {parseInstallerUpdateOutcome} = require(path.join(appRoot, 'src', 'update', 'update-outcome'));
 
-const EXPECTED_VERSION = '3.1.0';
+const EXPECTED_VERSION = '3.1.1';
 const TOKEN = '123e4567-e89b-42d3-a456-426614174000';
 
 function read(relativePath) {
@@ -58,8 +58,8 @@ async function verifySupportVersionDisplay() {
     })
   };
   await ui.loadSupportCenter();
-  assert.match(elements.get('homeVersionBadge').textContent, /v3\.1\.0$/);
-  assert.equal(elements.get('supportVersion').textContent, 'v3.1.0');
+  assert.match(elements.get('homeVersionBadge').textContent, /v3\.1\.1$/);
+  assert.equal(elements.get('supportVersion').textContent, 'v3.1.1');
 }
 
 function verifyLicenseDisplay() {
@@ -89,11 +89,11 @@ async function main() {
   assert.doesNotMatch(read('src/index.html'), /v1\.0\.0/);
   assert.match(
     fs.readFileSync(path.join(releaseRoot, 'resources', 'legal', 'RELEASE-NOTES.md'), 'utf8'),
-    /^## 3\.1\.0\b/m
+    /^## 3\.1\.1\b/m
   );
 
-  assert(compareVersions('3.1.1', EXPECTED_VERSION) > 0);
-  assert.equal(compareVersions(EXPECTED_VERSION, '3.1.0'), 0);
+  assert(compareVersions('3.1.2', EXPECTED_VERSION) > 0);
+  assert(compareVersions(EXPECTED_VERSION, '3.1.0') > 0);
   assert(compareVersions('3.0.9', EXPECTED_VERSION) < 0);
 
   const transaction = {
@@ -101,7 +101,7 @@ async function main() {
     token: TOKEN,
     mode: 'update',
     currentVersion: EXPECTED_VERSION,
-    targetVersion: '3.1.1'
+    targetVersion: '3.1.2'
   };
   const status = {
     schema: 'future-ai-installer-update-status/v1',
@@ -117,7 +117,7 @@ async function main() {
       mode: 'update',
       updatedAt: status.updatedAt,
       currentVersion: EXPECTED_VERSION,
-      targetVersion: '3.1.1',
+      targetVersion: '3.1.2',
       workspaceBackupVerified: true
     }
   );

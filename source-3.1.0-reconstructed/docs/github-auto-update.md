@@ -1,7 +1,9 @@
 # GitHub automatic updates
 
-The application checks the latest non-draft, non-prerelease release in
-`zz17607906985-debug/infinity-future-ai`. A release must contain exactly one
+The application reads the signed manifest from the public
+`releases/latest/download/update-manifest.json` URL in
+`zz17607906985-debug/infinity-future-ai`. It does not call the GitHub Releases
+API, which avoids anonymous API rate limits. A release must contain exactly one
 `update-manifest.json` and one versioned Windows installer. The application
 verifies the Ed25519 manifest, installer size and SHA-256 before offering
 installation. It also downloads and verifies the current-version installer for
@@ -10,16 +12,8 @@ may show an unknown-publisher or SmartScreen warning when users run the installe
 The installer transaction creates a workspace backup, runs a health check, and
 rolls back on failure.
 
-## First private-repository test
-
-Private GitHub releases are not anonymously readable. For a local maintainer
-test, set `FUTURE_AI_GITHUB_TOKEN` only in the environment of the application
-process. Use a fine-grained token scoped to this repository with Contents:
-read-only access. Do not put the token in source, settings, logs, a release
-asset, or the installed application. Customers cannot use this private-repo
-configuration unless each customer is separately granted GitHub access and
-provides their own credential; use a public release repository or an
-authenticated distribution service for customer updates.
+The repository and its release assets must be public so installed copies can
+read the release URLs without credentials.
 
 ## Signing requirements
 
@@ -55,7 +49,6 @@ direct upgrade compatibility. The script refuses to replace an existing
 manifest. Upload the installer and `update-manifest.json` to a GitHub Release
 whose tag is `v<version>`.
 
-The repository may remain private while validating this pipeline. For normal
-customer auto-updates, the release API and assets must be available through a
-client-accessible distribution endpoint; do not embed a GitHub token into the
-desktop client.
+Do not embed a GitHub token into the desktop client. The signed manifest and
+pinned Ed25519 public key authenticate updates; GitHub provides public transport
+for the manifest and installer.
