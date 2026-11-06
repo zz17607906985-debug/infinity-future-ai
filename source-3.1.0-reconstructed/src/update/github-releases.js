@@ -69,6 +69,27 @@ async function requestLatestRelease({owner, repo, token = '', fetchImpl = fetch,
   return {repoPath, release};
 }
 
+async function requestReleaseByTag({owner, repo, version, token = '', fetchImpl = fetch}) {
+  const repoPath = repositoryPath(owner, repo);
+  const response = await fetchImpl(`${API_ROOT}${repoPath}/releases/tags/v${encodeURIComponent(version)}`, {
+    headers: requestHeaders(token),
+    signal: AbortSignal.timeout(30_000),
+    redirect: 'error'
+  });
+  if (!response.ok) throw new Error(`当前版本 ${version} 的回滚安装包未发布（HTTP ${response.status}）`);
+  const bytes = await responseBytes(response, MAX_RELEASE_BYTES, 'GitHub Release');
+  let release;
+  try {
+    release = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new Error('GitHub Release 响应格式无效');
+  }
+  if (!release || release.draft || release.prerelease || !Array.isArray(release.assets)) {
+    throw new Error(`当前版本 ${version} 没有可用的正式版回滚安装包`);
+  }
+  return {repoPath, release};
+}
+
 function findReleaseAsset(release, name) {
   const matches = release.assets.filter(asset => asset?.name === name);
   if (matches.length !== 1) throw new Error(`GitHub Release 必须且只能包含一个 ${name}`);
@@ -189,7 +210,58 @@ async function checkLatestGitHubUpdate(options = {}) {
   });
 }
 
+async function cacheGitHubReleaseInstaller(options = {}) {
+  const {owner, repo, version, keyRing, token = '', cacheDir, fetchImpl = fetch} = options;
+  if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(String(version || ''))) {
+    throw new Error('回滚安装包版本无效');
+  }
+  if (!cacheDir) throw new Error('更新缓存目录未配置');
+  const {release} = await requestReleaseByTag({owner, repo, version, token, fetchImpl});
+  const tagMatch = /^v?(\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(String(release.tag_name || ''));
+  if (!tagMatch || tagMatch[1] !== version) throw new Error('回滚 Release 标签与版本不一致');
+  const manifestAsset = findReleaseAsset(release, 'update-manifest.json');
+  const manifestUrl = validateAssetUrl(manifestAsset.url, owner, repo, manifestAsset.id);
+  const manifestResponse = await fetchImpl(manifestUrl, {
+    headers: requestHeaders(token, 'application/octet-stream'),
+    signal: AbortSignal.timeout(30_000),
+    redirect: 'follow'
+  });
+  const manifestBytes = await responseBytes(manifestResponse, MAX_MANIFEST_BYTES, '更新清单');
+  const manifest = verifySignedUpdateManifest(manifestBytes.toString('utf8'), keyRing);
+  if (manifest.version !== version) throw new Error('回滚 Release 与签名更新版本不一致');
+  const artifact = findReleaseAsset(release, manifest.artifact);
+  if (artifact.size !== manifest.bytes) throw new Error('回滚安装包大小与签名清单不一致');
+  const packageDir = path.join(path.resolve(cacheDir), `github-${version}`);
+  const manifestFile = path.join(packageDir, 'update-manifest.json');
+  const installerPath = path.join(packageDir, manifest.artifact);
+  await fs.mkdir(packageDir, {recursive: true});
+  if (await fs.stat(installerPath).then(() => true, () => false)
+    && await fs.stat(manifestFile).then(() => true, () => false)) {
+    return Object.freeze({packageDir, installerPath, version, cached: true});
+  }
+  const manifestTemp = `${manifestFile}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.writeFile(manifestTemp, manifestBytes, {flag: 'wx'});
+    await fs.rename(manifestTemp, manifestFile);
+    await downloadAsset({
+      asset: artifact,
+      owner,
+      repo,
+      token,
+      fetchImpl,
+      target: installerPath,
+      limit: Math.min(MAX_INSTALLER_BYTES, manifest.bytes)
+    });
+  } catch (error) {
+    await fs.rm(manifestTemp, {force: true}).catch(() => {});
+    await fs.rm(installerPath, {force: true}).catch(() => {});
+    throw error;
+  }
+  return Object.freeze({packageDir, installerPath, version, cached: false});
+}
+
 module.exports = {
+  cacheGitHubReleaseInstaller,
   checkLatestGitHubUpdate,
   compareVersions,
   repositoryPath,

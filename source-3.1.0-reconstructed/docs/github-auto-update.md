@@ -3,10 +3,12 @@
 The application checks the latest non-draft, non-prerelease release in
 `zz17607906985-debug/infinity-future-ai`. A release must contain exactly one
 `update-manifest.json` and one versioned Windows installer. The application
-verifies the Ed25519 manifest, installer size and SHA-256, then Authenticode
-publisher and timestamp before it offers installation. The existing installer
-transaction creates a workspace backup, runs a health check, and rolls back
-on failure.
+verifies the Ed25519 manifest, installer size and SHA-256 before offering
+installation. It also downloads and verifies the current-version installer for
+rollback. Authenticode is optional; without a code-signing certificate, Windows
+may show an unknown-publisher or SmartScreen warning when users run the installer.
+The installer transaction creates a workspace backup, runs a health check, and
+rolls back on failure.
 
 ## First private-repository test
 
@@ -32,18 +34,13 @@ Release signing keys are separate from GitHub authentication:
 - Keep the PEM private key offline or in a protected release secret. Never
   commit it or ship it with the app. Check the local pair with
   `npm run verify:update-keypair`.
-- Sign the installer with an Authenticode code-signing certificate that has a
-  trusted timestamp. Add the exact publisher thumbprint to
-  `src/update/trusted-publishers.json`.
-- These trust files are currently empty, so clients correctly reject all
-  update installers until trust is configured and a new application installer
-  ships with those pinned trust values.
+- Authenticode signing is optional. Update authenticity comes from the pinned
+  Ed25519 public key and the installer SHA-256 in the signed manifest.
 
 ## Prepare a release
 
-Build and Authenticode-sign the versioned installer
-`FutureAI-Setup-<version>-x64.exe`. Then prepare a signed manifest from a
-protected release environment:
+Build the versioned installer `FutureAI-Setup-<version>-x64.exe`. Then prepare a
+signed manifest from a protected release environment:
 
 ```powershell
 $env:FUTURE_AI_UPDATE_KEY_ID = "update-release-1"

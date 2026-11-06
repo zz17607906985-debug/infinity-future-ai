@@ -1,13 +1,10 @@
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
-const { promisify } = require('node:util');
 
 const { verifySignedUpdateManifest } = require('./update-signature');
 
-const execFileAsync = promisify(execFile);
 const INSTALLER_PATTERN = /^FutureAI-Setup-(\d{1,3}\.\d{1,3}\.\d{1,3})-(x64|arm64|ia32)\.exe$/i;
 const MAX_MANIFEST_BYTES = 64 * 1024;
 
@@ -39,28 +36,6 @@ async function sha256File(file) {
   });
 }
 
-async function defaultAuthenticodeVerifier(file) {
-  const escaped = file.replace(/'/g, "''");
-  const script = [
-    `$signature=Get-AuthenticodeSignature -LiteralPath '${escaped}'`,
-    "$certificate=$signature.SignerCertificate",
-    "$timestamp=$signature.TimeStamperCertificate",
-    "[pscustomobject]@{status=[string]$signature.Status;thumbprint=if($certificate){$certificate.Thumbprint}else{''};subject=if($certificate){$certificate.Subject}else{''};timestampThumbprint=if($timestamp){$timestamp.Thumbprint}else{''};timestampSubject=if($timestamp){$timestamp.Subject}else{''}} | ConvertTo-Json -Compress"
-  ].join(';');
-  const result = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    windowsHide: true,
-    encoding: 'utf8',
-    timeout: 15000,
-    maxBuffer: 64 * 1024
-  });
-  return JSON.parse(result.stdout.trim());
-}
-
-function validatePublisherSet(value) {
-  if (!(value instanceof Set) || value.size < 1) throw new Error('尚未配置可信代码签名证书指纹');
-  return new Set([...value].map(normalizeThumbprint).filter(item => /^[A-F0-9]{40,128}$/.test(item)));
-}
-
 function loadTrustedPublisherThumbprints(file) {
   const raw = fsSync.readFileSync(file, 'utf8');
   if (Buffer.byteLength(raw, 'utf8') > 16 * 1024) throw new Error('可信发布者配置超过安全限制');
@@ -73,26 +48,6 @@ function loadTrustedPublisherThumbprints(file) {
   const result = new Set(doc.thumbprints.map(normalizeThumbprint));
   if ([...result].some(item => !/^[A-F0-9]{40,128}$/.test(item))) throw new Error('可信发布者证书指纹无效');
   return result;
-}
-
-async function verifyAuthenticode(file, trustedPublisherThumbprints, authenticodeVerifier) {
-  const trusted = validatePublisherSet(trustedPublisherThumbprints);
-  const signature = await (authenticodeVerifier || defaultAuthenticodeVerifier)(file);
-  const status = String(signature?.status || '');
-  const thumbprint = normalizeThumbprint(signature?.thumbprint);
-  const timestampThumbprint = normalizeThumbprint(signature?.timestampThumbprint);
-  const timestampSubject = String(signature?.timestampSubject || '');
-  if (status !== 'Valid') throw new Error(`安装器 Authenticode 验证失败：${status || 'Unknown'}`);
-  if (!trusted.has(thumbprint)) throw new Error('安装器代码签名发布者不受信任');
-  if (!/^[A-F0-9]{40,128}$/.test(timestampThumbprint) || !timestampSubject) {
-    throw new Error('安装器代码签名缺少可信时间戳');
-  }
-  return Object.freeze({
-    status,
-    thumbprint,
-    subject: String(signature?.subject || ''),
-    timestamp: Object.freeze({thumbprint: timestampThumbprint, subject: timestampSubject})
-  });
 }
 
 async function readManifest(packageDir) {
@@ -121,11 +76,6 @@ async function verifyInstallerPackage(options = {}) {
   if (!stats.isFile() || stats.size !== manifest.bytes) throw new Error('安装器文件大小与签名清单不一致');
   const sha256 = await sha256File(installerPath);
   if (sha256 !== manifest.sha256) throw new Error('安装器 SHA-256 与签名清单不一致');
-  const authenticode = await verifyAuthenticode(
-    installerPath,
-    options.trustedPublisherThumbprints,
-    options.authenticodeVerifier
-  );
   return Object.freeze({
     version: manifest.version,
     minimumVersion: manifest.minimumVersion,
@@ -135,69 +85,74 @@ async function verifyInstallerPackage(options = {}) {
     artifact: manifest.artifact,
     bytes: stats.size,
     sha256,
-    authenticode,
+    verification: 'ed25519-manifest+sha256',
     manifestFile: manifestFile.file
   });
 }
 
-async function cachedInstaller(file, currentVersion, trustedPublisherThumbprints, authenticodeVerifier) {
+async function cachedInstaller(file, currentVersion, keyRing) {
   const match = path.basename(file).match(INSTALLER_PATTERN);
   if (!match || compareVersions(match[1], currentVersion) > 0) return null;
   const stats = await fs.stat(file);
   if (!stats.isFile() || stats.size < 1) return null;
-  const authenticode = await verifyAuthenticode(file, trustedPublisherThumbprints, authenticodeVerifier);
+  const {file: manifestFile, raw} = await readManifest(path.dirname(file));
+  const manifest = verifySignedUpdateManifest(raw, keyRing);
+  if (manifest.version !== match[1] || manifest.artifact !== path.basename(file)
+    || manifest.bytes !== stats.size) return null;
+  const sha256 = await sha256File(file);
+  if (sha256 !== manifest.sha256) return null;
   return {
     path: file,
     version: match[1],
     bytes: stats.size,
-    sha256: await sha256File(file),
-    thumbprint: authenticode.thumbprint,
-    timestampThumbprint: authenticode.timestamp.thumbprint
+    sha256,
+    manifestFile
   };
 }
 
-async function findCurrentInstaller(cacheDir, currentVersion, trustedPublisherThumbprints, authenticodeVerifier) {
+async function cachedInstallerFiles(cacheDir) {
   let entries;
   try { entries = await fs.readdir(cacheDir, { withFileTypes: true }); }
   catch (error) {
-    if (error.code === 'ENOENT') throw new Error('找不到上一版安装器缓存，无法保证失败回滚');
+    if (error.code === 'ENOENT') return [];
     throw error;
   }
-  const candidates = entries
-    .filter(entry => entry.isFile() && INSTALLER_PATTERN.test(entry.name))
-    .map(entry => path.join(cacheDir, entry.name));
+  const candidates = [];
+  for (const entry of entries.slice(0, 128)) {
+    if (entry.isFile() && INSTALLER_PATTERN.test(entry.name)) candidates.push(path.join(cacheDir, entry.name));
+    if (!entry.isDirectory()) continue;
+    const children = await fs.readdir(path.join(cacheDir, entry.name), {withFileTypes: true}).catch(() => []);
+    for (const child of children.slice(0, 32)) {
+      if (child.isFile() && INSTALLER_PATTERN.test(child.name)) {
+        candidates.push(path.join(cacheDir, entry.name, child.name));
+      }
+    }
+  }
+  return candidates;
+}
+
+async function findCurrentInstaller(cacheDir, currentVersion, keyRing) {
+  const candidates = await cachedInstallerFiles(cacheDir);
   for (const file of candidates) {
     const match = path.basename(file).match(INSTALLER_PATTERN);
     if (match?.[1] !== currentVersion) continue;
-    try { return await cachedInstaller(file, currentVersion, trustedPublisherThumbprints, authenticodeVerifier); }
+    try { return await cachedInstaller(file, currentVersion, keyRing); }
     catch {}
   }
-  throw new Error('找不到通过签名验证的上一版安装器缓存，无法保证失败回滚');
+  throw new Error('找不到通过 Ed25519 清单与 SHA-256 验证的当前版本安装器，无法保证失败回滚');
 }
 
-async function findPreviousInstaller(cacheDir, currentVersion, trustedPublisherThumbprints, authenticodeVerifier) {
-  let entries;
-  try { entries = await fs.readdir(cacheDir, { withFileTypes: true }); }
-  catch (error) {
-    if (error.code === 'ENOENT') throw new Error('找不到可回滚的历史安装器');
-    throw error;
-  }
-  const candidates = entries
-    .filter(entry => entry.isFile())
-    .map(entry => ({ entry, match: entry.name.match(INSTALLER_PATTERN) }))
+async function findPreviousInstaller(cacheDir, currentVersion, keyRing) {
+  const candidates = (await cachedInstallerFiles(cacheDir))
+    .map(file => ({file, match: path.basename(file).match(INSTALLER_PATTERN)}))
     .filter(item => item.match && compareVersions(item.match[1], currentVersion) < 0)
     .sort((a, b) => compareVersions(b.match[1], a.match[1]));
   for (const candidate of candidates) {
     try {
-      return await cachedInstaller(
-        path.join(cacheDir, candidate.entry.name),
-        currentVersion,
-        trustedPublisherThumbprints,
-        authenticodeVerifier
-      );
+      return await cachedInstaller(candidate.file, currentVersion, keyRing);
     } catch {}
   }
-  throw new Error('找不到通过签名验证的上一版安装器');
+  throw new Error('找不到通过 Ed25519 清单与 SHA-256 验证的历史安装器');
 }
 
 async function atomicWriteJson(file, value) {
@@ -265,8 +220,7 @@ async function prepareInstallerUpdate(options = {}) {
   const rollback = await findCurrentInstaller(
     cacheDir,
     options.currentVersion,
-    options.trustedPublisherThumbprints,
-    options.authenticodeVerifier
+    options.keyRing
   );
   await fs.mkdir(path.join(stateDir, 'packages'), { recursive: true });
   const stagedInstaller = path.join(stateDir, 'packages', target.artifact);
@@ -293,9 +247,7 @@ async function prepareInstallerUpdate(options = {}) {
       path: stagedInstaller,
       version: target.version,
       bytes: target.bytes,
-      sha256: target.sha256,
-      thumbprint: target.authenticode.thumbprint,
-      timestampThumbprint: target.authenticode.timestamp.thumbprint
+      sha256: target.sha256
     },
     rollbackInstaller: rollback
   };
@@ -315,8 +267,8 @@ async function prepareInstallerRollback(options = {}) {
   if (!Number.isInteger(options.sourcePid) || options.sourcePid < 1) throw new Error('更新源进程无效');
   const workspaceBackup = await validateWorkspaceBackupReceipt(options.workspaceBackup, stateDir);
   const [target, recovery] = await Promise.all([
-    findPreviousInstaller(cacheDir, options.currentVersion, options.trustedPublisherThumbprints, options.authenticodeVerifier),
-    findCurrentInstaller(cacheDir, options.currentVersion, options.trustedPublisherThumbprints, options.authenticodeVerifier)
+    findPreviousInstaller(cacheDir, options.currentVersion, options.keyRing),
+    findCurrentInstaller(cacheDir, options.currentVersion, options.keyRing)
   ]);
   const token = crypto.randomUUID();
   const transactionFile = path.join(stateDir, 'pending-update.json');
@@ -407,11 +359,6 @@ function Test-Installer($Item) {
   if(-not (Test-Path -LiteralPath $Item.path -PathType Leaf)){throw 'installer missing'}
   if((Get-Item -LiteralPath $Item.path).Length -ne [int64]$Item.bytes){throw 'installer size mismatch'}
   if((Get-FileHash -LiteralPath $Item.path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Item.sha256){throw 'installer hash mismatch'}
-  $signature=Get-AuthenticodeSignature -LiteralPath $Item.path
-  if([string]$signature.Status -ne 'Valid'){throw 'installer Authenticode invalid'}
-  if($signature.SignerCertificate.Thumbprint.ToUpperInvariant() -ne $Item.thumbprint){throw 'installer publisher mismatch'}
-  if(-not $signature.TimeStamperCertificate){throw 'installer timestamp missing'}
-  if($signature.TimeStamperCertificate.Thumbprint.ToUpperInvariant() -ne $Item.timestampThumbprint){throw 'installer timestamp mismatch'}
 }
 function Start-Installer($Item,[string]$InstallDir) {
   Test-Installer $Item
@@ -473,7 +420,6 @@ try {
 module.exports = {
   buildUpdateHelperCommand,
   compareVersions,
-  defaultAuthenticodeVerifier,
   loadTrustedPublisherThumbprints,
   prepareInstallerRollback,
   prepareInstallerUpdate,

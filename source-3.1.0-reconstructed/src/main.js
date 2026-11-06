@@ -28,12 +28,11 @@ const {
 } = require('./media/music-source-policy');
 const {
   buildUpdateHelperCommand,
-  loadTrustedPublisherThumbprints,
   prepareInstallerRollback,
   prepareInstallerUpdate,
   verifyInstallerPackage
 } = require('./update/installer-update');
-const {checkLatestGitHubUpdate} = require('./update/github-releases');
+const {cacheGitHubReleaseInstaller, checkLatestGitHubUpdate} = require('./update/github-releases');
 const { parseInstallerUpdateOutcome } = require('./update/update-outcome');
 const { searchSkillMarket } = require('./skills/skill-market');
 const { buildZip, readZipTextSummary, readZipEntries } = require('./runtime/zip-utils');
@@ -154,9 +153,6 @@ const UPDATE_KEY_RING = loadIssuerKeyRing(
   'future-ai-update-keys/v1'
 );
 const UPDATE_SOURCE = JSON.parse(fsSync.readFileSync(path.join(__dirname, 'update', 'github-release-config.json'), 'utf8'));
-const TRUSTED_UPDATE_PUBLISHERS = loadTrustedPublisherThumbprints(
-  path.join(__dirname, 'update', 'trusted-publishers.json')
-);
 function loadRedemptionClient() {
   const file = path.join(__dirname, 'licensing', 'redemption-service.json');
   let config = {};
@@ -1306,8 +1302,7 @@ async function checkForLocalUpdate(payload = {}) {
   const verified = await verifyInstallerPackage({
     packageDir,
     keyRing: UPDATE_KEY_RING,
-    currentVersion,
-    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS
+    currentVersion
   });
   return {
     currentVersion,
@@ -1319,8 +1314,8 @@ async function checkForLocalUpdate(payload = {}) {
     sha256: verified.sha256,
     bytes: verified.bytes,
     notes: verified.notes,
-    publisher: verified.authenticode.subject,
-    publisherThumbprint: verified.authenticode.thumbprint,
+    publisher: 'Ed25519 更新清单',
+    publisherThumbprint: '',
     signatureVerified: true,
     protected: UPDATE_PROTECTED_FILES,
     storageDir: payload.storageDir || '',
@@ -1340,18 +1335,25 @@ async function checkForGitHubUpdate() {
     cacheDir: installerCacheDir()
   });
   if (!result.updateAvailable) return result;
+  await cacheGitHubReleaseInstaller({
+    owner: UPDATE_SOURCE.owner,
+    repo: UPDATE_SOURCE.repo,
+    version: currentVersion,
+    keyRing: UPDATE_KEY_RING,
+    token: process.env.FUTURE_AI_GITHUB_TOKEN || '',
+    cacheDir: installerCacheDir()
+  });
   const verified = await verifyInstallerPackage({
     packageDir: result.packageDir,
     keyRing: UPDATE_KEY_RING,
-    currentVersion,
-    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS
+    currentVersion
   });
   allowedUpdatePackageDirs.add(path.resolve(result.packageDir));
   return {
     ...result,
     sha256: verified.sha256,
-    publisher: verified.authenticode.subject,
-    publisherThumbprint: verified.authenticode.thumbprint,
+    publisher: 'Ed25519 更新清单',
+    publisherThumbprint: '',
     signatureVerified: true,
     protected: UPDATE_PROTECTED_FILES,
     runtimeData: LOCAL_RUNTIME_PATHS.root,
@@ -1392,8 +1394,7 @@ async function applyLocalUpdatePackage(payload = {}) {
   await verifyInstallerPackage({
     packageDir,
     keyRing: UPDATE_KEY_RING,
-    currentVersion: getCurrentAppVersion(),
-    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS
+    currentVersion: getCurrentAppVersion()
   });
   const safety = await createPreUpdateWorkspaceBackup(payload, 'before-installer-update');
   const prepared = await prepareInstallerUpdate({
@@ -1405,7 +1406,6 @@ async function applyLocalUpdatePackage(payload = {}) {
     currentVersion: getCurrentAppVersion(),
     sourcePid: process.pid,
     keyRing: UPDATE_KEY_RING,
-    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS,
     workspaceBackup: safety
   });
   const helperPid = launchInstallerTransaction(prepared);
@@ -1435,7 +1435,7 @@ async function rollbackLastUpdate(payload = {}) {
     applicationExecutable: app.getPath('exe'),
     currentVersion: getCurrentAppVersion(),
     sourcePid: process.pid,
-    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS,
+    keyRing: UPDATE_KEY_RING,
     workspaceBackup: safety
   });
   const helperPid = launchInstallerTransaction(prepared);
@@ -4537,7 +4537,7 @@ ipcMain.handle('update:capabilities', event => {
     mode: 'signed-nsis-installer',
     asarIntegrityPreserved: true,
     publisherManifestRequired: true,
-    authenticodeRequired: true,
+    authenticodeRequired: false,
     workspaceBackupRequired: true,
     healthCheckRequired: true,
     automaticRollback: true,
