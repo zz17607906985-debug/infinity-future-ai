@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'media', 'short-workbench.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'media', 'short-workbench.js'), 'utf8').replace(/\r\n/g, '\n');
 
 if (!source.includes('item.audioProvenance = Provenance?.normalizeRecord?.({')) {
   throw new Error('short workbench does not record audio provenance');

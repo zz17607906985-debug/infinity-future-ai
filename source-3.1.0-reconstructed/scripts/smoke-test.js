@@ -22,7 +22,7 @@ function sortedFiles(root, accept) {
 }
 
 const packageMetadata = JSON.parse(read('package.json'));
-assert.equal(packageMetadata.version, '3.1.1');
+assert.equal(packageMetadata.version, '3.1.2');
 assert.equal(packageMetadata.main, 'src/main.js');
 for (const relative of ['src/main.js', 'src/preload.js', 'src/index.html', 'src/app.js', 'src/skills/skill-market.js']) {
   assert.ok(fs.statSync(path.join(appRoot, relative)).isFile(), `missing ${relative}`);
