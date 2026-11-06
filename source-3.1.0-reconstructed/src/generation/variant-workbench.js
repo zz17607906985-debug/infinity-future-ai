@@ -196,7 +196,7 @@
     }
 
     function referenceSets(node) {
-      const refs = Array.isArray(node.data.references) ? node.data.references.filter(item => item?.url) : [];
+      const refs = Array.isArray(node.data.references) ? node.data.references : [];
       if (!refs.length || $('variantBranchReferenceMode')?.value !== 'each') return [refs];
       return refs.map(item => [item]);
     }

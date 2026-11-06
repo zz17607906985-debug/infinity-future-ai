@@ -3,7 +3,6 @@
 
   const PROJECT_TEMPLATES = [
     {id: 'default', name: '默认画布'},
-    {id: 'blank', name: '空白画布'},
     {id: 'short-video', name: '短视频'},
     {id: 'character', name: '角色设定'},
     {id: 'image-to-image', name: '图生图'},

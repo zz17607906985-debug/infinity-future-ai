@@ -4,7 +4,7 @@
   const CLEANUP_TYPE_LABELS = {
     asarBackup: '历史 asar 备份',
     updateAsarBackup: '过期更新 asar 备份',
-    codexBackup: '旧版 Codex 副本',
+    codexBackup: '过期 Codex 备份',
     orphanInstallRuntime: '安装目录遗留运行时',
     installDebris: '安装目录无关残留',
     tmpE2E: 'E2E 临时产物',

@@ -41,7 +41,7 @@
     const incoming = (Array.isArray(outputs) ? outputs : [outputs]).map(normalizeVariant);
     incoming.forEach(item => {
       const existing = list.find(candidate => candidate.url && item.url && candidate.url === item.url);
-      if (existing) Object.assign(existing, item, {id: existing.id, status: existing.status, createdAt: existing.createdAt});
+      if (existing) Object.assign(existing, item, {id: existing.id, status: existing.status});
       else list.unshift(item);
     });
     data.variants = list.slice(0, 40);
@@ -51,16 +51,9 @@
     return data.variants;
   }
 
-  function currentUrls(data = {}) {
-    return Array.isArray(data.urls) && data.urls.length ? data.urls.filter(Boolean) : [data.url].filter(Boolean);
-  }
-
-  // Records the node's current outputs that are not yet in its history; existing entries keep their metadata.
   function ensureCurrentOutput(data = {}, mediaType = 'image') {
-    const known = new Set(variants(data).map(item => item.url).filter(Boolean));
-    const missing = currentUrls(data).filter(url => !known.has(url));
-    if (!missing.length) return variants(data);
-    return recordOutputs(data, missing.map((url, index) => ({
+    const urls = Array.isArray(data.urls) && data.urls.length ? data.urls : [data.url].filter(Boolean);
+    return recordOutputs(data, urls.map((url, index) => ({
       url,
       mediaType,
       status: data.approval?.outputUrl === url && data.approval?.status === 'approved' ? 'approved' : 'unseen',
@@ -72,66 +65,6 @@
       actualDuration: data.outputMetadata?.actualDuration ?? null,
       createdAt: Number(data.outputMetadata?.recordedAt || data.generatedAt || Date.now()) + index
     })));
-  }
-
-  // Generation history of one node, oldest first: every recorded output that has a url.
-  function historyEntries(data = {}) {
-    return variants(data).filter(item => item.url).map((item, index) => ({item, index}))
-      .sort((a, b) => a.item.createdAt - b.item.createdAt || b.index - a.index)
-      .map(entry => entry.item);
-  }
-
-  function historyPosition(data = {}) {
-    const entries = historyEntries(data);
-    const selected = entries.findIndex(item => item.id === data.selectedVariantId && item.url === data.url);
-    return {index: selected >= 0 ? selected : entries.findIndex(item => item.url === data.url), total: entries.length};
-  }
-
-  function selectHistoryEntry(data = {}, variantId) {
-    const entry = historyEntries(data).find(item => item.id === variantId);
-    if (!entry) return null;
-    data.url = entry.url;
-    if (!currentUrls(data).includes(entry.url)) data.urls = [entry.url];
-    data.selectedVariantId = entry.id;
-    if (entry.mediaType === 'video') data.outputMetadata = Object.assign({}, data.outputMetadata || {}, {actualDuration: entry.actualDuration});
-    return entry;
-  }
-
-  function stepHistory(data = {}, delta = 0, mediaType = 'image') {
-    ensureCurrentOutput(data, mediaType);
-    const entries = historyEntries(data);
-    const {index} = historyPosition(data);
-    const next = Math.max(0, Math.min(entries.length - 1, (index < 0 ? entries.length : index) + Math.sign(Number(delta) || 0)));
-    if (!entries[next] || next === index) return null;
-    return selectHistoryEntry(data, entries[next].id);
-  }
-
-  // Folds pre-agent17h per-node version lists (imageVersions / videoVersions) into the variant history.
-  function migrateLegacyHistory(data = {}, mediaType = 'image') {
-    const legacy = [].concat(Array.isArray(data.imageVersions) ? data.imageVersions : [], Array.isArray(data.videoVersions) ? data.videoVersions : []);
-    delete data.imageVersions;
-    delete data.videoVersions;
-    if (!legacy.length) return data;
-    const list = variants(data);
-    const known = new Set(list.map(item => item.url));
-    legacy.forEach((item, index) => {
-      const url = String(item?.url || '');
-      if (!url || known.has(url)) return;
-      known.add(url);
-      list.push(normalizeVariant({
-        id: item.id,
-        url,
-        mediaType,
-        status: 'candidate',
-        prompt: data.prompt,
-        parameters: item.operation ? {operation: item.operation} : {},
-        actualDuration: item.outputMetadata?.actualDuration ?? null,
-        createdAt: Number(item.time || item.preservedAt || 0) || index + 1
-      }, index));
-    });
-    data.variants = list;
-    ensureCurrentOutput(data, mediaType);
-    return data;
   }
 
   function setStatus(data = {}, variantId, status) {
@@ -194,11 +127,6 @@
     variants,
     recordOutputs,
     ensureCurrentOutput,
-    historyEntries,
-    historyPosition,
-    selectHistoryEntry,
-    stepHistory,
-    migrateLegacyHistory,
     setStatus,
     replaceWithVariant,
     approvedVariants,

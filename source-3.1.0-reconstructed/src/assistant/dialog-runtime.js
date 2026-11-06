@@ -25,6 +25,7 @@
     const loadActiveTopicDialogState = deps.loadActiveTopicDialogState;
     const globalProviderForKind = deps.globalProviderForKind;
     const providerApiKey = deps.providerApiKey;
+    const reportProviderKeyResult = deps.reportProviderKeyResult;
     const imageGenerateRequest = deps.imageGenerateRequest;
     const imageEditWithFallback = deps.imageEditWithFallback;
     const chatCompletionTextRequest = deps.chatCompletionTextRequest;
@@ -51,20 +52,6 @@
     const joinApiPath = deps.joinApiPath;
     const cleanAiText = deps.cleanAiText;
     const localizeAssistantText = deps.localizeAssistantText;
-    const createProviderApiError = deps.createProviderApiError;
-    const clearCurrentDialogConversation = deps.clearCurrentDialogConversation;
-    const downloadImage = deps.downloadImage;
-    const connectSilently = deps.connectSilently;
-    const drawEdges = deps.drawEdges;
-    const fileToDataUrl = deps.fileToDataUrl;
-    const agentProjectSummary = deps.agentProjectSummary;
-    const renderAgentConsole = deps.renderAgentConsole;
-    const codexApiConfig = deps.codexApiConfig;
-    const multimodalVideoUnderstand = deps.multimodalVideoUnderstand;
-    const multimodalImageUnderstand = deps.multimodalImageUnderstand;
-    const optimizeDialogImagePrompt = deps.optimizeDialogImagePrompt;
-    // Local computer tasks go through the app router (built-in agent or Codex CLI per settings).
-    const runLocalTask = deps.runLocalTask;
     const AssistantTopics = deps.AssistantTopics || window.FutureAIAssistantTopics;
     const AssistantAttachments = deps.AssistantAttachments || window.FutureAIAssistantAttachments;
     const shouldUseLatestContextImage = deps.shouldUseLatestContextImage || AssistantAttachments?.shouldUseLatestContextImage;
@@ -72,6 +59,18 @@
     const messageRunKind = deps.messageRunKind || AssistantAttachments?.messageRunKind;
     const referenceIntent = deps.referenceIntent || AssistantAttachments?.referenceIntent;
     const referenceInstructions = deps.referenceInstructions || AssistantAttachments?.referenceInstructions;
+    const createProviderApiError = deps.createProviderApiError;
+    const clearCurrentDialogConversation = deps.clearCurrentDialogConversation;
+    const downloadImage = deps.downloadImage;
+    const fileToDataUrl = deps.fileToDataUrl;
+    const connectSilently = deps.connectSilently;
+    const drawEdges = deps.drawEdges;
+    const agentProjectSummary = deps.agentProjectSummary;
+    const renderAgentConsole = deps.renderAgentConsole;
+    const codexApiConfig = deps.codexApiConfig;
+    const multimodalVideoUnderstand = deps.multimodalVideoUnderstand;
+    const multimodalImageUnderstand = deps.multimodalImageUnderstand;
+    const optimizeDialogImagePrompt = deps.optimizeDialogImagePrompt;
 
 function dialogEditTargetNode() {
   if (host.dialogEditActiveNodeId && host.nodes.has(host.dialogEditActiveNodeId)) return host.nodes.get(host.dialogEditActiveNodeId);
@@ -164,7 +163,6 @@ function isPromptWritingRequest(text = '') {
   return /提示词|prompt|咒语|文案|方案|脚本|大纲|帮我写|写一段|整理成|优化.*词|反推.*词|给我.*词|我自己生成|我自己去生成|不要生图|别生图|不用生图/i.test(s);
 }
 
-// File-system work on the user's computer: a local path or folder plus a create/write/delete verb on a file.
 const LOCAL_PATH_PATTERN = /[A-Za-z]:[\\/]|(?:^|\s)(?:~|\.{1,2})?\/[\w.-]+\/|文件夹|目录|路径|桌面/;
 const LOCAL_FILE_ACTION_PATTERN = /(?:创建|新建|建立|生成|写入|保存|删除|重命名|移动|复制)[^\n]{0,12}(?:文件|文档|文本|txt|md|json|csv|表格|文件夹|目录)/i;
 function isLocalFileTaskRequest(text = '') {
@@ -211,8 +209,6 @@ async function planDialogRunWithTextModel({apiUrl, apiKey, model, endpoint = '/c
   ];
   try {
     const res = await fetchJsonWithRetry(joinApiPath(apiUrl, endpoint || '/chat/completions'), {timeoutMs: API_TIMEOUTS.text,
-      retries: 2,
-      retryUnsafe: true,
       method: 'POST',
       headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey},
       body: JSON.stringify({model, messages, temperature: 0, max_tokens: 180})
@@ -321,15 +317,12 @@ function assertDialogRunActive(run) {
   throw error;
 }
 
-// `transient` updates (streamed model text) replace the status line without growing the step list.
-// `detail` (diff or live command output) replaces the card's detail block; omit it to keep the current one.
-function updateDialogRun(run, status, { transient = false, detail } = {}) {
+function updateDialogRun(run, status) {
   if (!dialogRunIsActive(run)) return;
   const next = String(status || '').trim();
   if (!next) return;
   run.status = next;
-  if (detail !== undefined) run.detail = String(detail || '').slice(-4000);
-  if (!transient && run.steps[run.steps.length - 1] !== next) run.steps = [...run.steps, next].slice(-4);
+  if (run.steps[run.steps.length - 1] !== next) run.steps = [...run.steps, next].slice(-4);
   renderDialogEditWorkbench();
 }
 
@@ -383,15 +376,7 @@ function dialogRunningCardHtml() {
     <div class="codex-run-divider"></div>
     <div class="codex-run-current"><i class="fa-solid fa-circle-notch fa-spin"></i><strong>${esc(host.dialogRun.status || '正在处理请求')}</strong></div>
     ${steps.length ? `<div class="codex-run-steps">${steps.map(step => codexStepRowHtml(step)).join('')}</div>` : ''}
-    ${host.dialogRun.detail ? `<pre class="codex-run-detail">${dialogRunDetailHtml(host.dialogRun.detail)}</pre>` : ''}
   </section>`;
-}
-
-function dialogRunDetailHtml(detail) {
-  return String(detail).split('\n').map(line => {
-    const kind = /^\+(?!\+\+)/.test(line) ? 'add' : /^-(?!--)/.test(line) ? 'del' : /^@@/.test(line) ? 'hunk' : '';
-    return kind ? `<span class="diff-${kind}">${esc(line)}</span>` : esc(line);
-  }).join('\n');
 }
 
 function codexStepRowHtml(step = '') {
@@ -541,8 +526,6 @@ async function dialogTextChatReply({apiUrl, apiKey, model, endpoint = '/chat/com
     }
   ];
   const res = await fetchJsonWithRetry(joinApiPath(apiUrl, endpoint || '/chat/completions'), {timeoutMs: API_TIMEOUTS.text,
-    retries: 2,
-    retryUnsafe: true,
     method: 'POST',
     headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey},
     body: JSON.stringify({model, messages, temperature: 0.55})
@@ -642,7 +625,7 @@ function renderDialogEditWorkbench() {
   ensureDialogEditState();
   const recentMessages = host.dialogEditMessages.map((msg, index) => ({...msg, index})).slice(-12);
   const provider = globalProviderForKind('chat');
-  const activeModel = provider?.chatModel || FutureAIApiDefaults.get('chatModel') || '未选择模型';
+  const activeModel = provider?.chatModel || $('chatModel')?.value || '未选择模型';
   const permissionLabel = ({readonly: '只读', project: '项目内开发', full: '完全开发'})[host.codexPermission] || '项目内开发';
   panel.innerHTML = `
     <div class="dialog-chat-shell">
@@ -828,7 +811,7 @@ function importDialogMessageToCanvas(index) {
   attachments.slice(0, 6).forEach((item, i) => {
     const imageNode = addNode('image', c.x - 130 + i * 360, c.y - 180 + i * 36, {
       prompt: text,
-      model: FutureAIApiDefaults.get('imageModel'),
+      model: $('imageModel').value,
       size: '1024x1024',
       resolution: '1K',
       url: item.url,
@@ -958,21 +941,10 @@ async function runDialogCodexAssistant(options = {}) {
     ? options.attachments.map(item => ({...item})).filter(item => item?.path || item?.url)
     : host.dialogEditAttachments.map(item => ({...item})).filter(item => item?.path || item?.url);
   if (!userText && !attachments.length) return toast('请先输入任务', 'warn');
-  if (host.codexCli?.ok && !host.storageDir) return toast('请先选择本地存储目录，Codex 会在该目录内工作', 'warn');
+  if (!host.storageDir) return toast('请先选择本地存储目录，Codex 会在该目录内工作', 'warn');
   if (!options.alreadyRecorded) {
     if (host.dialogEditEditingIndex >= 0) applyDialogMessageEdit(userText || '请处理这些附件。', attachments);
     else pushDialogMessage('user', userText || '请处理这些附件。', attachments);
-  }
-  if (!host.codexCli?.ok) {
-    // Computer automation needs a Codex CLI; canvas, generation and chat keep working without it.
-    const url = host.codexCli?.installUrl || 'https://github.com/openai/codex';
-    host.dialogEditInput = '';
-    host.dialogEditAttachments = [];
-    host.dialogEditEditingIndex = -1;
-    pushDialogMessage('assistant', `这个任务需要电脑自动化。安装 Codex 以启用电脑自动化：[${url}](${url})\n\n安装后在 设置 → API → 电脑自动化 (Codex) 点击“重新检测”。画布、生成和对话功能不受影响。`);
-    saveProject();
-    renderDialogEditWorkbench();
-    return;
   }
   host.dialogEditInput = '';
   host.dialogEditAttachments = [];
@@ -992,7 +964,7 @@ async function runDialogCodexAssistant(options = {}) {
   renderAgentConsole();
   try {
     const apiConfig = await codexApiConfig();
-    const result = await window.codexBridge.run({prompt, storageDir: host.storageDir, permission: host.codexPermission, ...apiConfig});
+    const result = await window.codexBridge.run({prompt, storageDir: host.storageDir, command: host.codexCommand, permission: host.codexPermission, ...apiConfig});
     host.codexSessionId = result?.sessionId || '';
   } catch (err) {
     host.codexRunning = false;
@@ -1016,20 +988,26 @@ async function stopDialogCodexRun() {
 
 async function runDialogEditGeneration() {
   if (host.dialogEditRunning) return toast('当前任务仍在处理中，请先等待完成或停止任务', 'warn');
+  const directTask = String(host.dialogEditInput || '').trim();
+  if (isLocalFileTaskRequest(directTask) || isCodexTaskRequest(directTask)) {
+    return runDialogCodexAssistant();
+  }
   const profile = activeAssistantProfile();
   const imageProvider = globalProviderForKind('image');
   const chatProvider = globalProviderForKind('chat');
-  const imageApiUrl = imageProvider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
+  const imageApiUrl = imageProvider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, '');
   const chatApiUrl = chatProvider.apiUrl || imageApiUrl;
   // The global image setting is the user's explicit choice; old provider/project data is only a fallback.
-  const imageModel = FutureAIApiDefaults.get('imageModel').trim() || imageProvider.imageModel;
-  const chatModel = chatProvider.chatModel || FutureAIApiDefaults.get('chatModel').trim() || profile?.model || 'gpt-4o-mini';
+  const imageModel = $('imageModel').value.trim() || imageProvider.imageModel;
+  const chatModel = chatProvider.chatModel || $('chatModel').value.trim() || profile?.model || 'gpt-4o-mini';
   let imageApiKey = '';
-  const chatApiKey = await providerApiKey(chatProvider);
+  const chatApiKey = await providerApiKey(chatProvider, 'chat', chatModel);
   let dialogKeysReleased = false;
   const finishDialogKeyLeases = (error = null, failedCapability = '') => {
     if (dialogKeysReleased) return;
     dialogKeysReleased = true;
+    if (chatApiKey) reportProviderKeyResult?.(chatProvider, 'chat', failedCapability === 'chat' ? error : null, chatApiKey);
+    if (imageApiKey) reportProviderKeyResult?.(imageProvider, 'image', failedCapability === 'image' ? error : null, imageApiKey);
   };
   if (!chatApiUrl || !chatApiKey) {
     finishDialogKeyLeases(null);
@@ -1079,7 +1057,7 @@ async function runDialogEditGeneration() {
   if (hasTextFileAttachment && isExplicitImageExecutionRequest(userText)) runKind = 'image';
   if (hasTextFileAttachment && runKind !== 'image') runKind = 'codex';
   if (videoAttachments.length && isVideoUnderstandingRequest(userText)) runKind = 'video-understand';
-  if (runKind === 'image') imageApiKey = await providerApiKey(imageProvider);
+  if (runKind === 'image') imageApiKey = await providerApiKey(imageProvider, 'image', imageModel);
   if (host.dialogEditEditingIndex >= 0) {
     applyDialogMessageEdit(userText, currentAttachments);
   } else {
@@ -1129,15 +1107,15 @@ async function runDialogEditGeneration() {
         if (err?.code === 'DIALOG_RUN_CANCELLED') throw err;
         finishDialogRun(run);
         finishDialogKeyLeases(err, 'chat');
-        toast(host.codexCli?.ok ? '多模态视频理解未完成，已转交 Codex 深度处理' : '多模态视频理解未完成', 'warn');
-        await runLocalTask({userText, attachments: currentAttachments, alreadyRecorded: true});
+        toast('多模态视频理解未完成，已转交 Codex 深度处理', 'warn');
+        await runDialogCodexAssistant({userText, attachments: currentAttachments, alreadyRecorded: true});
         return;
       }
     }
     if (runKind === 'codex') {
       finishDialogRun(run);
       finishDialogKeyLeases(null);
-      await runLocalTask({userText, attachments: currentAttachments, alreadyRecorded: true});
+      await runDialogCodexAssistant({userText, attachments: currentAttachments, alreadyRecorded: true});
       return;
     }
     if (runKind === 'chat') {
@@ -1226,12 +1204,8 @@ async function runDialogEditGeneration() {
     finishDialogKeyLeases(err, activeApiCapability);
     finishDialogRun(run);
     if (err?.code === 'DIALOG_RUN_CANCELLED') return;
-    // Only image runs get the image-provider diagnosis; local/chat failures must not be reported as 生图 errors.
-    const isImageRun = runKind === 'image' || activeApiCapability === 'image';
-    const msg = isImageRun
-      ? formatImageGenerationError(err, {providerName: imageProvider?.name, model: imageModel, refCount: refUrls.length})
-      : (err?.message || String(err));
-    pushDialogMessage('assistant', (isImageRun ? '生成失败：\n' : '任务失败：\n') + msg);
+    const msg = formatImageGenerationError(err, {providerName: imageProvider?.name, model: imageModel, refCount: refUrls.length});
+    pushDialogMessage('assistant', '生成失败：\n' + msg);
     saveProject();
     renderDialogEditWorkbench();
     toast(msg, 'error');

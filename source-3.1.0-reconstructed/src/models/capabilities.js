@@ -7,7 +7,7 @@
   const VIDEO_SIZES = Object.freeze(['1280x720', '720x1280', '1792x1024', '1024x1792', '1024x1024']);
   const VIDEO_DURATIONS = Object.freeze([5, 8, 10, 15]);
   const REFERENCE_ROLES = Object.freeze([
-    'character', 'costume', 'pose', 'scene', 'object', 'style', 'composition', 'source',
+    'character', 'costume', 'scene', 'object', 'style', 'composition', 'source',
     'first-frame', 'last-frame', 'keyframe', 'motion', 'audio', 'reference'
   ]);
   const SINGLETON_REFERENCE_ROLES = new Set(['source', 'first-frame', 'last-frame']);
@@ -170,7 +170,7 @@
           maxFileSizeMB: 0,
           maxTotalSizeMB: 0,
           roles: isImage
-            ? ['character', 'costume', 'pose', 'scene', 'object', 'style', 'composition', 'source', 'reference']
+            ? ['character', 'costume', 'scene', 'object', 'style', 'composition', 'source', 'reference']
             : ['character', 'scene', 'style', 'composition', 'source', 'first-frame', 'reference']
         },
         video: {maxCount: 0, mimeTypes: ['video/mp4', 'video/webm', 'video/quicktime'], maxFileSizeMB: 0, maxTotalSizeMB: 0, roles: ['source', 'motion', 'reference']},
@@ -268,8 +268,6 @@
     normalized.operations = unique(normalized.operations || ['generate']);
     normalized.inputs.image.maxCount = Math.max(0, Math.min(32, Number(normalized.inputs.image.maxCount || 0)));
     normalized.inputs.image.roles = unique(Array.isArray(normalized.inputs.image.roles) ? normalized.inputs.image.roles : []);
-    // 姿势动作 is described in the prompt like 角色一致, so any profile that accepts character refs accepts pose refs.
-    if (normalized.inputs.image.roles.includes('character') && !normalized.inputs.image.roles.includes('pose')) normalized.inputs.image.roles.push('pose');
     normalized.inputs.video.maxCount = Math.max(0, Math.min(8, Number(normalized.inputs.video.maxCount || 0)));
     normalized.inputs.video.roles = unique(Array.isArray(normalized.inputs.video.roles) ? normalized.inputs.video.roles : []);
     normalized.inputs.audio.maxCount = Math.max(0, Math.min(8, Number(normalized.inputs.audio.maxCount || 0)));
@@ -377,8 +375,7 @@
       const input = profile.inputs?.[referenceMediaType(reference)] || {};
       const allowedRoles = Array.isArray(input.roles) ? input.roles : [];
       if (allowedRoles.length && !allowedRoles.includes(role)) {
-        const roleName = (typeof window !== 'undefined' && window.FutureAIReferenceRoles?.roleLabel?.(role)) || role;
-        errors.push(issue('UNSUPPORTED_REFERENCE_ROLE', `当前模型不支持“${roleName}”类型的参考素材。`, 'references'));
+        errors.push(issue('UNSUPPORTED_REFERENCE_ROLE', `当前模型不支持“${role}”类型的参考素材。`, 'references'));
       }
     }
     for (const role of SINGLETON_REFERENCE_ROLES) {

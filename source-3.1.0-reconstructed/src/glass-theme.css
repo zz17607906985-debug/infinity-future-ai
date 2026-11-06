@@ -1,0 +1,593 @@
+/* Shared glass surfaces for the application chrome. Canvas media and wallpaper stay untouched. */
+html body.nexus-layout {
+  --glass-surface: rgba(19, 21, 26, 0.76);
+  --glass-surface-raised: rgba(25, 27, 33, 0.84);
+  --glass-surface-soft: rgba(255, 255, 255, 0.045);
+  --glass-stroke: rgba(232, 235, 244, 0.13);
+  --glass-highlight: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+  --glass-interaction: color-mix(in srgb, var(--theme-accent, #4fd6e8) 18%, transparent);
+  --glass-interaction-strong: color-mix(in srgb, var(--theme-accent, #4fd6e8) 30%, transparent);
+  --glass-interaction-glow: color-mix(in srgb, var(--theme-accent, #4fd6e8) 15%, transparent);
+  --glass-interaction-text: color-mix(in srgb, var(--theme-accent, #4fd6e8) 20%, #ffffff);
+}
+
+html body.nexus-layout .top-left,
+html body.nexus-layout .top-actions,
+html body.nexus-layout .workflow-bar,
+html body.nexus-layout .canvas-rail,
+html body.nexus-layout .zoom-control,
+html body.nexus-layout .canvas-search-bar,
+html body.nexus-layout .canvas-tidy-btn,
+html body.nexus-layout .canvas-fast-btn,
+html body.nexus-layout .bottom-canvas-tools .canvas-minimap,
+html body.nexus-layout .history-drawer,
+html body.nexus-layout .queue-drawer,
+html body.nexus-layout .settings-card,
+html body.nexus-layout .modal-card,
+html body.nexus-layout .command-palette,
+html body.nexus-layout .workspace-menu:not(.hidden),
+html body.nexus-layout .balance-popover,
+html body.nexus-layout .support-document-card,
+html body.nexus-layout .provider-conformance-card,
+html body.nexus-layout .codex-settings-card,
+html body.nexus-layout .gd-sidebar,
+html body.nexus-layout .gd-quick-item,
+html body.nexus-layout .action-card,
+html body.nexus-layout .project-card,
+html body.nexus-layout .side-section,
+html body.nexus-layout .assistant-workbench,
+html body.nexus-layout .short-workbench,
+html body.nexus-layout .music-workbench,
+html body.nexus-layout .assistant-list,
+html body.nexus-layout .assistant-topic-rail,
+html body.nexus-layout .short-steps,
+html body.nexus-layout .short-panel,
+html body.nexus-layout .codex-page-shell {
+  border-color: var(--glass-stroke) !important;
+  background-color: var(--glass-surface) !important;
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+  backdrop-filter: blur(18px) saturate(125%);
+}
+
+html body.nexus-layout .top-left,
+html body.nexus-layout .top-actions {
+  background-image: linear-gradient(145deg, rgba(255,255,255,.055), transparent 58%) !important;
+}
+
+html body.nexus-layout .settings-card,
+html body.nexus-layout .history-drawer,
+html body.nexus-layout .queue-drawer,
+html body.nexus-layout .modal-card,
+html body.nexus-layout .command-palette,
+html body.nexus-layout .support-document-card,
+html body.nexus-layout .provider-conformance-card,
+html body.nexus-layout .codex-settings-card,
+html body.nexus-layout .gd-sidebar,
+html body.nexus-layout .assistant-workbench,
+html body.nexus-layout .short-workbench,
+html body.nexus-layout .music-workbench,
+html body.nexus-layout .assistant-list,
+html body.nexus-layout .assistant-topic-rail,
+html body.nexus-layout .short-steps,
+html body.nexus-layout .short-panel,
+html body.nexus-layout .codex-page-shell {
+  background-image:
+    linear-gradient(145deg, rgba(255,255,255,.045), transparent 48%),
+    linear-gradient(180deg, var(--glass-surface-raised), var(--glass-surface)) !important;
+}
+
+html body.nexus-layout .history-drawer header,
+html body.nexus-layout .queue-drawer header,
+html body.nexus-layout .support-document-card > header,
+html body.nexus-layout .provider-conformance-card > header,
+html body.nexus-layout .provider-conformance-card > footer {
+  border-color: var(--glass-stroke) !important;
+  background: rgba(255, 255, 255, 0.025) !important;
+}
+
+html body.nexus-layout .settings-section,
+html body.nexus-layout .api-providers-panel,
+html body.nexus-layout .api-provider-card,
+html body.nexus-layout .provider-availability,
+html body.nexus-layout .codex-context-section {
+  border-color: rgba(232, 235, 244, 0.11) !important;
+  background: rgba(255, 255, 255, 0.045) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.055);
+}
+
+html body.nexus-layout .workspace-menu button:hover,
+html body.nexus-layout .workspace-menu button:focus-visible,
+html body.nexus-layout .balance-popover-row:hover:not(:disabled),
+html body.nexus-layout .balance-popover-row.selected,
+html body.nexus-layout .assistant-topic-item.active,
+html body.nexus-layout .codex-nav-item.active {
+  border-color: var(--glass-interaction-strong) !important;
+  background: var(--glass-interaction) !important;
+  box-shadow: inset 2px 0 0 var(--theme-accent, #4fd6e8), 0 0 18px var(--glass-interaction-glow);
+}
+
+html body.nexus-layout .top-left .nexus-mode-btn.active,
+html body.nexus-layout .top-left .nexus-nav-btn.pressed,
+html body.nexus-layout .canvas-rail .rail-btn.active,
+html body.nexus-layout .canvas-rail .rail-btn:hover,
+html body.nexus-layout .bottom-canvas-tools .canvas-fast-btn.active,
+html body.nexus-layout .bottom-canvas-tools .canvas-tidy-btn.active {
+  border-color: var(--glass-interaction-strong) !important;
+  background: var(--glass-interaction) !important;
+  color: var(--glass-interaction-text) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 0 16px var(--glass-interaction-glow) !important;
+}
+
+html body.nexus-layout .top-left .nexus-mode-btn,
+html body.nexus-layout .top-left .nexus-nav-btn,
+html body.nexus-layout .top-actions .icon-btn,
+html body.nexus-layout .top-actions .ghost-btn,
+html body.nexus-layout .top-actions .status-pill,
+html body.nexus-layout .tool-btn,
+html body.nexus-layout .canvas-rail .rail-btn,
+html body.nexus-layout .zoom-control .zoom-icon,
+html body.nexus-layout .bottom-canvas-tools .icon-btn,
+html body.nexus-layout .bottom-canvas-tools .mini-pill {
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+html body.nexus-layout .top-left .nexus-mode-btn:hover,
+html body.nexus-layout .top-left .nexus-nav-btn:hover,
+html body.nexus-layout .top-actions .icon-btn:hover,
+html body.nexus-layout .top-actions .ghost-btn:hover,
+html body.nexus-layout .top-actions .status-pill:hover,
+html body.nexus-layout .tool-btn:hover,
+html body.nexus-layout .zoom-control .zoom-icon:hover,
+html body.nexus-layout .bottom-canvas-tools .icon-btn:hover {
+  border-color: rgba(232, 235, 244, 0.2) !important;
+  background-color: rgba(255, 255, 255, 0.09) !important;
+}
+
+html body.nexus-layout input:not([type="checkbox"]):not([type="radio"]),
+html body.nexus-layout textarea,
+html body.nexus-layout select {
+  border-color: rgba(232, 235, 244, 0.13);
+  background-color: rgba(8, 10, 14, 0.42);
+}
+
+html body.nexus-layout input:not([type="checkbox"]):not([type="radio"]):focus,
+html body.nexus-layout textarea:focus,
+html body.nexus-layout select:focus {
+  border-color: var(--glass-interaction-strong) !important;
+  outline-color: var(--glass-interaction);
+  box-shadow: 0 0 0 3px var(--glass-interaction-glow);
+}
+
+html body.nexus-layout .settings-drawer,
+html body.nexus-layout .modal,
+html body.nexus-layout .image-modal {
+  background: rgba(3, 4, 7, 0.5) !important;
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+}
+
+/* Keep the top navigation as separate controls instead of one continuous glass rail. */
+html body.nexus-layout .topbar,
+html body.nexus-layout .topbar::before,
+html body.nexus-layout .topbar::after {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .nav-pills {
+  width: max-content !important;
+  max-width: max-content !important;
+  flex: 0 0 auto !important;
+  gap: 5px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .top-left,
+html body.nexus-layout .top-actions {
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .top-left .nexus-nav-btn,
+html body.nexus-layout .top-left .nexus-mode-btn,
+html body.nexus-layout .top-left .workspace-menu-toggle,
+html body.nexus-layout .top-actions > .icon-btn,
+html body.nexus-layout .top-actions > .ghost-btn,
+html body.nexus-layout .top-actions > .status-pill {
+  border: 1px solid rgba(232, 235, 244, 0.15) !important;
+  border-radius: 7px !important;
+  background: rgba(18, 20, 25, 0.7) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 5px 16px rgba(0,0,0,.16) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(120%) !important;
+  backdrop-filter: blur(12px) saturate(120%) !important;
+}
+
+html body.nexus-layout .top-left .nexus-mode-btn.active {
+  border-color: var(--glass-interaction-strong) !important;
+  background: var(--glass-interaction) !important;
+  color: var(--glass-interaction-text) !important;
+}
+
+/* Give project actions and quick controls the same glass treatment. */
+html body.nexus-layout .gd-quick-item,
+html body.nexus-layout .project-actions .primary-btn,
+html body.nexus-layout .project-actions .ghost-btn,
+html body.nexus-layout .project-actions .icon-btn,
+html body.nexus-layout .action-card,
+html body.nexus-layout .primary-btn,
+html body.nexus-layout .ghost-btn,
+html body.nexus-layout .tool-btn,
+html body.nexus-layout .rail-btn,
+html body.nexus-layout .mini-pill,
+html body.nexus-layout .workspace-menu-toggle,
+html body.nexus-layout .bottom-canvas-tools .canvas-tidy-btn,
+html body.nexus-layout .bottom-canvas-tools .canvas-fast-btn {
+  border-color: rgba(232, 235, 244, 0.15) !important;
+  background: rgba(22, 24, 30, 0.68) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 6px 18px rgba(0,0,0,.18) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(120%) !important;
+  backdrop-filter: blur(12px) saturate(120%) !important;
+}
+
+html body.nexus-layout .action-card {
+  border-radius: 8px !important;
+}
+
+html body.nexus-layout .project-actions .primary-btn,
+html body.nexus-layout .primary-btn {
+  color: #edf0f7 !important;
+}
+
+html body.nexus-layout .project-actions .primary-btn:hover,
+html body.nexus-layout .gd-quick-item:hover,
+html body.nexus-layout .primary-btn:hover,
+html body.nexus-layout .ghost-btn:hover,
+html body.nexus-layout .tool-btn:hover,
+html body.nexus-layout .rail-btn:hover,
+html body.nexus-layout .mini-pill:hover,
+html body.nexus-layout .action-card:hover,
+html body.nexus-layout .bottom-canvas-tools .canvas-tidy-btn:hover,
+html body.nexus-layout .bottom-canvas-tools .canvas-fast-btn:hover {
+  border-color: var(--glass-interaction-strong) !important;
+  background: var(--glass-interaction) !important;
+  color: var(--glass-interaction-text) !important;
+}
+
+html body.nexus-layout button:disabled {
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .node button,
+html body.nexus-layout .node input,
+html body.nexus-layout .node select,
+html body.nexus-layout .node textarea {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html body.nexus-layout .top-left,
+  html body.nexus-layout .top-actions,
+  html body.nexus-layout .workflow-bar,
+  html body.nexus-layout .canvas-rail,
+  html body.nexus-layout .zoom-control,
+  html body.nexus-layout .canvas-search-bar,
+  html body.nexus-layout .history-drawer,
+  html body.nexus-layout .queue-drawer,
+  html body.nexus-layout .settings-card,
+  html body.nexus-layout .modal-card,
+  html body.nexus-layout .command-palette,
+  html body.nexus-layout .workspace-menu:not(.hidden),
+  html body.nexus-layout .balance-popover {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Final global rule: every app button gets the same glass material, regardless of component. */
+html body.nexus-layout button {
+  border: 1px solid rgba(232, 235, 244, 0.16) !important;
+  border-radius: 7px !important;
+  background: rgba(23, 26, 32, 0.38) !important;
+  background-image: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+    0 5px 14px rgba(0, 0, 0, 0.16) !important;
+  -webkit-backdrop-filter: blur(9px) saturate(118%) !important;
+  backdrop-filter: blur(9px) saturate(118%) !important;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease !important;
+}
+
+html body.nexus-layout button:hover:not(:disabled) {
+  border-color: var(--glass-interaction-strong) !important;
+  background: color-mix(in srgb, var(--theme-accent, #4fd6e8) 14%, rgba(23, 26, 32, 0.38)) !important;
+  background-image: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 0 15px var(--glass-interaction-glow) !important;
+}
+
+html body.nexus-layout button:active:not(:disabled),
+html body.nexus-layout button.active,
+html body.nexus-layout button.selected,
+html body.nexus-layout button[aria-pressed="true"],
+html body.nexus-layout button[aria-selected="true"] {
+  border-color: var(--glass-interaction-strong) !important;
+  background: color-mix(in srgb, var(--theme-accent, #4fd6e8) 24%, rgba(23, 26, 32, 0.38)) !important;
+  background-image: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px var(--glass-interaction) !important;
+}
+
+html body.nexus-layout button:focus-visible {
+  outline: 2px solid var(--glass-interaction-strong) !important;
+  outline-offset: 2px;
+}
+
+html body.nexus-layout button:disabled {
+  opacity: 0.58;
+  border-color: rgba(232, 235, 244, 0.1) !important;
+  background: rgba(18, 20, 25, 0.48) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05) !important;
+}
+
+/* Node buttons keep the lightweight glass surface without per-button blur while dragging. */
+html body.nexus-layout .node button {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Use separate controls rather than continuous glass trays around button groups. */
+html body.nexus-layout .canvas-rail,
+html body.nexus-layout .bottom-canvas-tools {
+  border-color: transparent !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .canvas-rail .rail-btn,
+html body.nexus-layout .bottom-canvas-tools button {
+  background: rgba(23, 26, 32, 0.38) !important;
+  background-image: none !important;
+}
+
+/* These controls have legacy theme rules later in styles.css; pin the glass
+   surface here with higher specificity while keeping accent states dynamic. */
+html body.nexus-layout .topbar .top-left .nexus-nav-btn,
+html body.nexus-layout .topbar .top-left .nexus-mode-btn,
+html body.nexus-layout .topbar .top-actions .icon-btn,
+html body.nexus-layout .topbar .top-actions .ghost-btn,
+html body.nexus-layout .topbar .top-actions .status-pill,
+html body.nexus-layout .project-home .project-actions .primary-btn,
+html body.nexus-layout .project-home .project-actions .ghost-btn,
+html body.nexus-layout .project-home .project-actions .icon-btn,
+html body.nexus-layout .canvas-rail .rail-btn,
+html body.nexus-layout .bottom-canvas-tools .zoom-control .zoom-icon,
+html body.nexus-layout .bottom-canvas-tools > button,
+html body.nexus-layout .bottom-canvas-tools .canvas-tidy-btn,
+html body.nexus-layout .bottom-canvas-tools .canvas-fast-btn {
+  border-color: rgba(232, 235, 244, 0.16) !important;
+  background: rgba(23, 26, 32, 0.38) !important;
+  background-image: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+    0 5px 14px rgba(0, 0, 0, 0.16) !important;
+  -webkit-backdrop-filter: blur(9px) saturate(118%) !important;
+  backdrop-filter: blur(9px) saturate(118%) !important;
+}
+
+html body.nexus-layout .canvas-rail {
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .bottom-canvas-tools .zoom-control {
+  border-color: transparent !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .topbar .top-left .nexus-mode-btn.active,
+html body.nexus-layout .topbar .top-left .nexus-nav-btn.pressed,
+html body.nexus-layout .canvas-rail .rail-btn:hover,
+html body.nexus-layout .canvas-rail .rail-btn.active,
+html body.nexus-layout .bottom-canvas-tools .canvas-fast-btn.active,
+html body.nexus-layout .bottom-canvas-tools .canvas-tidy-btn.active {
+  border-color: var(--glass-interaction-strong) !important;
+  background: var(--glass-interaction) !important;
+  background-image: none !important;
+  color: var(--glass-interaction-text) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 15px var(--glass-interaction-glow) !important;
+}
+
+html body.nexus-layout .topbar .top-left .nexus-nav-btn:hover:not(:disabled),
+html body.nexus-layout .topbar .top-left .nexus-mode-btn:hover:not(:disabled),
+html body.nexus-layout .topbar .top-actions .icon-btn:hover:not(:disabled),
+html body.nexus-layout .topbar .top-actions .ghost-btn:hover:not(:disabled),
+html body.nexus-layout .topbar .top-actions .status-pill:hover:not(:disabled),
+html body.nexus-layout .project-home .project-actions button:hover:not(:disabled),
+html body.nexus-layout .bottom-canvas-tools button:hover:not(:disabled) {
+  border-color: var(--glass-interaction-strong) !important;
+  background: var(--glass-interaction) !important;
+  background-image: none !important;
+  color: var(--glass-interaction-text) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 15px var(--glass-interaction-glow) !important;
+}
+
+/* The mascot floats over the wallpaper; keep only its silhouette and hit target. */
+html body.nexus-layout #mascotButton {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout #mascotButton:hover,
+html body.nexus-layout #mascotButton:active {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Make the image-node prompt field discoverable without changing its layout. */
+html body.nexus-layout .image-node > .node-composer.image-composer textarea {
+  border: 1px solid var(--theme-surface-line, rgba(232, 235, 244, 0.18)) !important;
+  border-radius: 6px !important;
+  padding: 6px 36px 6px 8px !important;
+  background: rgba(8, 10, 14, 0.28) !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16) !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer textarea:focus {
+  border-color: color-mix(in srgb, var(--theme-accent, #4fd6e8) 72%, white) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-accent, #4fd6e8) 18%, transparent) !important;
+}
+
+/* Selection is communicated by stacking and ports, not a detached outer ring. */
+html body.nexus-layout .node.selected-node {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3) !important;
+}
+
+html body.nexus-layout .image-node.selected-node > .node-content,
+html body.nexus-layout .video-node.selected-node > .node-content,
+html body.nexus-layout .comfyui-node.selected-node > .node-content {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Keep node selection legible with a close, low-intensity accent glow. */
+html body.nexus-layout .node.selected-node {
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow:
+    0 0 9px color-mix(in srgb, var(--theme-accent, #4fd6e8) 22%, transparent),
+    0 10px 24px rgba(0, 0, 0, 0.3) !important;
+}
+
+html body.nexus-layout .image-node.selected-node > .node-content,
+html body.nexus-layout .video-node.selected-node > .node-content,
+html body.nexus-layout .comfyui-node.selected-node > .node-content {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* A compact composer leaves room for a readable model name in its control row. */
+html body.nexus-layout .image-node > .node-composer.image-composer {
+  width: 640px !important;
+  max-width: calc(100vw - 24px) !important;
+  border-color: rgba(232, 235, 244, 0.1) !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32) !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-model {
+  flex: 1 1 260px !important;
+  min-width: 260px !important;
+  max-width: 300px !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-model select {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  text-overflow: clip !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-bar {
+  align-items: center !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-bar > .composer-pill,
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-bar > .composer-background-toggle,
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-bar > .composer-more-toggle,
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-bar > .composer-send {
+  box-sizing: border-box !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  align-self: center !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-bar > .composer-pill {
+  margin: 0 !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-send {
+  width: 30px !important;
+  min-width: 30px !important;
+  border: 1px solid color-mix(in srgb, var(--theme-accent, #4fd6e8) 68%, white) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--theme-accent, #4fd6e8) 78%, #101820) !important;
+  color: #f7fcff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 3px 10px rgba(0, 0, 0, 0.22) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-send:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--theme-accent, #4fd6e8) 82%, white) !important;
+  background: color-mix(in srgb, var(--theme-accent, #4fd6e8) 88%, #101820) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--theme-accent, #4fd6e8) 28%, transparent) !important;
+}
+
+html body.nexus-layout .image-node > .node-composer.image-composer .composer-send i {
+  color: inherit !important;
+  font-size: 14px !important;
+}
+
+@media (max-width: 700px) {
+  html body.nexus-layout .image-node > .node-composer.image-composer {
+    width: calc(100vw - 24px) !important;
+  }
+
+  html body.nexus-layout .image-node > .node-composer.image-composer .composer-model {
+    flex-basis: 210px !important;
+    min-width: 210px !important;
+    max-width: 100% !important;
+  }
+}

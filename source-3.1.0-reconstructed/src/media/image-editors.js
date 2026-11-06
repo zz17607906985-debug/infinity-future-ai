@@ -1,5 +1,4 @@
-/* global fabric, Cropper -- vendor scripts loaded on demand by FutureAIVendors */
-(() => {
+﻿(() => {
   'use strict';
 
   /** Image editors domain: Fabric + Cropper (state private). */
@@ -10,7 +9,10 @@
     const getNode = deps.getNode;
     const nodeDisplayTitle = deps.nodeDisplayTitle;
     const persistMediaUrl = deps.persistMediaUrl;
-    const addResultNode = deps.addResultNode;
+    const hydrateNode = deps.hydrateNode;
+    const saveProject = deps.saveProject;
+    const rememberImageNodeVersion = deps.rememberImageNodeVersion;
+    const applyImageNodeUrl = deps.applyImageNodeUrl;
 
     let fabricEditorCanvas = null;
     let fabricEditorNodeId = '';
@@ -203,13 +205,6 @@ function undoFabricEditor() {
   });
 }
 
-// An edit never overwrites the picture: it lands on a new node 「原标题 · 编辑」 to the right, wired from the original.
-function saveEditAsNewNode(node, url) {
-  const next = addResultNode?.(node, url, '编辑');
-  if (!next) throw new Error('无法创建编辑结果节点');
-  return next;
-}
-
 async function saveFabricEditor() {
   if (!fabricEditorCanvas || !fabricEditorNodeId) return;
   const node = getNode(fabricEditorNodeId);
@@ -218,9 +213,12 @@ async function saveFabricEditor() {
     setFabricEditorStatus('正在保存到图片节点...');
     const dataUrl = fabricEditorCanvas.toDataURL({format: 'png', multiplier: 1});
     const url = await persistMediaUrl(dataUrl, `fabric_edit_${Date.now()}`, 'png');
-    saveEditAsNewNode(node, url);
+    rememberImageNodeVersion(node, '高级编辑前');
+    applyImageNodeUrl(node, url);
+    hydrateNode(node);
+    saveProject();
     closeFabricEditor();
-    toast('编辑结果已放到右侧新节点「· 编辑」，原图保留', 'success');
+    toast('图片已保存回当前节点', 'success');
   } catch (err) {
     console.error('fabric editor save failed', err);
     setFabricEditorStatus('保存失败：' + (err?.message || err));
@@ -268,7 +266,7 @@ function initCropperInstance() {
     scalable: true,
     ready() {
       setCropperRatio('free');
-      setCropperStatus('拖动裁剪框调整构图，选择比例后保存为右侧新节点（原图保留）。');
+      setCropperStatus('拖动裁剪框调整构图，选择比例后保存回当前图片节点。');
     }
   });
 }
@@ -330,9 +328,12 @@ async function saveCropperEditor() {
     if (!canvas) throw new Error('无法生成裁剪结果');
     const dataUrl = canvas.toDataURL('image/png');
     const url = await persistMediaUrl(dataUrl, `crop_edit_${Date.now()}`, 'png');
-    saveEditAsNewNode(node, url);
+    rememberImageNodeVersion(node, '裁剪前');
+    applyImageNodeUrl(node, url);
+    hydrateNode(node);
+    saveProject();
     closeCropperEditor();
-    toast('裁剪结果已放到右侧新节点「· 编辑」，原图保留', 'success');
+    toast('裁剪结果已保存回当前节点', 'success');
   } catch (err) {
     console.error('cropper save failed', err);
     setCropperStatus('保存失败：' + (err?.message || err));

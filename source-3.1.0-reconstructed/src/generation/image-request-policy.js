@@ -1,24 +1,29 @@
 (() => {
   'use strict';
-  // Canvas image generation always asks for the provider's highest quality tier.
-  const IMAGE_QUALITY = 'high';
-  function qualityForModel(model) {
-    return /^dall-e-3$/i.test(model) ? 'hd' : IMAGE_QUALITY;
+  function promptMode(data = {}) {
+    return data.promptMode === 'context' ? 'context' : 'raw';
   }
-  // Final prompt = the user's own (or linked) prompt plus only the extras the user chose:
-  // mark/style/mood tags, the node camera, and reference role instructions (composePrompt).
-  function build({ownPrompt = '', linkedPrompt = '', model = '', size = '', data = {}, references = [], composePrompt}) {
+  function qualityForModel(quality, model) {
+    const value = quality || 'high';
+    if (/^dall-e-3$/i.test(model)) return value === 'high' || value === 'hd' ? 'hd' : value === 'auto' ? 'auto' : 'standard';
+    if (!['auto', 'low', 'medium', 'high', 'hd', 'standard'].includes(value)) throw new Error('不支持的图片质量参数');
+    return value;
+  }
+  function build({data = {}, ownPrompt = '', linkedPrompt = '', model = '', size = '', references = [], enrichPrompt}) {
     const sourcePrompt = String(ownPrompt).trim() ? String(ownPrompt) : String(linkedPrompt);
     if (!sourcePrompt.trim()) throw new Error('图片节点缺少提示词');
     if (!model) throw new Error('请先选择图片模型');
     if (!size) throw new Error('请先选择有效的输出尺寸');
+    const mode = promptMode(data);
     return {
-      schemaVersion: 2,
+      schemaVersion: 1,
+      promptMode: mode,
       sourcePrompt,
-      prompt: composePrompt(sourcePrompt, references),
+      prompt: mode === 'raw' ? sourcePrompt : enrichPrompt(sourcePrompt, references),
       model: String(model).trim(),
       size,
-      quality: qualityForModel(model),
+      quality: qualityForModel(data.quality, model),
+      backgroundMode: data.backgroundMode === 'transparent' ? 'transparent' : 'opaque',
       resolution: data.resolution || '1K',
       referenceCount: references.length,
       count: Math.max(1, Math.min(4, parseInt(data.count, 10) || 1)),
@@ -32,12 +37,13 @@
       '适配器实际请求模型：' + (request.adapterModel || '尚未取得成功响应') + '；不代表供应商内部模型证明',
       '请求状态：' + ({submitted: '已提交', received: '已收到响应', saved: '已保存', failed: '失败'}[request.status] || '尚未提交'),
       '供应商：' + (request.provider || '当前选择') + '；协议：' + (request.protocol || '按供应商配置'),
-      '密钥：' + (request.keyLabel || '服务 Key') + '（不显示密钥内容）',
+      '密钥标识：' + (request.keyId ? `${request.keyLabel || 'Key'}（${request.keyId}）` : '提交时由密钥池选择；不显示密钥内容'),
       '接口尺寸字段：' + JSON.stringify(request.dimensionFields || {size: request.size}),
       'Seed：' + (request.seed ?? '未指定或当前模型不支持；每次生成可能不同'),
       '请求像素：' + request.size + '；不代表原生细节保证',
-      '质量参数：' + request.quality + '（固定最高质量；需供应商支持，可能增加费用与耗时）',
-      '提示词组成：你的提示词 + 你选择的标记/风格/情绪、机位和参考图用途说明；不附加画布上下文或通用规则',
+      '质量参数：' + request.quality + (request.quality === 'auto' ? '（由供应商决定）' : '（需供应商支持；可能增加费用与耗时）'),
+      '背景：' + (request.backgroundMode === 'transparent' ? '透明 PNG（需模型支持）' : '不透明'),
+      '提示词模式：' + (request.promptMode === 'raw' ? '原文直通，不附加机位、标签、通用规则或画布上下文' : '增强模式，包含机位、标签和画布上下文'),
       '张数：' + request.count + '；参考图：' + request.referenceCount,
       '不自动切换模型、不合成参考板、不扩图、不插值放大。',
       '生成有随机性，高质量参数不保证一定优于其他平台。',
@@ -76,5 +82,5 @@
     dialog.showModal();
     close.focus();
   }
-  window.FutureAIImageRequestPolicy = {qualityForModel, build, describe, showPreview};
+  window.FutureAIImageRequestPolicy = {promptMode, qualityForModel, build, describe, showPreview};
 })();

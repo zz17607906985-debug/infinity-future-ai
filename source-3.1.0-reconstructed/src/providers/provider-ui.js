@@ -2,7 +2,7 @@
   'use strict';
 
   /**
-   * Provider settings cards.
+   * Provider settings cards + conformance UI.
    * Provider request protocol lives in providers/provider-api.js.
    */
   function create(deps = {}) {
@@ -20,11 +20,12 @@
     const saveSettings = deps.saveSettings;
     const onBalanceDisplayChange = deps.onBalanceDisplayChange;
     const renderModels = deps.renderModels;
+    const refreshNodeProviderSelects = deps.refreshNodeProviderSelects;
     const refreshNodeModelSelects = deps.refreshNodeModelSelects;
     const refreshNodeCapabilityControls = deps.refreshNodeCapabilityControls;
     const ModelCapabilities = deps.ModelCapabilities || window.FutureAIModelCapabilities;
-    const ModelAvailability = deps.ModelAvailability || window.FutureAIModelAvailability;
     const unique = deps.unique;
+    const ProviderConformance = deps.ProviderConformance;
     const secretBridge = () => window.secretBridge;
     // Model helpers still owned by app shell
     const applyImportedModelsToProvider = deps.applyImportedModelsToProvider;
@@ -60,6 +61,7 @@
     const loadProject = deps.loadProject;
     const classifyModelKind = deps.classifyModelKind;
     const modelFieldForKind = deps.modelFieldForKind;
+    const inputIdForModelKind = deps.inputIdForModelKind;
     const isZexImageGateway = deps.isZexImageGateway;
     const normalizeKnownImageModelAlias = deps.normalizeKnownImageModelAlias;
     const setGlobalModelValue = deps.setGlobalModelValue;
@@ -67,15 +69,67 @@
   const syncGlobalModelInputs = deps.syncGlobalModelInputs;
   const modelKindLabel = deps.modelKindLabel;
   const requestImageGenerationWithModel = deps.requestImageGenerationWithModel;
+  const loadImageForCanvas = deps.loadImageForCanvas;
   const rawImageEditRequest = deps.rawImageEditRequest;
   const rawImageGenerationWithModel = deps.rawImageGenerationWithModel;
+  const KeyPool = deps.KeyPool || window.FutureAIKeyPool;
   const providerKeyCache = new Map();
+  // Instantaneous per-key load stays in memory only; never persist it with provider settings.
+  const providerKeyRunningCounts = new Map();
+  const providerKeyLeases = new Map();
+  let providerConformanceProviderId = '';
+  let providerConformanceRunning = false;
+
+function providerKeyRunningKey(provider, keyId) {
+  return `${provider?.id || ''}:${keyId || ''}`;
+}
+function providerKeyRunningCount(provider, keyId) {
+  return Number(providerKeyRunningCounts.get(providerKeyRunningKey(provider, keyId)) || 0);
+}
+function providerKeyRunningSnapshot(provider) {
+  return Object.fromEntries((provider?.keyPool || []).map(item => [item.id, providerKeyRunningCount(provider, item.id)]));
+}
+function changeProviderKeyRunningCount(provider, keyId, delta) {
+  if (!provider?.id || !keyId) return 0;
+  const mapKey = providerKeyRunningKey(provider, keyId);
+  const next = Math.max(0, providerKeyRunningCount(provider, keyId) + Number(delta || 0));
+  if (next) providerKeyRunningCounts.set(mapKey, next);
+  else providerKeyRunningCounts.delete(mapKey);
+  return next;
+}
+function recordProviderKeyLease(provider, capability, keyId) {
+  const leaseKey = `${provider?.id || ''}:${capability || 'all'}`;
+  const leases = providerKeyLeases.get(leaseKey) || [];
+  leases.push(keyId);
+  providerKeyLeases.set(leaseKey, leases);
+}
+function consumeProviderKeyLease(provider, capability, preferredId = '') {
+  const leaseKey = `${provider?.id || ''}:${capability || 'all'}`;
+  const leases = providerKeyLeases.get(leaseKey) || [];
+  const keyId = KeyPool?.takeLease?.(leases, preferredId) || leases.shift() || '';
+  if (leases.length) providerKeyLeases.set(leaseKey, leases);
+  else providerKeyLeases.delete(leaseKey);
+  return keyId;
+}
+function releaseProviderKeyLease(provider, capability, preferredId = '') {
+  const leasedId = consumeProviderKeyLease(provider, capability, preferredId);
+  if (leasedId) changeProviderKeyRunningCount(provider, leasedId, -1);
+  return Boolean(leasedId);
+}
 
 function providerTypeLabel(type) {
   return IMAGE_PROVIDER_TYPES.find(item => item.id === type)?.label || 'OpenAI Images';
 }
 function providerTypeMeta(type) {
   return IMAGE_PROVIDER_TYPES.find(item => item.id === type) || IMAGE_PROVIDER_TYPES[0];
+}
+function providerTypeOptionsHtml(current = '', protocolMode = 'manual') {
+  const visibleIds = new Set(['openai-images', 'chat-image', 'custom-sync']);
+  const visible = IMAGE_PROVIDER_TYPES.filter(item => visibleIds.has(item.id));
+  const currentMeta = IMAGE_PROVIDER_TYPES.find(item => item.id === current);
+  const options = currentMeta && !visibleIds.has(current) ? [currentMeta, ...visible] : visible;
+  return `<option value="__auto__" ${protocolMode === 'auto' ? 'selected' : ''}>自动识别</option>`
+    + options.map(item => `<option value="${esc(item.id)}" ${protocolMode !== 'auto' && item.id === current ? 'selected' : ''}>${esc(item.label)}</option>`).join('');
 }
 function providerSupports(provider, capability) {
   const meta = providerTypeMeta(provider?.type).supports || {};
@@ -162,7 +216,7 @@ async function detectProviderProtocol(provider, apiUrl, apiKey = '') {
     // Address signals remain useful when a gateway does not expose /models.
   }
   if (hintedType) return result;
-  result.message = '未能确认接口协议，将按 OpenAI 兼容方式尝试；如请求失败请到高级接口设置手动选择。';
+  result.message = '未能确认接口协议，将按 OpenAI 兼容方式尝试；请检查服务地址和模型是否正确。';
   return result;
 }
 function applyDetectedProviderProtocol(provider, detected = {}) {
@@ -187,6 +241,8 @@ function applyDetectedProviderProtocol(provider, detected = {}) {
   if (changed) {
     provider.imageCapabilityStatus = 'unknown';
     provider.imageCapabilityMessage = '';
+    provider.imageCapabilityKeyId = '';
+    provider.imageCapabilityByKey = {};
     provider.lastTest = {status: '', message: '', checkedAt: 0};
   }
   return changed;
@@ -204,11 +260,11 @@ function defaultApiProvider(overrides = {}) {
     name: '默认 OpenAI 兼容',
     type: 'openai-images',
     protocolMode: 'auto',
-    apiUrl: FutureAIApiDefaults.get('apiUrl') || 'https://nexusapi.cn/v1',
+    apiUrl: $('apiUrl')?.value || 'https://nexusapi.cn/v1',
     useGlobalKey: true,
-    chatModel: FutureAIApiDefaults.get('chatModel') || 'gpt-4o-mini',
-    imageModel: FutureAIApiDefaults.get('imageModel') || 'gpt-image2',
-    videoModel: FutureAIApiDefaults.get('videoModel') || 'sora-2',
+    chatModel: $('chatModel')?.value || 'gpt-4o-mini',
+    imageModel: $('imageModel')?.value || 'gpt-image2',
+    videoModel: $('videoModel')?.value || 'sora-2',
     models: [],
     concurrency: 1,
     chatEndpoint: '/chat/completions',
@@ -229,6 +285,15 @@ function defaultApiProvider(overrides = {}) {
     videoResponsePath: ''
   }, overrides));
 }
+function normalizeImageCapabilityByKey(value = {}, keys = []) {
+  const validIds = new Set((keys || []).map(item => String(item?.id || '')).filter(Boolean));
+  if (!value || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).map(([keyId, record]) => [String(keyId || ''), {
+    status: ['unknown', 'available', 'blocked'].includes(record?.status) ? record.status : 'unknown',
+    message: String(record?.message || '').slice(0, 240),
+    checkedAt: Number(record?.checkedAt || 0)
+  }]).filter(([keyId]) => keyId && (keyId === '__global__' || validIds.has(keyId))));
+}
 function normalizeApiProvider(provider = {}) {
   const id = String(provider.id || 'provider-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7));
   const type = String(provider.type || 'openai-images');
@@ -244,8 +309,9 @@ function normalizeApiProvider(provider = {}) {
   const imageModel = normalizeKnownImageModelAlias(provider.imageModel, {apiUrl, name, models});
   const lastTest = provider.lastTest && typeof provider.lastTest === 'object' ? provider.lastTest : {};
   const imageCapabilityStatus = ['unknown', 'available', 'blocked'].includes(provider.imageCapabilityStatus) ? provider.imageCapabilityStatus : 'unknown';
-  // Configs saved by older versions may carry a keyPool array; any saved entry means a Key exists.
-  const legacyKeySaved = Array.isArray(provider.keyPool) && provider.keyPool.length > 0;
+  const keyPool = KeyPool?.migrateLegacyProviderKey(provider, Boolean(provider.apiKeySaved || provider.apiKey)) || {keys: [], activeKeyId: ''};
+  const modelKeyBindings = KeyPool?.normalizeModelKeyBindings?.(provider.modelKeyBindings, keyPool.keys) || {};
+  const imageCapabilityByKey = normalizeImageCapabilityByKey(provider.imageCapabilityByKey, keyPool.keys);
   return {
     id,
     name,
@@ -256,7 +322,11 @@ function normalizeApiProvider(provider = {}) {
     protocolMessage: String(provider.protocolMessage || '').trim(),
     protocolDetectedAt: Number(provider.protocolDetectedAt || 0),
     apiUrl,
-    apiKeySaved: Boolean(provider.apiKeySaved || provider.apiKey || legacyKeySaved),
+    apiKeySaved: Boolean(provider.apiKeySaved || provider.apiKey || keyPool.keys.length),
+    keyPool: keyPool.keys,
+    activeKeyId: keyPool.activeKeyId,
+    modelKeyBindings,
+    keyRotationMode: 'round-robin',
     useGlobalKey: provider.useGlobalKey !== false,
     chatModel: String(provider.chatModel || provider.textModel || '').trim(),
     imageModel,
@@ -293,19 +363,16 @@ function normalizeApiProvider(provider = {}) {
     enabledImage: provider.enabledImage !== false && providerSupports({type}, 'image'),
     imageCapabilityStatus,
     imageCapabilityMessage: String(provider.imageCapabilityMessage || '').trim(),
+    imageCapabilityKeyId: String(provider.imageCapabilityKeyId || '').trim(),
+    imageCapabilityByKey,
     enabledVideo: provider.enabledVideo === true && providerSupports({type}, 'video'),
     collapsed: Boolean(provider.collapsed),
-    ...(provider.availableModels?.checkedAt ? {availableModels: {
-      chat: Array.isArray(provider.availableModels.chat) ? provider.availableModels.chat.map(String) : [],
-      image: Array.isArray(provider.availableModels.image) ? provider.availableModels.image.map(String) : [],
-      video: Array.isArray(provider.availableModels.video) ? provider.availableModels.video.map(String) : [],
-      checkedAt: Number(provider.availableModels.checkedAt)
-    }} : {}),
     lastTest: {
       status: lastTest.status || '',
       message: lastTest.message || '',
       checkedAt: lastTest.checkedAt || 0
-    }
+    },
+    lastConformance: provider.lastConformance?.schema === 'future-ai-provider-conformance/v1' ? provider.lastConformance : null
   };
 }
 function ensureApiProviders(settings = null) {
@@ -320,14 +387,14 @@ function ensureApiProviders(settings = null) {
   host.apiProviders = saved.map(normalizeApiProvider).filter(provider => provider.id);
   if (!host.apiProviders.length) {
     host.apiProviders = [defaultApiProvider({
-      apiUrl: settings.apiUrl || FutureAIApiDefaults.get('apiUrl') || 'https://nexusapi.cn/v1',
-      imageModel: settings.imageModel || FutureAIApiDefaults.get('imageModel') || 'gpt-image2'
+      apiUrl: settings.apiUrl || $('apiUrl')?.value || 'https://nexusapi.cn/v1',
+      imageModel: settings.imageModel || $('imageModel')?.value || 'gpt-image2'
     })];
   }
   if (!host.apiProviders.some(provider => provider.id === 'default-openai')) {
     host.apiProviders.unshift(defaultApiProvider({
-      apiUrl: settings.apiUrl || FutureAIApiDefaults.get('apiUrl') || 'https://nexusapi.cn/v1',
-      imageModel: settings.imageModel || FutureAIApiDefaults.get('imageModel') || 'gpt-image2'
+      apiUrl: settings.apiUrl || $('apiUrl')?.value || 'https://nexusapi.cn/v1',
+      imageModel: settings.imageModel || $('imageModel')?.value || 'gpt-image2'
     }));
   }
   host.apiProviders = uniqueById(host.apiProviders).map(normalizeApiProvider);
@@ -358,44 +425,19 @@ function syncLegacyApiProvider() {
   if (!host.apiProviders.length) return;
   const provider = host.apiProviders.find(item => item.id === 'default-openai') || host.apiProviders[0];
   if (!provider || provider.id !== 'default-openai') return;
-  provider.apiUrl = FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '') || provider.apiUrl;
-  provider.chatModel = FutureAIApiDefaults.get('chatModel').trim() || provider.chatModel;
-  provider.imageModel = FutureAIApiDefaults.get('imageModel').trim() || provider.imageModel;
-  provider.videoModel = FutureAIApiDefaults.get('videoModel').trim() || provider.videoModel;
+  provider.apiUrl = $('apiUrl')?.value.trim().replace(/\/$/, '') || provider.apiUrl;
+  provider.chatModel = $('chatModel')?.value.trim() || provider.chatModel;
+  provider.imageModel = $('imageModel')?.value.trim() || provider.imageModel;
+  provider.videoModel = $('videoModel')?.value.trim() || provider.videoModel;
 }
-// Every model a provider offers for one node kind: its configured default, the models found by
-// 检测可用模型 and its saved model list. Ids classified as another kind are left out.
-function providerPickerModels(provider, kind) {
-  const seen = new Set();
-  return [provider?.[modelFieldForKind(kind)], ...(provider?.availableModels?.[kind] || []), ...providerModelsForKind(provider, kind)]
-    .map(model => String(model || '').trim())
-    .filter(model => {
-      const key = model.toLowerCase();
-      if (!model || seen.has(key)) return false;
-      seen.add(key);
-      const modelKind = classifyModelKind(model);
-      return !modelKind || modelKind === kind;
-    });
-}
-// Data for the canvas node model picker: one group per capable API service that has models of this kind.
-function modelPickerGroups(capability = 'image') {
+function providerOptionsHtml(current = '', capability = 'image') {
   ensureApiProviders();
-  const kind = capability === 'video' ? 'video' : 'image';
-  const field = modelFieldForKind(kind);
   const capable = host.apiProviders.filter(provider => providerSupports(provider, capability));
-  const globalProvider = globalProviderForKind(kind);
-  return {
-    globalProviderName: globalProvider ? globalProvider.name || providerTypeLabel(globalProvider.type) : '',
-    globalModel: globalProvider?.[field] || '',
-    groups: (capable.length ? capable : host.apiProviders)
-      .map(provider => ({
-        providerId: provider.id,
-        label: provider.name || providerTypeLabel(provider.type),
-        defaultModel: provider[field] || '',
-        models: providerPickerModels(provider, kind)
-      }))
-      .filter(group => group.models.length)
-  };
+  const source = capable.length ? capable : host.apiProviders;
+  const globalProvider = globalProviderForKind(capability === 'video' ? 'video' : capability === 'text' ? 'chat' : 'image');
+  const globalLabel = globalProvider ? `跟随全局 · ${globalProvider.name || providerTypeLabel(globalProvider.type)}` : '跟随全局';
+  return `<option value="" ${!current ? 'selected' : ''}>${esc(globalLabel)}</option>`
+    + source.map(provider => `<option value="${esc(provider.id)}" ${provider.id === current ? 'selected' : ''}>${esc(provider.name)} · ${esc(providerTypeLabel(provider.type))}</option>`).join('');
 }
 function currentProviderForNode(node, capability = 'image') {
   ensureApiProviders();
@@ -424,11 +466,9 @@ function renderApiProviders() {
         </div>
       </aside>
       <section class="api-provider-editor" aria-label="当前 API 服务">
-        <div class="api-provider-editor-head"><span><i class="fa-solid fa-pen-to-square"></i> 当前服务</span><small>修改后会自动保存，密钥只保存在本机安全存储中</small></div>
         ${apiProviderCardHtml(selected, 0)}
       </section>
-    </div>
-    ${imageFallbackSettingsHtml()}`;
+    </div>`;
   hydrateProviderKeyInputs();
 }
 function providerListItemHtml(provider) {
@@ -441,83 +481,79 @@ function providerListItemHtml(provider) {
     <span class="api-provider-list-avatar">${esc(providerInitial(provider))}</span>
     <span class="api-provider-list-copy"><strong>${esc(provider.name || providerTypeLabel(provider.type))}</strong><small>${esc(provider.apiUrl || '尚未填写地址')}</small><em>${esc(models)}${defaults.length ? ` · ${esc(defaults.join(' / '))}` : ''}</em>${providerBalanceLineHtml(provider)}</span>
     <span class="api-provider-list-rename" data-provider-rename="${esc(provider.id)}" role="button" tabindex="0" title="重命名服务" aria-label="重命名服务"><i class="fa-solid fa-pen"></i></span>
-    <span class="api-provider-list-rename api-provider-balance-refresh" data-provider-balance-refresh="${esc(provider.id)}" role="button" tabindex="0" title="刷新余额" aria-label="刷新余额"><i class="fa-solid fa-rotate"></i></span>
+    <span class="api-provider-list-rename" data-provider-balance-refresh="${esc(provider.id)}" role="button" tabindex="0" title="刷新余额" aria-label="刷新余额"><i class="fa-solid fa-rotate"></i></span>
     <span class="api-provider-list-status ${healthClass}" title="${esc(healthText)}"></span>
   </button>`;
 }
-// Relay balance (API 中转站余额). Lookups run in the main process, which reads the key itself
-// and caches results, so refreshing here never exposes the key or spams the relay.
 const providerBalances = new Map();
+const providerBalanceInflight = new Map();
 function providerBalanceQueryable(provider) {
   return Boolean(provider?.apiUrl && provider.type !== 'custom-sync'
-    && window.FutureAIModelAvailability.providerHasUsableKey(provider, FutureAIApiDefaults.get('apiKey')));
+    && (provider.useGlobalKey ? $('apiKey')?.value.trim() : provider.apiKeySaved || provider.keyPool?.length));
 }
 function formatBalanceAmount(value, unit) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
   const code = String(unit || '').toUpperCase();
-  if (code === 'USD') return `$${value.toFixed(2)}`;
-  if (code === 'CNY' || code === 'RMB') return `¥${value.toFixed(2)}`;
-  if (code === 'QUOTA') return `${Math.round(value).toLocaleString('zh-CN')} 额度`;
-  return `${value.toFixed(2)} ${unit}`;
+  if (code === 'USD') return `$${amount.toFixed(2)}`;
+  if (code === 'CNY' || code === 'RMB') return `¥${amount.toFixed(2)}`;
+  if (code === 'QUOTA') return `${Math.round(amount).toLocaleString('zh-CN')} 额度`;
+  return `${amount.toFixed(2)} ${unit || ''}`.trim();
 }
 function providerBalanceView(provider) {
   if (!providerBalanceQueryable(provider)) return {text: '余额 —', title: '填写地址并保存 Key 后可查询余额', tone: ''};
   const state = providerBalances.get(provider.id);
   if (!state || state.status === 'loading') return {text: '余额 查询中…', title: '正在查询余额', tone: 'loading'};
-  if (state.status === 'unsupported') return {text: '不支持查询', title: '该中转站没有提供可用的余额查询接口', tone: 'muted'};
-  if (state.status !== 'ok') return {text: `查询失败：${state.reason || '未知错误'}`, title: '点击右侧刷新按钮重试', tone: 'fail'};
+  if (state.status === 'unsupported') return {text: '不支持查询', title: '该服务没有提供可用的余额查询接口', tone: 'muted'};
+  if (state.status !== 'ok') return {text: `查询失败：${state.reason || '未知错误'}`, title: '点击刷新按钮重试', tone: 'fail'};
+  const used = state.used == null ? '' : `已用 ${formatBalanceAmount(state.used, state.unit)}`;
+  const total = state.total == null ? '' : `总额 ${formatBalanceAmount(state.total, state.unit)}`;
   const checked = state.checkedAt ? `查询于 ${new Date(state.checkedAt).toLocaleTimeString('zh-CN', {hour12: false})}` : '';
-  const used = state.used === null || state.used === undefined ? '' : `已用 ${formatBalanceAmount(state.used, state.unit)}`;
-  const total = state.total === null || state.total === undefined ? '' : `总额 ${formatBalanceAmount(state.total, state.unit)}`;
   const title = [used, total, checked].filter(Boolean).join(' · ');
   if (state.unlimited) return {text: '无限额度', title, tone: 'ok'};
-  if (state.remaining !== null && state.remaining !== undefined) return {text: `余额 ${formatBalanceAmount(state.remaining, state.unit)}`, title, tone: state.remaining <= 0 ? 'fail' : 'ok'};
+  if (state.remaining != null) return {text: `余额 ${formatBalanceAmount(state.remaining, state.unit)}`, title, tone: state.remaining <= 0 ? 'fail' : 'ok'};
   return {text: total || '余额 —', title, tone: 'ok'};
 }
 function providerBalanceLineHtml(provider) {
   const view = providerBalanceView(provider);
   return `<span class="api-provider-list-balance ${view.tone}" data-provider-balance="${esc(provider.id)}" title="${esc(view.title)}">${esc(view.text)}</span>`;
 }
-function providerBalanceState(providerId) {
-  return providerBalances.get(providerId) || null;
-}
-// Paints the settings row and tells the top-bar balance chip (app shell) to repaint too.
+function providerBalanceState(id) { return providerBalances.get(id) || null; }
 function paintProviderBalance(provider) {
   const line = $('apiProviderList')?.querySelector(`[data-provider-balance="${CSS.escape(provider.id)}"]`);
   if (line) line.outerHTML = providerBalanceLineHtml(provider);
   onBalanceDisplayChange?.();
 }
-// One lookup per provider at a time. A forced refresh that arrives while a plain one is in
-// flight runs after it, so callers that need a fresh number (spend tracking) always get one.
-// quiet keeps the last amount on screen instead of switching to 查询中 while it refreshes.
-const providerBalanceInflight = new Map();
 function refreshProviderBalance(provider, {force = false, quiet = false} = {}) {
-  if (!providerBalanceQueryable(provider) || !window.secretBridge?.getProviderBalance) return Promise.resolve(null);
+  if (!providerBalanceQueryable(provider) || !secretBridge()?.getProviderBalance) return Promise.resolve(null);
   const inflight = providerBalanceInflight.get(provider.id);
-  if (inflight) return force && !inflight.force ? inflight.promise.then(() => refreshProviderBalance(provider, {force, quiet})) : inflight.promise;
-  const previous = providerBalances.get(provider.id);
-  if (!(quiet && previous?.status === 'ok')) {
+  if (inflight) return force && !inflight.force
+    ? inflight.promise.then(() => refreshProviderBalance(provider, {force, quiet}))
+    : inflight.promise;
+  if (!(quiet && providerBalances.get(provider.id)?.status === 'ok')) {
     providerBalances.set(provider.id, {status: 'loading'});
     paintProviderBalance(provider);
   }
   const promise = (async () => {
     let result;
     try {
-      result = await window.secretBridge.getProviderBalance({providerId: provider.id, apiUrl: provider.apiUrl, useGlobalKey: provider.useGlobalKey === true, force});
+      result = await secretBridge().getProviderBalance({
+        providerId: provider.id, apiUrl: provider.apiUrl,
+        useGlobalKey: provider.useGlobalKey === true, keyId: provider.activeKeyId || '', force
+      });
     } catch {
-      result = null;
+      result = {status: 'error', reason: '查询异常'};
     }
-    result = result || {status: 'error', reason: '查询异常'};
-    providerBalances.set(provider.id, result);
+    providerBalances.set(provider.id, result || {status: 'error', reason: '查询异常'});
     providerBalanceInflight.delete(provider.id);
     const current = host.apiProviders.find(item => item.id === provider.id);
     if (current) paintProviderBalance(current);
-    return result;
+    return providerBalances.get(provider.id);
   })();
   providerBalanceInflight.set(provider.id, {promise, force});
   return promise;
 }
 function refreshProviderBalances({force = false} = {}) {
-  ensureApiProviders();
   return Promise.all(host.apiProviders.map(provider => refreshProviderBalance(provider, {force})));
 }
 async function hydrateProviderKeyInputs() {
@@ -528,20 +564,104 @@ async function hydrateProviderKeyInputs() {
     const card = list.querySelector(`[data-provider-id="${CSS.escape(provider.id)}"]`);
     if (!card || !provider.apiKeySaved) continue;
     const input = card.querySelector('[data-provider-key-input]');
+    const entries = await window.secretBridge.listProviderApiKeys?.(provider.id) || [];
+    provider.keyPool = entries.map(providerKeyMeta);
+    if (!provider.activeKeyId || !provider.keyPool.some(item => item.id === provider.activeKeyId)) provider.activeKeyId = provider.keyPool[0]?.id || '';
+    const healthBox = card.querySelector('[data-provider-key-health]');
+    if (healthBox) healthBox.innerHTML = providerKeyHealthHtml(provider);
     if (!input || document.activeElement === input) continue;
-    const value = providerKeyCache.has(provider.id)
-      ? providerKeyCache.get(provider.id)
-      : await window.secretBridge.getProviderApiKey(provider.id);
-    providerKeyCache.set(provider.id, value || '');
+    const cacheKey = provider.id + ':' + (provider.activeKeyId || '');
+    const value = providerKeyCache.has(cacheKey)
+      ? providerKeyCache.get(cacheKey)
+      : await window.secretBridge.getProviderApiKeyForKey?.(provider.id, provider.activeKeyId) || await window.secretBridge.getProviderApiKey(provider.id);
+    providerKeyCache.set(cacheKey, value || '');
     input.value = value || '';
   }
 }
-function providerKeyUnavailableMessage(provider) {
+function providerKeyMeta(item = {}) {
+  return {
+    id: item.id,
+    label: item.label,
+    scope: item.scope || 'all',
+    masked: item.masked || '',
+    lastUsedAt: Number(item.lastUsedAt || 0),
+    failureCount: Number(item.failureCount || 0),
+    cooldownUntil: Number(item.cooldownUntil || 0),
+    lastError: item.lastError || '',
+    health: item.health || 'unknown'
+  };
+}
+function providerKeyStatusText(item = {}) {
+  if (item.health === 'blocked') return '已停用';
+  const remaining = Math.max(0, Number(item.cooldownUntil || 0) - Date.now());
+  if (remaining > 0) return `冷却 ${Math.max(1, Math.ceil(remaining / 1000))} 秒`;
+  if (item.health === 'ok') return '正常';
+  return item.failureCount ? `失败 ${item.failureCount} 次` : '未检测';
+}
+function providerAvailabilityHtml(provider) {
+  const available = provider.availableModels;
+  if (!available?.checkedAt) return '';
+  const groups = ['chat', 'image', 'video'];
+  const labels = {chat: '聊天', image: '图片', video: '视频'};
+  const rows = groups.map(kind => {
+    const models = Array.isArray(available[kind]) ? available[kind] : [];
+    return `<div class="provider-availability-row"><strong>${labels[kind]} ${models.length}</strong><span>${models.length
+      ? models.slice(0, 16).map(model => `<em title="${esc(model)}">${esc(model)}</em>`).join('')
+      : '未识别到模型'}</span></div>`;
+  }).join('');
+  return `<section class="provider-availability"><header><strong>接口模型列表</strong><small>检测于 ${esc(new Date(available.checkedAt).toLocaleString('zh-CN'))} · 列出不代表已开通生成权限</small></header>${rows}</section>`;
+}
+function providerKeyUnavailableMessage(provider, capability = 'all') {
   if (!provider) return '当前 API 配置不存在，请重新打开设置。';
   if (provider.useGlobalKey) return '当前配置使用全局 Key，但全局 Key 为空。请填写全局 API Key。';
-  if (!provider.apiKeySaved) return 'API 地址已填写，但还没有保存 Key。请粘贴 Key 后点击“保存并自动配置”。';
-  if (provider.imageCapabilityStatus === 'blocked') return '已保存 Key，但该 Key 所属账户组未开通图片生成。请在中转站开通图片权限，或换一把已开通的 Key。';
-  return '已保存 Key，但程序无法读取。请重新粘贴 Key 后点击“保存并自动配置”。';
+  const keys = Array.isArray(provider.keyPool) ? provider.keyPool : [];
+  if (!keys.length) return 'API 地址已填写，但还没有保存独立 Key。请粘贴 Key 后点击“保存 Key”。';
+  const scoped = keys.filter(item => item.scope === 'all' || capability === 'all' || item.scope === capability);
+  if (!scoped.length) {
+    const label = capability === 'chat' ? '文本' : capability === 'image' ? '图片' : capability === 'video' ? '视频' : '当前用途';
+    return `已保存 Key，但没有可用于${label}的 Key。请调整 Key 用途或添加对应 Key。`;
+  }
+  const capabilityBlocked = capability === 'image'
+    ? scoped.filter(item => provider.imageCapabilityByKey?.[item.id]?.status === 'blocked')
+    : [];
+  if (capabilityBlocked.length === scoped.length) {
+    return '已保存图片 Key，但这些 Key 所属账户组都未开通图片生成。请在中转站开通图片权限，或添加另一把已开通图片能力的 Key。';
+  }
+  const blocked = scoped.filter(item => item.health === 'blocked');
+  if (blocked.length === scoped.length) {
+    const lastError = blocked.find(item => item.lastError)?.lastError || '';
+    return `当前用途的 Key 已停用${lastError ? `：${lastError}` : ''}。请粘贴新的 Key，软件会自动加入这个供应商的 Key 池。`;
+  }
+  const now = Date.now();
+  const cooling = scoped.filter(item => Number(item.cooldownUntil || 0) > now);
+  if (cooling.length === scoped.length) {
+    const seconds = Math.max(1, Math.ceil((Math.min(...cooling.map(item => Number(item.cooldownUntil || 0))) - now) / 1000));
+    return `当前 Key 池正在冷却，请等待约 ${seconds} 秒后重试，软件会自动恢复可用 Key。`;
+  }
+  return '已保存 Key，但程序无法读取可用密钥。请重新点击“保存密钥”后再测试。';
+}
+function providerKeyScopeLabel(scope = 'all') {
+  return scope === 'chat' ? '文本' : scope === 'image' ? '图片' : scope === 'video' ? '视频' : '全部';
+}
+function providerQuickKeyPoolHtml(provider) {
+  if (provider.useGlobalKey) return '<div class="api-provider-key-summary"><i class="fa-solid fa-key"></i> 当前复用全局 Key</div>';
+  const keys = provider.keyPool || [];
+  if (!keys.length) return '';
+  return `<details class="api-provider-wide api-provider-key-pool">
+    <summary><i class="fa-solid fa-layer-group"></i> ${keys.length} 把 Key 已保存 <span>自动分配</span></summary>
+    <div class="provider-quick-key-items">${keys.map(item => `<span class="${esc(item.health || 'unknown')}"><b>${esc(item.label || 'Key')}</b><small>${esc(providerKeyScopeLabel(item.scope))} · ${esc(item.masked || '已安全保存')}</small></span>`).join('')}</div>
+  </details>`;
+}
+function providerKeyHealthHtml(provider) {
+  const keys = provider.keyPool || [];
+  const keyRunningTotal = keys.reduce((sum, item) => sum + providerKeyRunningCount(provider, item.id), 0);
+  const running = Math.max(Number(host.providerRunningCounts?.get?.(provider.id) || 0), keyRunningTotal);
+  if (!keys.length) return `<div class="provider-key-health-empty">尚未保存独立 Key · 当前请求 ${running}</div>`;
+  return `<div class="provider-key-health-summary">当前请求 ${running} · 软件不设并发上限</div><div class="provider-key-health-list">${keys.map(item => {
+    const lastError = item.lastError ? ` · 最近错误：${item.lastError}` : '';
+    const keyRunning = providerKeyRunningCount(provider, item.id);
+    return `<div class="provider-key-health-row ${esc(item.health || 'unknown')}" title="${esc(lastError.replace(/^ · /, '') || '暂无最近错误')}"><span><strong>${esc(item.label || 'Key')}</strong><small>${esc(item.masked || '已安全保存')} · ${esc(item.scope || 'all')} · 并发 ${keyRunning}${lastError}</small></span><em>${esc(providerKeyStatusText(item))}</em></div>`;
+  }).join('')}</div>`;
 }
 function providerSetupResultHtml(provider = {}) {
   const status = provider.setupStatus || 'idle';
@@ -565,122 +685,9 @@ function providerModelDatalistHtml(provider, kind) {
 }
 function providerModelSelectOptionsHtml(provider, kind) {
   const active = provider?.[modelFieldForKind(kind)] || '';
-  const models = unique([active, ...(provider?.availableModels?.[kind] || []), ...providerModelsForKind(provider, kind)].filter(Boolean));
-  const available = models.filter(model => ModelAvailability.isAvailableModel(provider, kind, model));
-  const ordered = [...available, ...models.filter(model => !available.includes(model))];
+  const models = unique([active, ...providerModelsForKind(provider, kind)].filter(Boolean));
   return `<option value="" ${active ? '' : 'selected'}>选择模型，或在下方手动添加</option>`
-    + ordered.map(model => {
-      const ok = available.includes(model);
-      return `<option value="${esc(model)}" ${ok ? 'class="model-option-available"' : ''} ${model === active ? 'selected' : ''}>${ok ? '✓ ' : ''}${esc(model)}${ok ? ' · 可用' : ''}</option>`;
-    }).join('');
-}
-function formatCheckedAt(time) {
-  const date = new Date(time);
-  const pad = value => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-function providerAvailabilityHtml(provider) {
-  const record = provider?.availableModels;
-  if (!record?.checkedAt) return '';
-  const chips = ['chat', 'image', 'video'].flatMap(kind => (record[kind] || []).map(model => `<span class="provider-available-chip ${kind}"><em>${ModelAvailability.KIND_TAGS[kind]}</em>${esc(model)}</span>`));
-  const body = chips.length ? chips.join('') : '<span class="provider-model-empty">未发现对话、生图或视频模型</span>';
-  return `<div class="provider-availability" data-provider-availability>
-    <header><strong>可用模型</strong><small>检测于 ${esc(formatCheckedAt(record.checkedAt))} · 对话 ${(record.chat || []).length} · 生图 ${(record.image || []).length} · 视频 ${(record.video || []).length}</small></header>
-    <div>${body}</div>
-  </div>`;
-}
-function imageModelsForProvider(provider) {
-  return unique([provider?.imageModel, ...providerModelsForKind(provider, 'image')].filter(Boolean));
-}
-function currentImageFallbackChain() {
-  return ModelAvailability.imageFallbackChain(host.apiProviders, host.imageFallback, imageModelsForProvider, host.globalModelProviders?.image || '');
-}
-function imageFallbackRouteLabel(route) {
-  return `${route.model} · ${route.providerName}`;
-}
-function imageFallbackSettingsHtml() {
-  const fallback = host.imageFallback;
-  const chain = currentImageFallbackChain();
-  const editing = !!host.imageFallbackEditing;
-  const enabled = ModelAvailability.fallbackEnabled(fallback);
-  const chainKeys = new Set([chain.primary?.key, ...chain.backups.map(route => route.key)]);
-  const seenModels = new Set();
-  const addable = chain.routes.filter(route => !chainKeys.has(route.key)).filter(route => {
-    const id = `${route.providerId}::${route.model}`.toLowerCase();
-    return !seenModels.has(id) && seenModels.add(id);
-  });
-  const rows = chain.backups.map((route, index) => `<li data-image-fallback-key="${esc(route.key)}">
-      <span class="image-fallback-rank">${index + 1}</span>
-      <span class="image-fallback-name" title="${esc(imageFallbackRouteLabel(route))}"><strong>${esc(route.model)}</strong><small>· ${esc(route.providerName)}</small></span>
-      <button type="button" class="icon-btn" data-image-fallback-move="-1" title="上移" aria-label="上移" ${index === 0 ? 'disabled' : ''}><i class="fa-solid fa-arrow-up"></i></button>
-      <button type="button" class="icon-btn" data-image-fallback-move="1" title="下移" aria-label="下移" ${index === chain.backups.length - 1 ? 'disabled' : ''}><i class="fa-solid fa-arrow-down"></i></button>
-      <button type="button" class="icon-btn image-fallback-remove" data-image-fallback-remove title="移除" aria-label="移除"><i class="fa-solid fa-xmark"></i></button>
-    </li>`).join('');
-  const editor = editing ? `<div class="image-fallback-editor">
-      <div class="image-fallback-primary"><em>默认</em><strong>${esc(chain.primary?.model || '未设置')}</strong>${chain.primary ? `<small>· ${esc(chain.primary.providerName)}</small>` : ''}</div>
-      <ol>${rows || '<li class="image-fallback-empty">没有备用模型，默认模型不可用时会直接报错。</li>'}</ol>
-      <div class="image-fallback-add">
-        <select data-image-fallback-add-select ${addable.length ? '' : 'disabled'}>
-          ${addable.length ? addable.map(route => `<option value="${esc(route.key)}">${esc(imageFallbackRouteLabel(route))}${route.confirmed ? ' ✓' : ''}</option>`).join('') : '<option value="">没有更多可添加的模型</option>'}
-        </select>
-        <button type="button" class="ghost-btn" data-image-fallback-add ${addable.length ? '' : 'disabled'}><i class="fa-solid fa-plus"></i> 添加</button>
-        ${chain.customized ? '<button type="button" class="ghost-btn" data-image-fallback-reset title="恢复为自动选择的 2 个备用">恢复自动</button>' : ''}
-      </div>
-    </div>` : '';
-  return `<section class="image-fallback-settings${editing ? ' editing' : ''}" data-image-fallback-settings>
-    <header>
-      <label><input type="checkbox" data-image-fallback-toggle ${enabled ? 'checked' : ''}> 生图模型不可用时自动切换</label>
-      <div class="image-fallback-summary">
-        <span data-image-fallback-summary title="遇到 404 / 503 / 不支持该模型时依次尝试">${esc(ModelAvailability.chainSummary(chain))}${chain.customized ? '' : '<em>自动</em>'}</span>
-        <button type="button" class="ghost-btn" data-image-fallback-edit aria-expanded="${editing}">${editing ? '完成' : '编辑'}</button>
-      </div>
-    </header>
-    ${editor}
-  </section>`;
-}
-function setImageFallbackChain(keys) {
-  host.imageFallback = {...ModelAvailability.normalizeFallbackSettings(host.imageFallback), customized: true, chain: [...new Set(keys.filter(Boolean))]};
-  saveSettings();
-  renderApiProviders();
-}
-function moveImageFallbackRoute(key, delta) {
-  const keys = currentImageFallbackChain().backups.map(route => route.key);
-  setImageFallbackChain(ModelAvailability.moveRoute(keys, key, delta));
-}
-function removeImageFallbackRoute(key) {
-  setImageFallbackChain(currentImageFallbackChain().backups.map(route => route.key).filter(item => item !== key));
-}
-function addImageFallbackRoute(key) {
-  if (!key) return;
-  setImageFallbackChain([...currentImageFallbackChain().backups.map(route => route.key), key]);
-}
-function resetImageFallbackChain() {
-  host.imageFallback = {...ModelAvailability.normalizeFallbackSettings(host.imageFallback), customized: false, chain: []};
-  saveSettings();
-  renderApiProviders();
-}
-async function detectAvailableModelsForCard(card) {
-  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
-  if (!provider) return;
-  syncApiProviderCardFields(card, provider);
-  await saveTypedProviderKeyIfNeeded(card);
-  const apiKey = await providerApiKey(provider);
-  if (!provider.apiUrl) return toast('请先填写 API 地址', 'warn');
-  if (!apiKey) return toast(providerKeyUnavailableMessage(provider), 'warn');
-  try {
-    assertUsableApiBaseAddress(provider.apiUrl);
-    const {res} = await fetchApiWithBaseFallback(provider.apiUrl, '/models', {timeoutMs: API_TIMEOUTS.text, retries: 0, headers: {Authorization: 'Bearer ' + apiKey}});
-    const data = await safeJson(res);
-    if (!res.ok) throw new Error(data.error?.message || data.message || `HTTP ${res.status}`);
-    const ids = extractModelRecords(data).map(record => record.id);
-    provider.availableModels = ModelAvailability.availabilityRecord(ids, classifyModelKind);
-    saveSettings();
-    renderApiProviders();
-    renderModels();
-    toast(`检测完成：对话 ${provider.availableModels.chat.length} 个，生图 ${provider.availableModels.image.length} 个，视频 ${provider.availableModels.video.length} 个`, 'success');
-  } catch (err) {
-    toast('检测可用模型失败：' + (err?.message || err), 'error');
-  }
+    + models.map(model => `<option value="${esc(model)}" ${model === active ? 'selected' : ''}>${esc(model)}</option>`).join('');
 }
 function providerModelGroupHtml(provider, kind) {
   const models = modelsForKind(provider?.models || [], kind);
@@ -707,14 +714,145 @@ function providerModelLibraryHtml(provider) {
   </div>
   <div class="provider-model-manual"><input data-provider-manual-model placeholder="手动添加或粘贴模型 ID"><button type="button" class="ghost-btn" data-provider-add-model>添加到模型库</button></div>`;
 }
+function providerCapabilityEditorHtml(provider, kind) {
+  if (!ModelCapabilities) return '';
+  const modelId = String(kind === 'video' ? provider.videoModel : provider.imageModel || '').trim();
+  if (!modelId) return '<p class="provider-note">选择模型后可以维护该模型的能力、价格和停用信息。</p>';
+  const profile = ModelCapabilities.resolveProfile({provider, modelId, kind});
+  const custom = profile.source?.kind === 'provider-custom';
+  const operations = kind === 'image'
+    ? [['generate', '生成'], ['edit', '参考图编辑']]
+    : [['generate', '文生/图生'], ['first-last-frame', '首尾帧'], ['keyframes', '多关键帧'], ['edit', '视频编辑/局部修改'], ['stylize', '视频风格化'], ['extend', '向前/向后延长'], ['loop', '循环视频']];
+  const operationHtml = operations.map(([value, label]) => `<label class="provider-capability-check"><input type="checkbox" data-provider-capability-kind="${kind}" data-provider-capability-field="operation" value="${value}" ${profile.operations.includes(value) ? 'checked' : ''}><span>${label}</span></label>`).join('');
+  const output = kind === 'image' ? profile.outputs.image : profile.outputs.video;
+  const inputConstraintFields = kind === 'image'
+    ? `<label class="api-provider-wide">支持文件类型<input data-provider-capability-kind="image" data-provider-capability-field="imageMimeTypes" value="${esc((profile.inputs?.image?.mimeTypes || []).join(', '))}" placeholder="image/png, image/jpeg, image/webp"></label>
+       <label>单文件上限（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="image" data-provider-capability-field="imageMaxFileSizeMB" value="${esc(profile.inputs?.image?.maxFileSizeMB || 0)}"></label>
+       <label>参考总量上限（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="image" data-provider-capability-field="imageMaxTotalSizeMB" value="${esc(profile.inputs?.image?.maxTotalSizeMB || 0)}"></label>`
+    : `<label class="api-provider-wide">图片参考支持文件类型<input data-provider-capability-kind="video" data-provider-capability-field="imageMimeTypes" value="${esc((profile.inputs?.image?.mimeTypes || []).join(', '))}" placeholder="image/png, image/jpeg"></label>
+       <label>图片单文件上限（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="video" data-provider-capability-field="imageMaxFileSizeMB" value="${esc(profile.inputs?.image?.maxFileSizeMB || 0)}"></label>
+       <label>图片参考总量（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="video" data-provider-capability-field="imageMaxTotalSizeMB" value="${esc(profile.inputs?.image?.maxTotalSizeMB || 0)}"></label>
+       <label class="api-provider-wide">视频参考支持文件类型<input data-provider-capability-kind="video" data-provider-capability-field="videoMimeTypes" value="${esc((profile.inputs?.video?.mimeTypes || []).join(', '))}" placeholder="video/mp4, video/webm"></label>
+       <label>视频单文件上限（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="video" data-provider-capability-field="videoMaxFileSizeMB" value="${esc(profile.inputs?.video?.maxFileSizeMB || 0)}"></label>
+       <label>视频参考总量（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="video" data-provider-capability-field="videoMaxTotalSizeMB" value="${esc(profile.inputs?.video?.maxTotalSizeMB || 0)}"></label>
+       <label class="api-provider-wide">音频参考支持文件类型<input data-provider-capability-kind="video" data-provider-capability-field="audioMimeTypes" value="${esc((profile.inputs?.audio?.mimeTypes || []).join(', '))}" placeholder="audio/mpeg, audio/wav"></label>
+       <label>音频单文件上限（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="video" data-provider-capability-field="audioMaxFileSizeMB" value="${esc(profile.inputs?.audio?.maxFileSizeMB || 0)}"></label>
+       <label>音频参考总量（MB）<input type="number" min="0" step="0.1" data-provider-capability-kind="video" data-provider-capability-field="audioMaxTotalSizeMB" value="${esc(profile.inputs?.audio?.maxTotalSizeMB || 0)}"></label>`;
+  const outputFields = kind === 'image'
+    ? `<label class="api-provider-wide">支持比例<input data-provider-capability-kind="image" data-provider-capability-field="aspects" value="${esc((output?.aspects || []).join(', '))}"><small>例如：1:1, 16:9, 9:16, custom</small></label>
+       <label>支持清晰度<input data-provider-capability-kind="image" data-provider-capability-field="resolutions" value="${esc((output?.resolutions || []).join(', '))}" placeholder="1K, 2K, 4K"></label>`
+    : `<label class="api-provider-wide">支持尺寸<input data-provider-capability-kind="video" data-provider-capability-field="sizes" value="${esc((output?.sizes || []).join(', '))}" placeholder="1280x720, 720x1280"></label>
+       <label>支持时长（秒）<input data-provider-capability-kind="video" data-provider-capability-field="durations" value="${esc((output?.durations || []).join(', '))}" placeholder="5, 10"></label>`;
+  return `<details class="provider-capability-editor">
+    <summary><span>${esc(ModelCapabilities.profileSummary(profile))}</span><small>${custom ? '本地自定义' : '内置/兼容默认'}</small></summary>
+    <div class="provider-capability-body">
+      <div class="provider-capability-operations">${operationHtml}</div>
+      <div class="api-provider-grid">
+        ${outputFields}
+        <label>最多图片参考<input type="number" min="0" max="32" step="1" data-provider-capability-kind="${kind}" data-provider-capability-field="maxReferences" value="${esc(profile.inputs?.image?.maxCount || 0)}"></label>
+        ${kind === 'video' ? `<label>最多视频参考<input type="number" min="0" max="8" step="1" data-provider-capability-kind="video" data-provider-capability-field="maxVideoReferences" value="${esc(profile.inputs?.video?.maxCount || 0)}"></label><label>最多音频参考<input type="number" min="0" max="8" step="1" data-provider-capability-kind="video" data-provider-capability-field="maxAudioReferences" value="${esc(profile.inputs?.audio?.maxCount || 0)}"></label>` : ''}
+        ${inputConstraintFields}
+        <label>计费方式<select data-provider-capability-kind="${kind}" data-provider-capability-field="billingUnit"><option value="${kind === 'image' ? 'image' : 'video-task'}" ${profile.billing?.unit === (kind === 'image' ? 'image' : 'video-task') ? 'selected' : ''}>${kind === 'image' ? '每张图片' : '每次视频任务'}</option>${kind === 'video' ? `<option value="video-second" ${profile.billing?.unit === 'video-second' ? 'selected' : ''}>每秒视频</option>` : ''}</select></label>
+        <label>参考单价<input type="number" min="0" step="0.000001" data-provider-capability-kind="${kind}" data-provider-capability-field="estimatedPrice" value="${profile.billing?.estimatedPrice == null ? '' : esc(profile.billing.estimatedPrice)}" placeholder="留空表示未知"></label>
+        <label>输入素材单价<input type="number" min="0" step="0.000001" data-provider-capability-kind="${kind}" data-provider-capability-field="inputReferencePrice" value="${esc(profile.billing?.inputReferencePrice || 0)}"></label>
+        <label>最低费用<input type="number" min="0" step="0.000001" data-provider-capability-kind="${kind}" data-provider-capability-field="minimumCharge" value="${esc(profile.billing?.minimumCharge || 0)}"></label>
+        <label>价格浮动（±%）<input type="number" min="0" max="100" step="1" data-provider-capability-kind="${kind}" data-provider-capability-field="uncertaintyPercent" value="${esc(profile.billing?.uncertaintyPercent || 0)}"></label>
+        <label class="api-provider-wide">分辨率倍率<input data-provider-capability-kind="${kind}" data-provider-capability-field="resolutionMultipliers" value="${esc(Object.entries(profile.billing?.resolutionMultipliers || {}).map(([key, value]) => `${key}:${value}`).join(', '))}" placeholder="2K:1.5, 4K:2, 1280x720:1"></label>
+        <label>币种<input data-provider-capability-kind="${kind}" data-provider-capability-field="currency" value="${esc(profile.billing?.currency || 'USD')}" maxlength="8"></label>
+        <label>生命周期<select data-provider-capability-kind="${kind}" data-provider-capability-field="lifecycleStatus"><option value="active" ${profile.lifecycle?.status === 'active' ? 'selected' : ''}>正常使用</option><option value="deprecated" ${profile.lifecycle?.status === 'deprecated' ? 'selected' : ''}>即将停用</option><option value="retired" ${profile.lifecycle?.status === 'retired' ? 'selected' : ''}>已经停用</option></select></label>
+        <label>启用日期<input type="date" data-provider-capability-kind="${kind}" data-provider-capability-field="availableFrom" value="${esc(profile.lifecycle?.availableFrom || '')}"></label>
+        <label>开始停用提醒<input type="date" data-provider-capability-kind="${kind}" data-provider-capability-field="deprecatedAt" value="${esc(profile.lifecycle?.deprecatedAt || '')}"></label>
+        <label>正式停用日期<input type="date" data-provider-capability-kind="${kind}" data-provider-capability-field="shutdownAt" value="${esc(profile.lifecycle?.shutdownAt || '')}"></label>
+        <label>替代模型<input data-provider-capability-kind="${kind}" data-provider-capability-field="replacementModelId" value="${esc(profile.lifecycle?.replacementModelId || '')}" placeholder="可选"></label>
+      </div>
+      <div class="provider-capability-actions"><button type="button" class="ghost-btn" data-provider-find-model-usage="${kind}"><i class="fa-solid fa-magnifying-glass"></i> 查找使用位置</button><button type="button" class="ghost-btn" data-provider-migrate-model="${kind}" ${profile.lifecycle?.replacementModelId ? '' : 'disabled'}><i class="fa-solid fa-arrow-right-arrow-left"></i> 迁移到替代模型</button><button type="button" class="ghost-btn" data-provider-reset-capability="${kind}" ${custom ? '' : 'disabled'}>恢复默认档案</button></div>
+    </div>
+  </details>`;
+}
+function splitCapabilityList(value) {
+  return unique(String(value || '').split(/[,，\s]+/).map(item => item.trim()).filter(Boolean));
+}
+function splitCapabilityMap(value) {
+  const output = {};
+  String(value || '').split(/[,，\n]+/).forEach(part => {
+    const [rawKey, rawValue] = part.split(/[:：]/);
+    const key = String(rawKey || '').trim();
+    const number = Number(rawValue);
+    if (key && Number.isFinite(number) && number > 0) output[key] = number;
+  });
+  return output;
+}
+function syncProviderCapabilityEditor(card, provider, kind) {
+  if (!ModelCapabilities || !card || !provider || !['image', 'video'].includes(kind)) return false;
+  const modelId = String(kind === 'video' ? provider.videoModel : provider.imageModel || '').trim();
+  if (!modelId) return false;
+  const read = field => card.querySelector(`[data-provider-capability-kind="${kind}"][data-provider-capability-field="${field}"]`);
+  const previous = provider.modelCapabilityProfiles?.[modelId] || {};
+  const base = ModelCapabilities.resolveProfile({provider: {...provider, modelCapabilityProfiles: {}}, modelId, kind});
+  const operations = [...card.querySelectorAll(`[data-provider-capability-kind="${kind}"][data-provider-capability-field="operation"]:checked`)].map(input => input.value);
+  const maxReferences = Math.max(0, Math.min(32, Number(read('maxReferences')?.value || 0)));
+  const maxVideoReferences = kind === 'video' ? Math.max(0, Math.min(8, Number(read('maxVideoReferences')?.value || 0))) : 0;
+  const maxAudioReferences = kind === 'video' ? Math.max(0, Math.min(8, Number(read('maxAudioReferences')?.value || 0))) : 0;
+  const estimatedPriceText = String(read('estimatedPrice')?.value || '').trim();
+  const inputSpec = (type, maxCount, fallbackRoles) => ({
+    maxCount,
+    roles: previous.inputs?.[type]?.roles || base.inputs?.[type]?.roles || fallbackRoles,
+    mimeTypes: splitCapabilityList(read(`${type}MimeTypes`)?.value),
+    maxFileSizeMB: Math.max(0, Number(read(`${type}MaxFileSizeMB`)?.value || 0)),
+    maxTotalSizeMB: Math.max(0, Number(read(`${type}MaxTotalSizeMB`)?.value || 0))
+  });
+  const output = kind === 'image'
+    ? {image: {
+        aspects: splitCapabilityList(read('aspects')?.value),
+        resolutions: splitCapabilityList(read('resolutions')?.value),
+        nativeSizes: [...(provider.imageAcceptedSizes || [])],
+        allowPostProcessSizing: true
+      }}
+    : {video: {
+        sizes: splitCapabilityList(read('sizes')?.value),
+        durations: splitCapabilityList(read('durations')?.value).map(Number).filter(value => Number.isFinite(value) && value > 0),
+        allowArbitrarySize: false
+      }};
+  provider.modelCapabilityProfiles = provider.modelCapabilityProfiles && typeof provider.modelCapabilityProfiles === 'object' ? provider.modelCapabilityProfiles : {};
+  provider.modelCapabilityProfiles[modelId] = {
+    schemaVersion: ModelCapabilities.SCHEMA_VERSION,
+    profileVersion: Math.max(1, Number(previous.profileVersion || base.profileVersion || 1) + 1),
+    modalities: [kind],
+    operations: operations.length ? operations : ['generate'],
+    inputs: {
+      image: inputSpec('image', maxReferences, ['reference']),
+      video: inputSpec('video', maxVideoReferences, ['source', 'motion', 'reference']),
+      audio: inputSpec('audio', maxAudioReferences, ['audio', 'reference'])
+    },
+    outputs: output,
+    billing: {
+      unit: String(read('billingUnit')?.value || (kind === 'image' ? 'image' : 'video-task')),
+      estimatedPrice: estimatedPriceText === '' ? null : Math.max(0, Number(estimatedPriceText) || 0),
+      inputReferencePrice: Math.max(0, Number(read('inputReferencePrice')?.value || 0)),
+      minimumCharge: Math.max(0, Number(read('minimumCharge')?.value || 0)),
+      uncertaintyPercent: Math.max(0, Math.min(100, Number(read('uncertaintyPercent')?.value || 0))),
+      resolutionMultipliers: splitCapabilityMap(read('resolutionMultipliers')?.value),
+      currency: String(read('currency')?.value || 'USD').trim().toUpperCase().slice(0, 8)
+    },
+    lifecycle: {
+      status: String(read('lifecycleStatus')?.value || 'active'),
+      availableFrom: ModelCapabilities.normalizeLifecycleDate(read('availableFrom')?.value),
+      deprecatedAt: ModelCapabilities.normalizeLifecycleDate(read('deprecatedAt')?.value),
+      shutdownAt: ModelCapabilities.normalizeLifecycleDate(read('shutdownAt')?.value),
+      replacementModelId: String(read('replacementModelId')?.value || '').trim()
+    },
+    source: {kind: 'provider-custom', updatedAt: new Date().toISOString().slice(0, 10)}
+  };
+  return true;
+}
 function apiProviderCardHtml(provider, index = 0) {
-  const meta = providerTypeMeta(provider.type);
-  const capabilities = (meta.capabilities || []).map(item => `<span>${esc(item)}</span>`).join('');
   const healthClass = provider.lastTest?.status === 'ok' ? 'ok' : provider.lastTest?.status === 'warn' ? 'warn' : provider.lastTest?.status === 'fail' ? 'fail' : '';
   const healthText = provider.lastTest?.message || '未测试';
-  const imageCapabilityNote = provider.imageCapabilityStatus === 'blocked'
-    ? `<p class="provider-note api-provider-alert">当前 Key 未开通图片生成：${esc(provider.imageCapabilityMessage || '请在中转站开通图片权限。')}</p>`
-    : provider.imageCapabilityStatus === 'available'
+  const activeKey = (provider.keyPool || []).find(item => item.id === provider.activeKeyId) || provider.keyPool?.[0] || null;
+  const imageCapability = imageCapabilityForKey(provider, activeKey || (provider.useGlobalKey ? {keyId: '__global__'} : null));
+  const imageCapabilityNote = imageCapability?.status === 'blocked'
+    ? `<p class="provider-note api-provider-alert">最近使用的图片 Key 未开通图片生成：${esc(imageCapability.message || '软件会自动尝试 Key 池中的其他 Key。')}</p>`
+    : imageCapability?.status === 'available'
       ? '<p class="provider-note api-provider-success">图片能力已验证，可以开始生图。</p>'
       : '';
   return `
@@ -727,7 +865,7 @@ function apiProviderCardHtml(provider, index = 0) {
             <span>${esc(provider.apiUrl || '还没有填写服务地址')}</span>
             <small data-provider-protocol-status>${esc(providerProtocolStatusText(provider))} · ${provider.apiKeySaved || provider.useGlobalKey ? 'Key 已配置' : '等待配置 Key'}</small>
           </div>
-          <div class="api-provider-key-state ${provider.apiKeySaved ? 'saved' : 'empty'}"><i class="fa-solid fa-${provider.apiKeySaved ? 'shield-check' : 'circle-info'}"></i> ${provider.apiKeySaved ? 'Key 已安全保存，输入框不会回显明文' : '尚未保存 Key'}</div>
+          <div class="api-provider-key-state ${provider.apiKeySaved ? 'saved' : 'empty'}"><i class="fa-solid fa-${provider.apiKeySaved ? 'shield-check' : 'circle-info'}"></i> ${provider.apiKeySaved ? 'Key 已安全保存' : '尚未保存 Key'}</div>
         </div>
         <div class="api-provider-head-actions">
           <em class="provider-health ${healthClass}">${esc(healthText)}</em>
@@ -735,16 +873,16 @@ function apiProviderCardHtml(provider, index = 0) {
         </div>
       </header>
       <div class="api-provider-body api-provider-flow">
-        <div class="provider-capabilities">${capabilities}</div>
         <section class="api-provider-step api-provider-step-connect">
-          <div class="api-provider-step-head"><span class="api-provider-step-number">1</span><div><strong>连接服务</strong><small>填入接口地址和 Key</small></div></div>
+          <div class="api-provider-step-head"><div><strong>连接服务</strong></div></div>
           <div class="api-provider-grid api-provider-connect-grid">
             <label class="api-provider-wide">API 地址<input data-provider-field="apiUrl" value="${esc(provider.apiUrl)}" placeholder="https://api.example.com/v1"></label>
-            <label class="api-provider-wide api-provider-key-input">API Key<input data-provider-key-input type="password" value="" placeholder="${provider.apiKeySaved ? '粘贴新 Key，自动加入当前服务' : '粘贴 API Key'}"><small>保存后用于当前服务的聊天、生图和视频请求。</small></label>
+            <label class="api-provider-wide api-provider-key-input">API Key<input data-provider-key-input type="password" value="" placeholder="${provider.apiKeySaved ? '粘贴新 Key，加入当前服务' : '粘贴 API Key'}"></label>
+            ${providerQuickKeyPoolHtml(provider)}
           </div>
         </section>
         <section class="api-provider-step api-provider-step-model">
-          <div class="api-provider-step-head"><span class="api-provider-step-number">2</span><div><strong>读取模型</strong><small>Key 保存后按需读取模型并选择可用能力</small></div></div>
+          <div class="api-provider-step-head"><div><strong>模型</strong></div></div>
           <div class="api-provider-model-choice">
             <label><span>聊天模型</span><select data-provider-field="chatModel">${providerModelSelectOptionsHtml(provider, 'chat')}</select></label>
             <label><span>图片模型</span><select data-provider-field="imageModel">${providerModelSelectOptionsHtml(provider, 'image')}</select></label>
@@ -754,8 +892,10 @@ function apiProviderCardHtml(provider, index = 0) {
         <section class="api-provider-flow-actions">
           <button class="primary-btn" data-provider-auto-configure type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> 保存并自动配置</button>
           <button class="ghost-btn" data-provider-test-image type="button"><i class="fa-regular fa-image"></i> 测试生图</button>
-          <button class="ghost-btn" data-provider-import-models type="button"><i class="fa-solid fa-cloud-arrow-down"></i> 重新读取模型</button>
-          <button class="ghost-btn" data-provider-detect-models type="button"><i class="fa-solid fa-list-check"></i> 检测可用模型</button>
+          <details class="api-provider-secondary-actions"><summary><i class="fa-solid fa-ellipsis"></i> 更多操作</summary>
+            <button class="ghost-btn" data-provider-import-models type="button"><i class="fa-solid fa-cloud-arrow-down"></i> 重新读取模型</button>
+            <button class="ghost-btn" data-provider-detect-models type="button"><i class="fa-solid fa-list-check"></i> 检测模型列表</button>
+          </details>
         </section>
         ${providerAvailabilityHtml(provider)}
         ${imageCapabilityNote}
@@ -778,7 +918,7 @@ function addApiProvider() {
   host.apiProviderUiSelectedId = id;
   saveSettings();
   renderApiProviders();
-  refreshNodeModelSelects();
+  refreshNodeProviderSelects();
 }
 function syncApiProviderCardFields(card, provider) {
   if (!card || !provider) return provider;
@@ -786,7 +926,24 @@ function syncApiProviderCardFields(card, provider) {
   card.querySelectorAll('[data-provider-field]').forEach(input => {
     const field = input.dataset.providerField;
     if (!field) return;
-    provider[field] = input.value;
+    if (field === 'type') {
+      if (input.value === '__auto__') {
+        provider.protocolMode = 'auto';
+        provider.protocolMessage = '';
+      } else {
+        provider.type = input.value;
+        provider.protocolMode = 'manual';
+        provider.detectedProtocol = input.value;
+        provider.protocolConfidence = 'manual';
+        provider.protocolMessage = '已手动指定接口协议';
+      }
+      return;
+    }
+    provider[field] = field === 'useGlobalKey'
+      ? input.value !== 'false'
+      : field === 'imageAcceptedSizes'
+        ? unique(String(input.value || '').split(/[,，\s]+/).map(size => size.trim()).filter(size => /^\d+x\d+$/i.test(size)))
+        : input.value;
   });
   provider.apiUrl = String(provider.apiUrl || '').trim().replace(/\/$/, '');
   provider.concurrency = Math.max(1, Math.min(4, Number(provider.concurrency || 1)));
@@ -794,18 +951,14 @@ function syncApiProviderCardFields(card, provider) {
   if (imageRouteBefore !== imageRouteAfter) {
     provider.imageCapabilityStatus = 'unknown';
     provider.imageCapabilityMessage = '';
+    provider.imageCapabilityKeyId = '';
+    provider.imageCapabilityByKey = {};
   }
   return provider;
 }
 function handleApiProviderInput(e) {
-  // The fallback section sits outside any provider card, so handle it before the card lookup.
-  if (e.target?.matches?.('[data-image-fallback-toggle]')) {
-    if (e.type !== 'change') return;
-    host.imageFallback = {...ModelAvailability.normalizeFallbackSettings(host.imageFallback), enabled: e.target.checked};
-    saveSettings();
-    return;
-  }
   const field = e.target?.dataset?.providerField;
+  const capabilityKind = e.target?.dataset?.providerCapabilityKind;
   const card = e.target?.closest?.('[data-provider-id]');
   if (!card) return;
   const provider = host.apiProviders.find(item => item.id === card.dataset.providerId);
@@ -819,34 +972,100 @@ function handleApiProviderInput(e) {
     saveSettings();
     return;
   }
+  if (capabilityKind) {
+    if (!syncProviderCapabilityEditor(card, provider, capabilityKind)) return;
+    saveSettings();
+    refreshNodeModelSelects();
+    const profile = ModelCapabilities.resolveProfile({
+      provider,
+      modelId: capabilityKind === 'video' ? provider.videoModel : provider.imageModel,
+      kind: capabilityKind
+    });
+    const editor = e.target.closest('.provider-capability-editor');
+    const summary = editor?.querySelector('summary span');
+    const source = editor?.querySelector('summary small');
+    if (summary) summary.textContent = ModelCapabilities.profileSummary(profile);
+    if (source) source.textContent = '本地自定义';
+    const reset = editor?.querySelector('[data-provider-reset-capability]');
+    if (reset) reset.disabled = false;
+    return;
+  }
   if (!field) return;
-  provider[field] = e.target.value;
-  if (['apiUrl', 'imageModel'].includes(field)) {
+  if (field === 'type') {
+    if (e.target.value === '__auto__') {
+      provider.protocolMode = 'auto';
+      provider.protocolMessage = '';
+    } else {
+      provider.type = e.target.value;
+      provider.protocolMode = 'manual';
+      provider.detectedProtocol = e.target.value;
+      provider.protocolConfidence = 'manual';
+      provider.protocolMessage = '已手动指定接口协议';
+    }
+  } else {
+    provider[field] = field === 'useGlobalKey' ? e.target.value !== 'false' : e.target.value;
+  }
+  if (field === 'name') {
+    const title = card.querySelector('[data-provider-title]');
+    if (title) title.textContent = provider.name || providerTypeLabel(provider.type);
+    saveSettings();
+    if (e.type === 'change') {
+      renderModels();
+      refreshNodeProviderSelects();
+      syncGlobalModelInputs();
+    }
+    return;
+  }
+  if (field === 'type') {
+    if (provider.protocolMode === 'auto') {
+      provider.lastTest = {status: '', message: '', checkedAt: 0};
+      saveSettings();
+      renderApiProviders();
+      return;
+    }
+    if (!provider.name) provider.name = providerTypeLabel(provider.type);
+    provider.chatEndpoint = defaultEndpointForProvider(provider.type, 'chat');
+    provider.imageEndpoint = defaultEndpointForProvider(provider.type, 'image');
+    provider.editEndpoint = defaultEndpointForProvider(provider.type, 'edit');
+    provider.videoEndpoint = defaultEndpointForProvider(provider.type, 'video');
+    provider.videoQueryEndpoint = defaultEndpointForProvider(provider.type, 'videoQuery');
+    provider.enabledText = providerSupports(provider, 'text');
+    provider.enabledImage = providerSupports(provider, 'image');
+    provider.enabledVideo = providerSupports(provider, 'video');
+    provider.lastTest = {status: '', message: '', checkedAt: 0};
+  }
+  if (['apiUrl', 'type', 'imageModel', 'imageEndpoint', 'imageRequestFormat'].includes(field)) {
     provider.imageCapabilityStatus = 'unknown';
     provider.imageCapabilityMessage = '';
+    provider.imageCapabilityKeyId = '';
+    provider.imageCapabilityByKey = {};
   }
-  if (field === 'apiUrl') {
+  if (['apiUrl', 'chatEndpoint', 'imageEndpoint', 'editEndpoint', 'videoEndpoint', 'videoQueryEndpoint'].includes(field)) {
     provider.lastTest = {status: '', message: '', checkedAt: 0};
   }
   saveSettings();
   renderModels();
-  refreshNodeModelSelects();
+  refreshNodeProviderSelects();
+  if (field === 'type') renderApiProviders();
   // API configuration is explicit: typing or blurring a field never starts a
   // network request. Use “读取模型” when the address and saved Key are ready.
 }
 
-async function renameApiProvider(id) {
-  const provider = host.apiProviders.find(item => item.id === id);
-  if (!provider) return;
-  const current = provider.name || providerTypeLabel(provider.type);
-  const next = await openModal?.({title: '重命名服务', value: current, okText: '保存'});
-  const name = typeof next === 'string' ? next.trim() : '';
-  if (!name || name === current) return;
-  provider.name = name.slice(0, 60);
-  saveSettings();
-  renderApiProviders();
-  refreshNodeModelSelects();
-  toast('服务已重命名', 'success');
+const providerAutoConfigureTimers = new Map();
+function scheduleProviderAutoConfigure(card) {
+  const providerId = String(card?.dataset?.providerId || '');
+  if (!providerId) return;
+  clearTimeout(providerAutoConfigureTimers.get(providerId));
+  const timer = setTimeout(async () => {
+    providerAutoConfigureTimers.delete(providerId);
+    const provider = host.apiProviders.find(item => item.id === providerId);
+    const currentCard = document.querySelector(`[data-provider-id="${CSS.escape(providerId)}"]`);
+    if (!provider || !currentCard || !String(provider.apiUrl || '').trim()) return;
+    const typedKey = currentCard.querySelector('[data-provider-key-input]')?.value?.trim() || '';
+    if (!typedKey && !provider.apiKeySaved && !(provider.keyPool || []).length && !provider.useGlobalKey) return;
+    await autoConfigureProviderFromCard(currentCard, null);
+  }, 450);
+  providerAutoConfigureTimers.set(providerId, timer);
 }
 function handleApiProviderClick(e) {
   const balanceRefresh = e.target.closest('[data-provider-balance-refresh]');
@@ -856,11 +1075,20 @@ function handleApiProviderClick(e) {
     const provider = host.apiProviders.find(item => item.id === balanceRefresh.dataset.providerBalanceRefresh);
     return provider && refreshProviderBalance(provider, {force: true});
   }
-  const renameProvider = e.target.closest('[data-provider-rename]');
-  if (renameProvider) {
+  const rename = e.target.closest('[data-provider-rename]');
+  if (rename) {
     e.preventDefault();
     e.stopPropagation();
-    return renameApiProvider(renameProvider.dataset.providerRename);
+    const provider = host.apiProviders.find(item => item.id === rename.dataset.providerRename);
+    if (!provider) return;
+    return Promise.resolve(openModal?.({title: '重命名服务', value: provider.name, okText: '保存'})).then(value => {
+      const name = typeof value === 'string' ? value.trim().slice(0, 60) : '';
+      if (!name || name === provider.name) return;
+      provider.name = name;
+      saveSettings();
+      renderApiProviders();
+      refreshNodeModelSelects();
+    });
   }
   const selectProvider = e.target.closest('[data-provider-select]');
   if (selectProvider) {
@@ -868,29 +1096,84 @@ function handleApiProviderClick(e) {
     renderApiProviders();
     return;
   }
-  const moveFallback = e.target.closest('[data-image-fallback-move]');
-  if (moveFallback) return moveImageFallbackRoute(moveFallback.closest('[data-image-fallback-key]')?.dataset.imageFallbackKey, Number(moveFallback.dataset.imageFallbackMove));
-  const removeFallback = e.target.closest('[data-image-fallback-remove]');
-  if (removeFallback) return removeImageFallbackRoute(removeFallback.closest('[data-image-fallback-key]')?.dataset.imageFallbackKey);
-  if (e.target.closest('[data-image-fallback-edit]')) {
-    host.imageFallbackEditing = !host.imageFallbackEditing;
-    return renderApiProviders();
-  }
-  if (e.target.closest('[data-image-fallback-add]')) {
-    return addImageFallbackRoute(e.target.closest('[data-image-fallback-settings]')?.querySelector('[data-image-fallback-add-select]')?.value);
-  }
-  if (e.target.closest('[data-image-fallback-reset]')) return resetImageFallbackChain();
   const actionCard = e.target.closest('[data-provider-id]');
-  const detectButton = e.target.closest('[data-provider-detect-models]');
-  if (detectButton) {
-    detectButton.disabled = true;
+  const detectModels = e.target.closest('[data-provider-detect-models]');
+  if (detectModels) {
+    detectModels.disabled = true;
     return detectAvailableModelsForCard(actionCard).finally(() => {
-      if (detectButton.isConnected) detectButton.disabled = false;
+      if (detectModels.isConnected) detectModels.disabled = false;
     });
   }
+  const findUsage = e.target.closest('[data-provider-find-model-usage]');
+  const migrateModel = e.target.closest('[data-provider-migrate-model]');
+  if (findUsage || migrateModel) {
+    const provider = host.apiProviders.find(item => item.id === actionCard?.dataset.providerId);
+    const kind = (findUsage || migrateModel).dataset.providerFindModelUsage || (findUsage || migrateModel).dataset.providerMigrateModel;
+    const modelId = kind === 'video' ? provider?.videoModel : provider?.imageModel;
+    if (!provider || !modelId || !ModelCapabilities) return;
+    saveProject?.();
+    const usages = ModelCapabilities.scanModelUsage(host.projects, {modelId, providerId: provider.id});
+    if (findUsage) {
+      const projects = new Set(usages.map(item => item.projectId));
+      return toast(usages.length ? `${modelId} 在 ${projects.size} 个项目的 ${usages.length} 个节点中使用` : `${modelId} 当前没有被项目节点使用`, usages.length ? 'warn' : 'success');
+    }
+    const profile = ModelCapabilities.resolveProfile({provider, modelId, kind});
+    const replacement = String(profile.lifecycle?.replacementModelId || '').trim();
+    if (!replacement) return toast('请先填写替代模型', 'warn');
+    return openModal?.({
+      title: '批量迁移模型',
+      text: usages.length ? `将在 ${new Set(usages.map(item => item.projectId)).size} 个项目中，把 ${usages.length} 个“${modelId}”节点迁移为“${replacement}”。每个受影响项目都会保留迁移前恢复点。` : `当前项目库中没有使用“${modelId}”的节点。`,
+      okText: usages.length ? '保留恢复点并迁移' : '知道了',
+      cancelText: '取消',
+      confirm: Boolean(usages.length)
+    }).then(confirmed => {
+      if (!confirmed || !usages.length) return;
+      const result = ModelCapabilities.migrateModelUsage(host.projects, {fromModelId: modelId, toModelId: replacement, providerId: provider.id});
+      host.projects = result.projects;
+      saveProjects?.();
+      loadProject?.(host.currentProjectId, {preserveHistory: true});
+      toast(`模型迁移完成：${result.changes.length} 个节点，可在项目恢复点中撤销`, 'success');
+    });
+  }
+  const resetCapability = e.target.closest('[data-provider-reset-capability]');
+  if (resetCapability) {
+    const provider = host.apiProviders.find(item => item.id === actionCard?.dataset.providerId);
+    const kind = resetCapability.dataset.providerResetCapability;
+    const modelId = kind === 'video' ? provider?.videoModel : provider?.imageModel;
+    if (!provider || !modelId || !provider.modelCapabilityProfiles?.[modelId]) return;
+    delete provider.modelCapabilityProfiles[modelId];
+    saveSettings();
+    renderApiProviders();
+    refreshNodeModelSelects();
+    return toast(`已恢复 ${modelId} 的默认能力档案`, 'success');
+  }
   if (e.target.closest('[data-provider-toggle]')) return toggleApiProviderCollapsed(actionCard);
+  if (e.target.closest('[data-provider-enable-key-pool]')) {
+    const provider = host.apiProviders.find(item => item.id === actionCard?.dataset.providerId);
+    if (!provider) return;
+    provider.keyRotationMode = 'round-robin';
+    saveSettings();
+    renderApiProviders();
+    return toast(`${provider.name} 的 ${provider.keyPool?.length || 0} 把 Key 已全部加入自动分配`, 'success');
+  }
   if (e.target.closest('[data-provider-auto-configure]')) return autoConfigureProviderFromCard(actionCard, e.target.closest('[data-provider-auto-configure]'));
+  if (e.target.closest('[data-provider-add-key]')) return prepareProviderKeyAddition(actionCard);
+  const saveKeyButton = e.target.closest('[data-provider-save-key]');
+  if (saveKeyButton) {
+    saveKeyButton.disabled = true;
+    saveKeyButton.dataset.originalLabel = saveKeyButton.dataset.originalLabel || saveKeyButton.textContent.trim();
+    saveKeyButton.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> 保存中';
+    return saveProviderKeyFromCard(actionCard).finally(() => {
+      if (!saveKeyButton.isConnected) return;
+      saveKeyButton.disabled = false;
+      saveKeyButton.innerHTML = `<i class="fa-solid fa-key"></i> ${saveKeyButton.dataset.originalLabel || '保存 Key'}`;
+    });
+  }
+  if (e.target.closest('[data-provider-remove-key]')) return removeProviderKeyFromCard(actionCard);
+  if (e.target.closest('[data-provider-test]')) return testApiProviderFromCard(actionCard);
+  if (e.target.closest('[data-provider-test-key]')) return testSelectedProviderKey(actionCard, e.target.closest('[data-provider-test-key]'));
   if (e.target.closest('[data-provider-test-image]')) return testImageProviderFromCard(actionCard);
+  if (e.target.closest('[data-provider-conformance]')) return openProviderConformance(actionCard);
   const importModelsButton = e.target.closest('[data-provider-import-models]');
   if (importModelsButton) {
     importModelsButton.disabled = true;
@@ -911,15 +1194,42 @@ function handleApiProviderClick(e) {
   const id = card?.dataset.providerId;
   if (!id || id === 'default-openai') return;
   host.apiProviders = host.apiProviders.filter(provider => provider.id !== id);
-  providerKeyCache.delete(id);
-  window.secretBridge?.clearProviderApiKey?.(id)?.catch?.(err => console.warn('provider key cleanup failed', err));
   nodes.forEach(node => {
     if ((node.type === 'image' || node.type === 'video') && node.data?.providerId === id) node.data.providerId = '';
   });
   saveSettings();
   renderApiProviders();
-  refreshNodeModelSelects();
+  refreshNodeProviderSelects();
   saveProject();
+}
+async function detectAvailableModelsForCard(card) {
+  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
+  if (!provider) return;
+  syncApiProviderCardFields(card, provider);
+  await saveTypedProviderKeyIfNeeded(card);
+  const apiKey = await providerApiKey(provider);
+  if (!provider.apiUrl) return toast('请先填写 API 地址', 'warn');
+  if (!apiKey) return toast('请先保存当前服务的 Key', 'warn');
+  try {
+    assertUsableApiBaseAddress(provider.apiUrl);
+    const {res} = await fetchApiWithBaseFallback(provider.apiUrl, '/models', {
+      timeoutMs: API_TIMEOUTS.text, retries: 0, headers: {Authorization: `Bearer ${apiKey}`}
+    });
+    const data = await safeJson(res);
+    if (!res.ok) throw new Error(data?.error?.message || data?.message || `HTTP ${res.status}`);
+    const available = {chat: [], image: [], video: [], checkedAt: Date.now()};
+    extractModelRecords(data).forEach(record => {
+      const id = String(record.id || '').trim();
+      const kind = ['chat', 'image', 'video'].includes(record.kind) ? record.kind : classifyModelKind(id);
+      if (id && available[kind] && !available[kind].includes(id)) available[kind].push(id);
+    });
+    provider.availableModels = available;
+    saveSettings();
+    renderApiProviders();
+    toast(`模型列表：聊天 ${available.chat.length} · 图片 ${available.image.length} · 视频 ${available.video.length}`, 'success');
+  } catch (error) {
+    toast(`检测模型列表失败：${error?.message || error}`, 'error');
+  }
 }
 function useProviderModelFromCard(card, kind, model) {
   const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
@@ -941,7 +1251,7 @@ function addProviderModelFromCard(card) {
   const kind = classifyModelKind(model);
   provider.models = unique([model, ...(provider.models || [])]);
   if (kind && !provider[modelFieldForKind(kind)]) provider[modelFieldForKind(kind)] = model;
-  if (kind && host.globalModelProviders[kind] === provider.id && !FutureAIApiDefaults.get(modelFieldForKind(kind)).trim()) {
+  if (kind && host.globalModelProviders[kind] === provider.id && !$(inputIdForModelKind(kind))?.value?.trim()) {
     setGlobalModelValue(kind, model, {save: false, rerender: false});
   }
   if (input) input.value = '';
@@ -958,18 +1268,114 @@ function toggleApiProviderCollapsed(card) {
   saveSettings();
   renderApiProviders();
 }
-async function providerApiKey(provider) {
+async function providerApiKey(provider, capability = 'all', requestedModel = '') {
   if (!provider) return '';
-  if (provider.useGlobalKey) return FutureAIApiDefaults.get('apiKey').trim() || '';
-  if (providerKeyCache.has(provider.id)) return providerKeyCache.get(provider.id) || '';
-  const value = await window.secretBridge?.getProviderApiKey?.(provider.id) || '';
-  if (value) providerKeyCache.set(provider.id, value);
-  return value;
+  if (provider.useGlobalKey) return $('apiKey')?.value.trim() || '';
+  if (!Array.isArray(provider.keyPool) || !provider.keyPool.length) {
+    const entries = await window.secretBridge?.listProviderApiKeys?.(provider.id) || [];
+    provider.keyPool = entries.map(providerKeyMeta);
+  }
+  const now = Date.now();
+  const runningCounts = providerKeyRunningSnapshot(provider);
+  const selectedId = KeyPool?.selectKeyIdForRequest?.(provider, capability, requestedModel, now, runningCounts) || '';
+  const selected = provider.keyPool.find(item => item.id === selectedId);
+  if (!selected) return '';
+  selected.lastUsedAt = now;
+  provider.activeKeyId = selected.id;
+  const cacheKey = provider.id + ':' + (selected?.id || 'legacy');
+  const value = providerKeyCache.has(cacheKey)
+    ? providerKeyCache.get(cacheKey) || ''
+    : (selected?.id
+      ? await window.secretBridge?.getProviderApiKeyForKey?.(provider.id, selected.id) || ''
+      : await window.secretBridge?.getProviderApiKey?.(provider.id) || '');
+  if (!value) return '';
+  providerKeyCache.set(cacheKey, value);
+  changeProviderKeyRunningCount(provider, selected.id, 1);
+  recordProviderKeyLease(provider, capability, selected.id);
+  provider._lastSelectedKeyId = provider._lastSelectedKeyId || {};
+  provider._lastSelectedKeyId[capability] = selected.id;
+  persistProviderKeyHealth(provider, selected);
+  const leasedValue = new String(value);
+  Object.defineProperty(leasedValue, 'keyId', {value: selected.id, enumerable: false});
+  return leasedValue;
+}
+function providerKeyHealth(provider, capability = 'all') {
+  const now = Date.now();
+  const keys = (provider?.keyPool || []).filter(item => item.scope === 'all' || item.scope === capability);
+  return keys.map(item => ({
+    id: item.id,
+    label: item.label,
+    scope: item.scope || 'all',
+    health: Number(item.cooldownUntil || 0) > now ? 'cooldown' : (item.health || 'unknown'),
+    cooldownUntil: Number(item.cooldownUntil || 0),
+    failureCount: Number(item.failureCount || 0),
+    lastError: item.lastError || '',
+    running: providerKeyRunningCount(provider, item.id)
+  }));
+}
+function reportProviderKeyResult(provider, capability = 'all', error = null, leaseRef = null) {
+  if (!provider || provider.useGlobalKey) return false;
+  const leaseId = String(leaseRef?.keyId || leaseRef || '').trim();
+  if (error?.releaseOnly) return releaseProviderKeyLease(provider, capability, leaseId);
+  const leasedId = consumeProviderKeyLease(provider, capability, leaseId);
+  const id = leasedId || provider._lastSelectedKeyId?.[capability] || provider.activeKeyId;
+  const key = provider.keyPool?.find(item => item.id === id);
+  if (!key) return false;
+  if (leasedId) changeProviderKeyRunningCount(provider, key.id, -1);
+  const status = Number(error?.status || error?.response?.status || 0);
+  const rawMessage = String(error?.message || error || '');
+  const message = KeyPool?.sanitizeErrorSummary?.(rawMessage, [...providerKeyCache.values()]) || rawMessage.slice(0, 240);
+  const rotates = KeyPool?.shouldRotateOnError?.(error)
+    ?? (status === 401 || status === 403 || status === 429 || /invalid.{0,12}(?:api.?key|credential)|quota|rate.?limit|unauthori[sz]ed|forbidden/i.test(rawMessage));
+  if (!error) {
+    key.health = 'ok';
+    key.failureCount = 0;
+    key.lastError = '';
+    key.cooldownUntil = 0;
+    persistProviderKeyHealth(provider, key);
+    return true;
+  }
+  if (!rotates) {
+    key.lastError = message;
+    persistProviderKeyHealth(provider, key);
+    return false;
+  }
+  key.failureCount = Number(key.failureCount || 0) + 1;
+  key.lastError = message;
+  const longCooldown = status === 401 || status === 403 || /invalid.{0,12}(?:api.?key|credential)|unauthori[sz]ed|forbidden/i.test(rawMessage);
+  key.cooldownUntil = Date.now() + (longCooldown ? 24 * 60 * 60 * 1000 : 15 * 1000);
+  key.health = longCooldown ? 'blocked' : 'cooldown';
+  const next = provider.keyPool.find(item => (item.scope === 'all' || item.scope === capability) && item.id !== key.id && Number(item.cooldownUntil || 0) <= Date.now() && item.health !== 'blocked');
+  if (next) provider.activeKeyId = next.id;
+  persistProviderKeyHealth(provider, key);
+  return true;
+}
+function persistProviderKeyHealth(provider, key) {
+  if (!provider?.id || !key?.id || !window.secretBridge?.updateProviderApiKeyMetadata) return;
+  window.secretBridge.updateProviderApiKeyMetadata(provider.id, key.id, {
+    lastUsedAt: key.lastUsedAt,
+    failureCount: key.failureCount,
+    cooldownUntil: key.cooldownUntil,
+    lastError: key.lastError,
+    health: key.health
+  }).catch(err => console.warn('provider key health persistence failed', err));
+  saveSettings();
+}
+async function addProviderKeyFromCard(card) {
+  return await saveProviderKeyFromCard(card, false);
+}
+function prepareProviderKeyAddition(card) {
+  const input = card?.querySelector('[data-provider-key-input]');
+  if (!card || !input) return;
+  input.value = '';
+  input.placeholder = '粘贴新的 API Key';
+  input.focus();
+  toast('请粘贴新 Key，然后点击“保存 Key”；它会自动加入当前服务的 Key 池。', 'success');
 }
 async function saveProviderKeyFromCard(card, silent = false) {
   const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
   const input = card?.querySelector('[data-provider-key-input]');
-  const value = input?.value?.trim() || '';
+    const value = input?.value?.trim() || '';
   syncApiProviderCardFields(card, provider);
   if (!provider || !value) {
     if (!silent) toast('请输入要保存的独立 API Key', 'warn');
@@ -985,12 +1391,19 @@ async function saveProviderKeyFromCard(card, silent = false) {
     if (!silent) toast('密钥保存通道不可用，请重启软件后再试', 'error');
     return false;
   }
-  // One Key per provider: saving replaces the stored Key.
-  if (provider.apiKeySaved && !provider.useGlobalKey && providerKeyCache.get(provider.id) === value) return true;
+  // A typed key is always a new member of this provider's pool. Replacing a
+  // key silently made the multi-key feature look like separate providers.
+  const keyId = '';
+  const scope = 'all';
+  const scopeLabel = scope === 'chat' ? '文本' : scope === 'image' ? '图片' : scope === 'video' ? '视频' : '通用';
+  const label = `${scopeLabel} Key ${(provider.keyPool?.filter(item => item.scope === scope).length || 0) + 1}`;
+  let saved;
+  let savedId = keyId;
   try {
-    const saved = await window.secretBridge.setProviderApiKey(provider.id, value);
+    saved = await window.secretBridge.setProviderApiKey(provider.id, value, keyId, label, scope);
     if (!saved) throw new Error('主进程没有确认写入');
-    const readback = await window.secretBridge.getProviderApiKey?.(provider.id);
+    savedId = saved.id || keyId;
+    const readback = await window.secretBridge.getProviderApiKeyForKey?.(provider.id, savedId) || await window.secretBridge.getProviderApiKey?.(provider.id);
     if (readback !== value) throw new Error('写入后读取校验不一致');
   } catch (error) {
     provider.setupStatus = 'failed';
@@ -999,17 +1412,27 @@ async function saveProviderKeyFromCard(card, silent = false) {
     if (!silent) toast(provider.setupMessage, 'error');
     return false;
   }
-  providerKeyCache.set(provider.id, value);
+  providerKeyCache.set(provider.id + ':' + savedId, value);
+  provider.activeKeyId = savedId;
+  provider.keyPool = (await window.secretBridge.listProviderApiKeys?.(provider.id) || provider.keyPool || []).map(providerKeyMeta);
   provider.apiKeySaved = true;
   provider.useGlobalKey = false;
+  provider.keyRotationMode = 'round-robin';
   provider.setupStatus = 'key-saved';
   provider.setupMessage = 'Key 已安全保存，可以读取模型';
-  provider.imageCapabilityStatus = 'unknown';
-  provider.imageCapabilityMessage = '';
+  if (scope === 'all' || scope === 'image') {
+    provider.imageCapabilityByKey = normalizeImageCapabilityByKey(provider.imageCapabilityByKey, provider.keyPool || []);
+    delete provider.imageCapabilityByKey[savedId];
+    if (provider.imageCapabilityKeyId === savedId || provider.imageCapabilityStatus === 'blocked') {
+      provider.imageCapabilityStatus = 'unknown';
+      provider.imageCapabilityMessage = '';
+      provider.imageCapabilityKeyId = '';
+    }
+  }
   if (input) input.value = value;
   saveSettings();
   renderApiProviders();
-  if (!silent) toast(`已安全保存：${provider.name} 的 Key`, 'success');
+  if (!silent) toast(`已安全保存：${provider.name} / ${label}，用途：${scopeLabel}`, 'success');
   return true;
 }
 async function saveTypedProviderKeyIfNeeded(card) {
@@ -1093,14 +1516,14 @@ async function autoConfigureProviderFromCard(card, button) {
       saveSettings();
       return toast('密钥未能保存，请检查 API 地址和 Key 后重试。', 'error');
     }
-    apiKey = await withTimeout(providerApiKey(provider), 12000, '读取 API Key 超时，请重启软件后重试');
+    apiKey = await withTimeout(providerApiKey(provider, 'all'), 12000, '读取 API Key 超时，请重启软件后重试');
     if (!apiKey && provider.type !== 'custom-sync') {
       resetButton();
       provider.setupStatus = 'needs-key';
-      provider.setupMessage = '请粘贴 API Key';
+      provider.setupMessage = '请粘贴 API Key，软件会自动加入当前服务的 Key 池';
       saveSettings();
       renderApiProviders();
-      return toast(providerKeyUnavailableMessage(provider), 'warn');
+      return toast(providerKeyUnavailableMessage(provider, 'all'), 'warn');
     }
     if (button) button.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> 正在读取模型';
     let detected = null;
@@ -1139,13 +1562,16 @@ async function autoConfigureProviderFromCard(card, button) {
     provider.setupMessage = [protocolText, '发现 ' + models.length + ' 个模型', modelText, usedV1Fallback ? '已自动兼容 /v1' : ''].filter(Boolean).join(' · ');
     provider.lastTest = {status: provider.imageModel ? 'ok' : 'warn', message: provider.imageModel ? '自动配置完成' : '需要确认图片模型', checkedAt: Date.now()};
     applyAutomaticProviderDefaults(provider);
+    if (apiKey) reportProviderKeyResult(provider, 'all', null, apiKey);
     saveSettings();
     renderApiProviders();
     renderModels();
+    refreshNodeProviderSelects();
     refreshNodeModelSelects();
     const summary = provider.imageModel ? '图片模型 ' + provider.imageModel : '未确认图片模型';
     toast('自动配置完成：' + provider.name + ' · ' + summary, provider.imageModel ? 'success' : 'warn');
   } catch (err) {
+    if (apiKey) reportProviderKeyResult(provider, 'all', err, apiKey);
     provider.setupStatus = 'failed';
     provider.setupMessage = apiErrorMessage(err, '自动配置失败');
     provider.lastTest = {status: 'fail', message: '自动配置失败', checkedAt: Date.now()};
@@ -1163,27 +1589,93 @@ async function autoConfigureProviderFromCard(card, button) {
     resetButton();
   }
 }
+async function saveAndTestProviderFromCard(card, button) {
+  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
+  if (!provider) return;
+  syncApiProviderCardFields(card, provider);
+  if (!provider.apiUrl) return toast('请先填写 API 地址。', 'warn');
+  if (provider.useGlobalKey || provider.type === 'custom-sync') return await testApiProviderFromCard(card);
+  const typedKey = card?.querySelector('[data-provider-key-input]')?.value?.trim() || '';
+  if (!typedKey && !(provider.keyPool || []).length) return toast('请粘贴 API Key，再点击“保存并自动配置”。', 'warn');
+  if (button) {
+    button.disabled = true;
+    button.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> 正在检测';
+  }
+  try {
+    if (typedKey && !await saveProviderKeyFromCard(card, true)) {
+      return toast('密钥未能保存，请检查 API 地址和 Key 后重试。', 'error');
+    }
+    const freshCard = document.querySelector(`[data-provider-id="${CSS.escape(provider.id)}"]`);
+    return await testSelectedProviderKey(freshCard || card, null);
+  } finally {
+    if (button?.isConnected) {
+      button.disabled = false;
+      button.innerHTML = '<i class="fa-solid fa-circle-check"></i> 保存并检测';
+    }
+  }
+}
+async function removeProviderKeyFromCard(card) {
+  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
+  if (!provider) return;
+  const keyId = (provider.keyPool || [])
+    .slice()
+    .sort((a, b) => Number(b.lastUsedAt || 0) - Number(a.lastUsedAt || 0))[0]?.id
+    || provider.activeKeyId
+    || '';
+  if (!keyId) return toast('当前没有可删除的 Key', 'warn');
+  await window.secretBridge?.removeProviderApiKey?.(provider.id, keyId);
+  providerKeyCache.delete(provider.id + ':' + keyId);
+  provider.keyPool = (await window.secretBridge?.listProviderApiKeys?.(provider.id) || []).map(providerKeyMeta);
+  provider.imageCapabilityByKey = normalizeImageCapabilityByKey(provider.imageCapabilityByKey, provider.keyPool || []);
+  if (provider.imageCapabilityKeyId === keyId) {
+    provider.imageCapabilityStatus = 'unknown';
+    provider.imageCapabilityMessage = '';
+    provider.imageCapabilityKeyId = '';
+  }
+  provider.activeKeyId = provider.keyPool[0]?.id || '';
+  provider.apiKeySaved = provider.keyPool.length > 0;
+  saveSettings();
+  renderApiProviders();
+  toast(`已删除最近使用 Key：${provider.name}`, 'success');
+}
 function setProviderTestStatus(provider, status, message) {
   if (!provider) return;
   provider.lastTest = {status, message, checkedAt: Date.now()};
   saveSettings();
   renderApiProviders();
 }
-function imageCapabilityForKey(provider) {
-  const status = provider?.imageCapabilityStatus;
-  return status && status !== 'unknown' ? {status, message: provider.imageCapabilityMessage || ''} : null;
+function providerCapabilityKeyId(keyRef = null, provider = null) {
+  const keyId = String(keyRef?.keyId || keyRef?.id || '').trim();
+  if (keyId) return keyId;
+  return provider?.useGlobalKey && keyRef ? '__global__' : '';
 }
-function imageCapabilityError(provider) {
+function imageCapabilityForKey(provider, keyRef = null) {
+  const keyId = providerCapabilityKeyId(keyRef, provider);
+  if (!keyId) return null;
+  return provider?.imageCapabilityByKey?.[keyId] || null;
+}
+function imageCapabilityError(provider, keyRef = null) {
   const name = provider?.name || '当前 API 配置';
-  const error = new Error(`${name} 的当前 Key 所属账户组未开通图片生成。请在中转站为该账户组开通图片生成，或更换 Key。`);
+  const keyId = providerCapabilityKeyId(keyRef, provider);
+  const key = provider?.keyPool?.find(item => item.id === keyId);
+  const keyLabel = key?.label ? `（${key.label}）` : '';
+  const error = new Error(`${name} 的当前图片密钥${keyLabel}所属账户组未开通图片生成。软件会继续尝试其他可用图片 Key；也可以在中转站为该账户组开通图片生成。`);
   error.code = 'IMAGE_CAPABILITY_DISABLED';
+  error.keyId = keyId;
   return error;
 }
 function isImageProviderCapabilityError(err) {
   return err?.code === 'IMAGE_CAPABILITY_DISABLED' || /image generation is not enabled for this group|图片生成未开通|未开通图片生成/i.test(String(err?.message || err || ''));
 }
-function markImageProviderCapability(provider, status, message = '') {
+function markImageProviderCapability(provider, status, message = '', keyRef = null) {
   if (!provider) return;
+  const keyId = providerCapabilityKeyId(keyRef, provider);
+  provider.imageCapabilityByKey = normalizeImageCapabilityByKey(provider.imageCapabilityByKey, provider.keyPool || []);
+  if (keyId) {
+    if (status === 'unknown') delete provider.imageCapabilityByKey[keyId];
+    else provider.imageCapabilityByKey[keyId] = {status, message: String(message || '').trim(), checkedAt: Date.now()};
+    provider.imageCapabilityKeyId = keyId;
+  }
   provider.imageCapabilityStatus = status;
   provider.imageCapabilityMessage = String(message || '').trim();
   if (status === 'blocked') provider.lastTest = {status: 'warn', message: '图片能力未开通', checkedAt: Date.now()};
@@ -1191,20 +1683,21 @@ function markImageProviderCapability(provider, status, message = '') {
   saveSettings();
   renderApiProviders();
 }
-function assertImageProviderCapability(provider) {
-  if (imageCapabilityForKey(provider)?.status === 'blocked') throw imageCapabilityError(provider);
+function assertImageProviderCapability(provider, keyRef = null) {
+  const capability = imageCapabilityForKey(provider, keyRef);
+  if (capability?.status === 'blocked') throw imageCapabilityError(provider, keyRef);
 }
 async function testImageProviderFromCard(card) {
   const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
   if (!provider) return;
   await saveTypedProviderKeyIfNeeded(card);
-  const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
+  const apiUrl = provider.apiUrl || $('apiUrl')?.value.trim().replace(/\/$/, '');
   const model = String(provider.imageModel || '').trim();
-  const apiKey = await providerApiKey(provider);
+  const apiKey = await providerApiKey(provider, 'image', model);
   if (!apiUrl) return toast('API 地址尚未填写，请先填写并保存。', 'warn');
   if (!model) return toast('图片模型尚未填写，请先选择或填写图片模型。', 'warn');
-  if (!apiKey) return toast(providerKeyUnavailableMessage(provider), 'warn');
-  markImageProviderCapability(provider, 'unknown', '');
+  if (!apiKey) return toast(providerKeyUnavailableMessage(provider, 'image'), 'warn');
+  markImageProviderCapability(provider, 'unknown', '', apiKey);
   try {
     await autoDetectProviderProtocol(provider, apiUrl, apiKey);
     await requestImageGenerationWithModel({
@@ -1215,13 +1708,342 @@ async function testImageProviderFromCard(card) {
       size: '1024x1024',
       quality: 'auto'
     }, model);
-    markImageProviderCapability(provider, 'available', '');
+    reportProviderKeyResult(provider, 'image', null, apiKey);
+    markImageProviderCapability(provider, 'available', '', apiKey);
     toast(`图片能力已验证：${provider.name}`, 'success');
   } catch (err) {
+    reportProviderKeyResult(provider, 'image', err, apiKey);
     if (isImageProviderCapabilityError(err)) return toast(err.message, 'error');
-    markImageProviderCapability(provider, 'unknown', '');
+    markImageProviderCapability(provider, 'unknown', '', apiKey);
     setProviderTestStatus(provider, 'warn', '图片检测失败');
     toast(`图片检测失败：\n${err.message || String(err)}`, 'error');
+  }
+}
+function providerConformanceOption(id) {
+  return document.querySelector(`[data-conformance-step="${id}"]`);
+}
+function conformanceStepSelection() {
+  return Object.fromEntries(ProviderConformance.STEP_ORDER.map(id => [id, Boolean(providerConformanceOption(id)?.checked && !providerConformanceOption(id)?.disabled)]));
+}
+function configureConformanceOptions(provider) {
+  const availability = {
+    models: true,
+    text: Boolean(provider.chatModel),
+    imageSquare: Boolean(provider.imageModel && providerSupports(provider, 'image')),
+    imageLandscape: Boolean(provider.imageModel && providerSupports(provider, 'image')),
+    imageReference: Boolean(provider.imageModel && providerSupports(provider, 'edit')),
+    videoLandscape: Boolean(provider.videoModel && providerSupports(provider, 'video'))
+  };
+  for (const [id, enabled] of Object.entries(availability)) {
+    const input = providerConformanceOption(id);
+    if (!input) continue;
+    input.disabled = !enabled;
+    if (!enabled) input.checked = false;
+    if (id === 'models' || id === 'text') input.checked = enabled;
+  }
+}
+async function openProviderConformance(card) {
+  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
+  if (!provider || !ProviderConformance) return;
+  syncApiProviderCardFields(card, provider);
+  await saveTypedProviderKeyIfNeeded(card);
+  saveSettings();
+  providerConformanceProviderId = provider.id;
+  host.providerConformanceLiveResults = [];
+  providerConformanceRunning = false;
+  if ($('providerConformanceSubtitle')) $('providerConformanceSubtitle').textContent = `${provider.name} · ${providerTypeLabel(provider.type)}`;
+  configureConformanceOptions(provider);
+  renderProviderConformanceReport(provider.lastConformance);
+  $('providerConformanceRun')?.classList.remove('hidden');
+  $('providerConformanceRerun')?.classList.toggle('hidden', !provider.lastConformance);
+  $('providerConformanceModal')?.classList.remove('hidden');
+}
+function closeProviderConformance() {
+  if (providerConformanceRunning) return toast('兼容性验收正在运行', 'warn');
+  $('providerConformanceModal')?.classList.add('hidden');
+}
+function resetProviderConformanceModal() {
+  const provider = host.apiProviders.find(item => item.id === providerConformanceProviderId);
+  if (!provider || providerConformanceRunning) return;
+  host.providerConformanceLiveResults = [];
+  configureConformanceOptions(provider);
+  renderProviderConformanceReport(null);
+  $('providerConformanceRun')?.classList.remove('hidden');
+  $('providerConformanceRerun')?.classList.add('hidden');
+}
+function conformanceReferenceImage() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f7f9fb';
+  ctx.fillRect(0, 0, 128, 128);
+  ctx.fillStyle = '#1887d8';
+  ctx.beginPath();
+  ctx.arc(64, 64, 32, 0, Math.PI * 2);
+  ctx.fill();
+  return canvas.toDataURL('image/png');
+}
+async function conformanceImageEvidence(url, expectedSize) {
+  if (!url) throw new Error('供应商未返回图片地址');
+  return {modelOutput: 'image', requestedSize: expectedSize};
+}
+async function conformanceVideoEvidence(url, expectedAspect = '16:9') {
+  if (!url) throw new Error('供应商未返回视频地址');
+  return {modelOutput: 'video', requestedSize: expectedAspect === '16:9' ? '1280x720' : ''};
+}
+function conformanceEvidenceText(evidence = {}) {
+  return [
+    evidence.modelCount != null ? `${evidence.modelCount} 个模型` : '',
+    evidence.model ? evidence.model : '',
+    evidence.requestedSize ? `请求 ${evidence.requestedSize}` : '',
+    evidence.reply ? '已返回文本' : ''
+  ].filter(Boolean).join(' · ');
+}
+function renderProviderConformanceReport(report = null) {
+  const host = $('providerConformanceResults');
+  if (!host) return;
+  $('providerConformanceExport')?.classList.toggle('hidden', !ProviderConformance.commercialEvidenceReady(report));
+  const rows = report?.results || host.providerConformanceLiveResults;
+  if (!rows.length) {
+    host.innerHTML = '<div class="provider-conformance-empty"><i class="fa-solid fa-clipboard-check"></i><span>选择验收项后开始</span></div>';
+    return;
+  }
+  host.innerHTML = rows.map(item => {
+    const icon = item.status === 'passed' ? 'fa-circle-check' : item.status === 'failed' ? 'fa-circle-xmark' : 'fa-circle-notch fa-spin';
+    const detail = item.status === 'failed' ? `${item.error?.category || 'provider-error'} · ${item.error?.message || '失败'}` : item.status === 'running' ? '正在请求...' : conformanceEvidenceText(item.evidence);
+    return `<div class="provider-conformance-result ${esc(item.status)}"><i class="fa-solid ${icon}"></i><div><strong>${esc(item.label)}</strong><span>${esc(detail || '已通过')}</span></div><time>${item.durationMs != null ? Math.round(item.durationMs / 100) / 10 + 's' : ''}</time></div>`;
+  }).join('');
+  if (report?.summary) {
+    host.insertAdjacentHTML('afterbegin', `<div class="provider-conformance-summary ${esc(report.summary.status)}"><strong>${report.summary.passed}/${report.summary.selected}</strong><span>${report.summary.failed ? `${report.summary.failed} 项未通过` : '所选项全部通过'}</span></div>`);
+  }
+}
+async function exportProviderConformanceEvidence() {
+  const provider = host.apiProviders.find(item => item.id === providerConformanceProviderId);
+  const report = provider?.lastConformance;
+  if (!provider || !ProviderConformance.commercialEvidenceReady(report)) return toast('需要六项真实能力全部通过后才能导出证据', 'warn');
+  if (!window.providerConformanceBridge?.exportEvidence) return toast('当前安装包不支持商业证据导出', 'error');
+  const button = $('providerConformanceExport');
+  if (button) button.disabled = true;
+  try {
+    const apiUrl = provider.apiUrl || $('apiUrl')?.value.trim().replace(/\/$/, '');
+    const evidence = ProviderConformance.buildCommercialEvidence(report);
+    const result = await window.providerConformanceBridge.exportEvidence({apiUrl, evidence});
+    if (!result?.canceled) toast(`验收证据已导出\nSHA-256：${result.sha256}`, 'success');
+  } catch (err) {
+    toast(apiErrorMessage(err, '导出验收证据失败'), 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+async function runProviderConformanceFromModal() {
+  const provider = host.apiProviders.find(item => item.id === providerConformanceProviderId);
+  if (!provider || providerConformanceRunning) return;
+  const selected = conformanceStepSelection();
+  if (!Object.values(selected).some(Boolean)) return toast('请至少选择一个验收项', 'warn');
+  const apiUrl = provider.apiUrl || $('apiUrl')?.value.trim().replace(/\/$/, '');
+  if (!apiUrl) return toast('API 地址尚未填写，请先填写并保存。', 'warn');
+  assertUsableApiBaseAddress(apiUrl);
+  providerConformanceRunning = true;
+  host.providerConformanceLiveResults = [];
+  $('providerConformanceRun').disabled = true;
+  $('providerConformanceRun').innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>验收中';
+  $('providerConformanceRerun')?.classList.add('hidden');
+  document.querySelectorAll('[data-conformance-step]').forEach(input => { input.disabled = true; });
+  const runWithCapabilityKey = async (capability, model, task) => {
+    const apiKey = await providerApiKey(provider, capability, model);
+    if (!apiKey && provider.type !== 'custom-sync') throw new Error(providerKeyUnavailableMessage(provider, capability));
+    try {
+      const result = await task(apiKey || '');
+      if (apiKey) reportProviderKeyResult(provider, capability, null, apiKey);
+      return result;
+    } catch (error) {
+      if (apiKey) reportProviderKeyResult(provider, capability, error, apiKey);
+      throw error;
+    }
+  };
+  const imageRun = async (size, prompt, refs = []) => {
+    return await runWithCapabilityKey('image', provider.imageModel, async apiKey => {
+      const url = refs.length
+        ? await rawImageEditRequest({provider, apiUrl, apiKey, model: provider.imageModel, prompt, size, quality: 'auto', refUrls: refs})
+        : await rawImageGenerationWithModel({provider, apiUrl, apiKey, prompt, size, quality: 'auto'}, provider.imageModel, size);
+      return await conformanceImageEvidence(url, size);
+    });
+  };
+  const steps = {
+    models: async () => await runWithCapabilityKey(provider.chatModel ? 'chat' : provider.imageModel ? 'image' : 'video', provider.chatModel || provider.imageModel || provider.videoModel, async apiKey => {
+      const {res, usedV1Fallback} = await fetchApiWithBaseFallback(apiUrl, '/models', {timeoutMs: 30000, retries: 0, headers: apiKey ? {Authorization: 'Bearer ' + apiKey} : {}});
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.error?.message || data.message || JSON.stringify(data));
+      const models = extractModelIds(data);
+      assertModelListResponse({response: res, payload: data, models, requestUrl: '[API_ENDPOINT]'});
+      return {modelCount: models.length, usedV1Fallback, chatModelListed: !provider.chatModel || models.includes(provider.chatModel), imageModelListed: !provider.imageModel || models.includes(provider.imageModel), videoModelListed: !provider.videoModel || models.includes(provider.videoModel)};
+    }),
+    text: async () => await runWithCapabilityKey('chat', provider.chatModel, async apiKey => ({model: provider.chatModel, reply: await chatCompletionTextRequest({apiUrl, apiKey, model: provider.chatModel, temperature: 0, maxTokens: 24, timeoutMs: 30000, retries: 0, endpoint: provider.chatEndpoint, messages: [{role: 'system', content: '只回复 OK。'}, {role: 'user', content: 'ping'}]})})),
+    imageSquare: async () => await imageRun('1024x1024', 'A single small blue circle centered on a plain white background.'),
+    imageLandscape: async () => await imageRun('1280x720', 'A simple blue horizon line on a clean white background, exact 16:9 composition.'),
+    imageReference: async () => await imageRun('1024x1024', 'Keep the blue circle and add one small black dot in the center.', [conformanceReferenceImage()]),
+    videoLandscape: async () => await runWithCapabilityKey('video', provider.videoModel, async apiKey => {
+      const url = await videoGenerateRequest({provider, apiUrl, apiKey, model: provider.videoModel, prompt: 'A blue circle moves slowly from left to right on a white background.', size: '1280x720', duration: '5', mode: 'auto', refUrl: '', onStatus: text => {
+        const running = host.providerConformanceLiveResults.find(item => item.id === 'videoLandscape');
+        if (running) running.detail = text;
+      }});
+      return await conformanceVideoEvidence(url, '16:9');
+    })
+  };
+  try {
+    const report = await ProviderConformance.runProviderConformance({provider, selected, steps, onProgress: item => {
+      const index = host.providerConformanceLiveResults.findIndex(current => current.id === item.id);
+      if (index >= 0) host.providerConformanceLiveResults[index] = item;
+      else host.providerConformanceLiveResults.push(item);
+      renderProviderConformanceReport();
+    }});
+    provider.lastConformance = report;
+    provider.lastTest = {status: report.summary.failed ? 'warn' : 'ok', message: `验收 ${report.summary.passed}/${report.summary.selected}`, checkedAt: Date.now()};
+    saveSettings();
+    renderApiProviders();
+    renderProviderConformanceReport(report);
+    toast(report.summary.failed ? `验收完成：${report.summary.failed} 项未通过` : '所选兼容性验收全部通过', report.summary.failed ? 'warn' : 'success');
+  } finally {
+    providerConformanceRunning = false;
+    $('providerConformanceRun').disabled = false;
+    $('providerConformanceRun').innerHTML = '<i class="fa-solid fa-play"></i>开始验收';
+    $('providerConformanceRun').classList.add('hidden');
+    $('providerConformanceRerun')?.classList.remove('hidden');
+    configureConformanceOptions(provider);
+  }
+}
+async function testApiProviderFromCard(card) {
+  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
+  if (!provider) return;
+  await saveTypedProviderKeyIfNeeded(card);
+  const apiUrl = provider.apiUrl || $('apiUrl')?.value.trim().replace(/\/$/, '');
+  const chatModel = String(provider.chatModel || '').trim();
+  const imageModel = String(provider.imageModel || '').trim();
+  const videoModel = String(provider.videoModel || '').trim();
+  const keyCandidates = [
+    {capability: 'chat', model: chatModel},
+    {capability: 'image', model: imageModel},
+    {capability: 'video', model: videoModel}
+  ].filter(item => item.model && providerSupports(provider, item.capability));
+  let testedCapability = keyCandidates[0]?.capability || 'chat';
+  let apiKey = '';
+  for (const candidate of keyCandidates) {
+    const candidateKey = await providerApiKey(provider, candidate.capability, candidate.model);
+    if (!candidateKey) continue;
+    testedCapability = candidate.capability;
+    apiKey = candidateKey;
+    break;
+  }
+  if (!apiUrl) return toast('API 地址尚未填写，请先填写并保存。', 'warn');
+  if (!apiKey && provider.type !== 'custom-sync') return toast(providerKeyUnavailableMessage(provider, testedCapability), 'warn');
+  try {
+    assertUsableApiBaseAddress(apiUrl);
+    const detected = await autoDetectProviderProtocol(provider, apiUrl, apiKey);
+    let modelsNote = detected?.message ? `\n${detected.message}` : '';
+    let modelsAvailable = false;
+    try {
+      const headers = apiKey ? {Authorization: 'Bearer ' + apiKey} : {};
+      const {res, requestUrl, usedV1Fallback} = await fetchApiWithBaseFallback(apiUrl, '/models', {
+        timeoutMs: 30000,
+        retries: 0,
+        headers
+      });
+      const data = await safeJson(res);
+      if (!res.ok) throw new Error(data.error?.message || data.message || JSON.stringify(data));
+      const models = extractModelIds(data);
+      modelsAvailable = true;
+      if (usedV1Fallback) modelsNote = `\n已使用兼容接口：${requestUrl}`;
+      const missingListed = [
+        chatModel && !models.includes(chatModel) ? `聊天模型 ${chatModel}` : '',
+        imageModel && !models.includes(imageModel) ? `图片模型 ${imageModel}` : '',
+        videoModel && !models.includes(videoModel) ? `视频模型 ${videoModel}` : ''
+      ].filter(Boolean);
+      if (missingListed.length) modelsNote += `\n注意：${missingListed.join('、')} 不在 /models 列表中。`;
+    } catch (modelsErr) {
+      modelsNote = chatModel
+        ? `\n注意：/models 列表不可用，但已继续测试真实聊天请求。`
+        : `\n注意：/models 列表不可用，已保留配置，可在节点里实测生成。`;
+    }
+    if (testedCapability === 'chat' && chatModel) {
+      await chatCompletionTextRequest({
+        apiUrl,
+        apiKey,
+        model: chatModel,
+        temperature: 0,
+        maxTokens: 24,
+        timeoutMs: 30000,
+        retries: 0,
+        endpoint: provider.chatEndpoint,
+        messages: [
+          {role: 'system', content: '只回复 OK。'},
+          {role: 'user', content: 'ping'}
+        ]
+      });
+    }
+    const missing = [];
+    if (providerSupports(provider, 'image') && !imageModel) missing.push('图像模型未填');
+    if (providerSupports(provider, 'video') && provider.enabledVideo && !videoModel) missing.push('视频模型未填');
+    const configuredCaps = [
+      chatModel ? '文本' : '',
+      imageModel ? '图片' : '',
+      videoModel ? '视频' : ''
+    ].filter(Boolean);
+    const status = missing.length || (!modelsAvailable && !chatModel) || modelsNote ? 'warn' : 'ok';
+    const message = missing.length ? missing.join(' / ') : configuredCaps.length ? `${configuredCaps.join('/')}已配置` : '连接可用';
+    setProviderTestStatus(provider, status, message);
+    reportProviderKeyResult(provider, testedCapability, null, apiKey);
+    toast(`API 配置可用：${provider.name}${chatModel ? `，聊天模型 ${chatModel} 可返回内容` : ''}${!chatModel && (imageModel || videoModel) ? '，已跳过聊天测试' : ''}${modelsNote}${missing.length ? '\n注意：' + missing.join('、') : ''}`, status === 'warn' ? 'warn' : 'success');
+  } catch (err) {
+    reportProviderKeyResult(provider, testedCapability, err, apiKey);
+    setProviderTestStatus(provider, 'fail', '测试失败');
+    toast(apiErrorMessage(err, 'API 配置测试失败'), 'error');
+  }
+}
+async function testSelectedProviderKey(card, button) {
+  const provider = host.apiProviders.find(item => item.id === card?.dataset.providerId);
+  if (!provider || provider.useGlobalKey) return toast('请先把密钥策略切换为“使用独立 Key”', 'warn');
+  const apiUrl = String(provider.apiUrl || '').trim().replace(/\/$/, '');
+  if (!apiUrl) return toast('请先填写 API 地址', 'warn');
+  const capability = provider.chatModel ? 'chat' : provider.imageModel ? 'image' : 'video';
+  const apiKey = await providerApiKey(provider, capability, provider[capability === 'chat' ? 'chatModel' : capability === 'image' ? 'imageModel' : 'videoModel']);
+  const key = provider?.keyPool?.find(item => item.id === apiKey?.keyId);
+  if (!apiKey || !key) return toast('Key 池中没有可用密钥，请粘贴新的 Key', 'error');
+  if (button) {
+    button.disabled = true;
+    button.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> 测试中';
+  }
+  try {
+    assertUsableApiBaseAddress(apiUrl);
+    await autoDetectProviderProtocol(provider, apiUrl, apiKey);
+    if (capability === 'chat' && provider.chatModel) {
+      await chatCompletionTextRequest({
+        apiUrl,
+        apiKey,
+        model: provider.chatModel,
+        temperature: 0,
+        maxTokens: 8,
+        timeoutMs: 30000,
+        retries: 0,
+        endpoint: provider.chatEndpoint,
+        messages: [{role: 'user', content: '只回复 OK'}]
+      });
+    } else {
+      const {res} = await fetchApiWithBaseFallback(apiUrl, '/models', {timeoutMs: 30000, retries: 0, headers: {Authorization: 'Bearer ' + apiKey}});
+      if (!res.ok) {
+        const data = await safeJson(res);
+        const error = new Error(data.error?.message || data.message || `HTTP ${res.status}`);
+        error.status = res.status;
+        throw error;
+      }
+    }
+    reportProviderKeyResult(provider, capability, null, apiKey);
+    toast(`Key 池测试通过：${key.label}（${key.masked || '已脱敏'}）`, 'success');
+  } catch (err) {
+    reportProviderKeyResult(provider, capability, err, apiKey);
+    toast(apiErrorMessage(err, `Key 池测试失败：${key.label}`), 'error');
+  } finally {
+    renderApiProviders();
   }
 }
 async function importModelsForProviderCard(card) {
@@ -1229,19 +2051,19 @@ async function importModelsForProviderCard(card) {
   if (!provider) return;
   const typedKey = card?.querySelector('[data-provider-key-input]')?.value?.trim() || '';
   if (typedKey && !await saveTypedProviderKeyIfNeeded(card)) return;
-  const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
+  const apiUrl = provider.apiUrl || $('apiUrl')?.value.trim().replace(/\/$/, '');
   let selectedCapability = 'chat';
-  let apiKey = await providerApiKey(provider);
+  let apiKey = await providerApiKey(provider, 'chat');
   if (!apiKey) {
     selectedCapability = 'image';
-    apiKey = await providerApiKey(provider);
+    apiKey = await providerApiKey(provider, 'image');
   }
   if (!apiKey) {
     selectedCapability = 'video';
-    apiKey = await providerApiKey(provider);
+    apiKey = await providerApiKey(provider, 'video');
   }
   if (!apiUrl) return toast('API 地址尚未填写，请先填写并保存。', 'warn');
-  if (!apiKey) return toast(providerKeyUnavailableMessage(provider), 'warn');
+  if (!apiKey) return toast(providerKeyUnavailableMessage(provider, 'all'), 'warn');
   try {
     assertUsableApiBaseAddress(apiUrl);
     const detected = await autoDetectProviderProtocol(provider, apiUrl, apiKey);
@@ -1259,15 +2081,19 @@ async function importModelsForProviderCard(card) {
     saveSettings();
     renderApiProviders();
     renderModels();
+    refreshNodeProviderSelects();
     refreshNodeModelSelects();
+    reportProviderKeyResult(provider, selectedCapability, null, apiKey);
     toast(`已为 ${provider.name} 导入模型：${models.length} 个（${modelImportSummary(counts)}）${detected?.message ? `\n${detected.message}` : ''}${usedV1Fallback ? '\n已自动使用 /v1 兼容接口。' : ''}`, 'success');
   } catch (err) {
+    reportProviderKeyResult(provider, selectedCapability, err, apiKey);
     toast(`模型导入失败：\n${err.message || String(err)}`, 'error');
   }
 }
     return {
       providerTypeLabel,
       providerTypeMeta,
+      providerTypeOptionsHtml,
       providerSupports,
       defaultEndpointForProvider,
       providerProtocolMode,
@@ -1282,7 +2108,7 @@ async function importModelsForProviderCard(card) {
       migrateLegacyProviderKeys,
       uniqueById,
       syncLegacyApiProvider,
-      modelPickerGroups,
+      providerOptionsHtml,
       currentProviderForNode,
       renderApiProviders,
       hydrateProviderKeyInputs,
@@ -1292,6 +2118,8 @@ async function importModelsForProviderCard(card) {
       providerModelSelectOptionsHtml,
       providerModelGroupHtml,
       providerModelLibraryHtml,
+      providerCapabilityEditorHtml,
+      syncProviderCapabilityEditor,
       apiProviderCardHtml,
       addApiProvider,
       syncApiProviderCardFields,
@@ -1301,21 +2129,40 @@ async function importModelsForProviderCard(card) {
       refreshProviderBalances,
       providerBalanceQueryable,
       providerBalanceState,
-      formatBalanceAmount,
       providerBalanceView,
+      formatBalanceAmount,
       useProviderModelFromCard,
       addProviderModelFromCard,
       toggleApiProviderCollapsed,
       providerApiKey,
+      providerKeyHealth,
+      reportProviderKeyResult,
+      addProviderKeyFromCard,
       saveProviderKeyFromCard,
       saveTypedProviderKeyIfNeeded,
+      removeProviderKeyFromCard,
       setProviderTestStatus,
       imageCapabilityError,
       isImageProviderCapabilityError,
       markImageProviderCapability,
       assertImageProviderCapability,
       testImageProviderFromCard,
+      providerConformanceOption,
+      conformanceStepSelection,
+      configureConformanceOptions,
+      openProviderConformance,
+      closeProviderConformance,
+      resetProviderConformanceModal,
+      conformanceReferenceImage,
+      conformanceImageEvidence,
+      conformanceVideoEvidence,
+      conformanceEvidenceText,
+      renderProviderConformanceReport,
+      exportProviderConformanceEvidence,
+      runProviderConformanceFromModal,
+      testApiProviderFromCard,
       autoConfigureProviderFromCard,
+      testSelectedProviderKey,
       importModelsForProviderCard
     };
   }

@@ -11,7 +11,6 @@
     const esc = deps.esc;
     const toast = deps.toast;
     const getNode = deps.getNode;
-    const generateImageKeepingOriginal = deps.generateImageKeepingOriginal;
     const focusQueueNode = deps.focusQueueNode;
     const setActiveWorkspace = deps.setActiveWorkspace;
     const hydrateNode = deps.hydrateNode;
@@ -20,9 +19,12 @@
     const currentProviderForNode = deps.currentProviderForNode;
     const providerTypeLabel = deps.providerTypeLabel;
     const providerApiKey = deps.providerApiKey;
+    const reportProviderKeyResult = deps.reportProviderKeyResult;
     const nodeDisplayTitle = deps.nodeDisplayTitle;
     const getInputPrompt = deps.getInputPrompt;
     const withCameraPrompt = deps.withCameraPrompt;
+    const promptWithCanvasContext = deps.promptWithCanvasContext;
+    const applyModelAgnosticGenerationRules = deps.applyModelAgnosticGenerationRules;
     const ensureInputImageRefs = deps.ensureInputImageRefs;
     const effectiveImageModel = deps.effectiveImageModel;
     const setImageStatus = deps.setImageStatus;
@@ -30,26 +32,20 @@
     const apiCompatibleImageSize = deps.apiCompatibleImageSize;
     const imageEditWithFallback = deps.imageEditWithFallback;
     const imageGenerateRequest = deps.imageGenerateRequest;
+    const imageGenerateBatchRequest = deps.imageGenerateBatchRequest;
     const persistGeneratedImageResult = deps.persistGeneratedImageResult;
     const isApiGatewayTimeoutError = deps.isApiGatewayTimeoutError;
     const referenceGuidedImageFallback = deps.referenceGuidedImageFallback;
     const refreshDownstreamLinkedInputs = deps.refreshDownstreamLinkedInputs;
     const isSafetyError = deps.isSafetyError;
+    const softenPrompt = deps.softenPrompt;
     const formatImageGenerationError = deps.formatImageGenerationError;
     const imageErrorTitle = deps.imageErrorTitle;
     const diagnoseGenerationError = deps.diagnoseGenerationError;
-    // Batch runs report one combined toast; per-node toasts are muted for these ids.
-    const quietToastNodeIds = new Set();
-    const nodeToast = (id, ...args) => { if (!quietToastNodeIds.has(id)) toast(...args); };
     const ModelCapabilities = deps.ModelCapabilities || window.FutureAIModelCapabilities;
     const ReferenceRoles = deps.ReferenceRoles || window.FutureAIReferenceRoles;
     const authorizeGenerationBudget = deps.authorizeGenerationBudget;
     const completeGenerationBudget = deps.completeGenerationBudget;
-    const AutoRetry = deps.AutoRetry || window.FutureAIAutoRetry;
-    const getAutoRetryLimit = deps.getAutoRetryLimit || (() => 1);
-    // nodeId -> remaining automatic retries for the run in progress; read by runImageNow's error path.
-    const autoRetryAllowance = new Map();
-    let retryPumpTimer = 0;
     const VariantManager = deps.VariantManager || window.FutureAIVariantManager;
     const Provenance = deps.Provenance || window.FutureAIProvenance;
   const ImageRequestPolicy = deps.ImageRequestPolicy || window.FutureAIImageRequestPolicy;
@@ -61,10 +57,15 @@ function buildImageRequest(node, references = []) {
     data: node.data,
     ownPrompt: node.data.prompt || '',
     linkedPrompt: getInputPrompt(node.id),
-    model: node.data.model || provider.imageModel || FutureAIApiDefaults.get('imageModel')?.trim(),
+    model: node.data.model || provider.imageModel || $('imageModel')?.value?.trim(),
     size: imageTargetSize(node.data),
     references,
-    composePrompt: prompt => withCameraPrompt(prompt, node) + (ReferenceRoles?.imageReferenceInstructions(references) || '')
+    enrichPrompt: prompt => {
+      let enriched = withCameraPrompt(prompt, node);
+      enriched = promptWithCanvasContext(enriched, 'image', node.id);
+      enriched = applyModelAgnosticGenerationRules(enriched, 'image');
+      return enriched + (ReferenceRoles?.referenceRoleInstructions(references) || '');
+    }
   });
   request.provider = provider.name || provider.id || '';
   request.protocol = provider.type || 'openai-images';
@@ -107,15 +108,12 @@ function assertImageModelCapability(node, provider, model, references) {
   return {profile, result};
 }
 
-function providerConcurrencyLimit(providerId) {
-  const provider = host.apiProviders.find(item => item.id === providerId);
-  const configured = Number(provider?.concurrency || host.providerConcurrency.get(providerId) || 1);
-  return Math.max(1, Math.min(4, configured));
+function providerConcurrencyLimit() {
+  return Number.POSITIVE_INFINITY;
 }
 function enqueueImageGeneration(id, options = {}) {
   const node = getNode(id);
   if (!node) return Promise.resolve(false);
-  if (options.quiet) quietToastNodeIds.add(id);
   const existing = host.generationQueue.find(item => item.nodeId === id && (item.status === 'queued' || item.status === 'running'));
   if (existing) {
     renderQueue();
@@ -135,14 +133,15 @@ function enqueueImageGeneration(id, options = {}) {
     title: nodeDisplayTitle(node),
     providerId: provider.id,
     providerName: provider.name || providerTypeLabel(provider.type),
-    model: node.data.model || provider.imageModel || FutureAIApiDefaults.get('imageModel') || '',
+    model: node.data.model || provider.imageModel || $('imageModel')?.value || '',
     parameters: {
       size: imageTargetSize(node.data) || '',
       aspect: node.data.aspect || '',
       resolution: node.data.resolution || '1K',
       count: Math.max(1, Math.min(4, Number(node.data.count) || 1)),
-      // A queued task is created before its request object exists; quality is fixed by the policy.
-      quality: ImageRequestPolicy.qualityForModel(node.data.model || provider.imageModel || '')
+      // A queued task is created before its request object exists. Keep its
+      // display parameters derived from the node so a click cannot fail here.
+      quality: String(node.data.quality || 'auto').trim() || 'auto'
     },
     status: 'queued',
     message: '等待生成',
@@ -160,33 +159,15 @@ function enqueueImageGeneration(id, options = {}) {
   pumpGenerationQueue();
   return options.returnItem ? item : promise;
 }
-function scheduleRetryPump() {
-  if (retryPumpTimer) window.clearTimeout(retryPumpTimer);
-  retryPumpTimer = 0;
-  const waits = host.generationQueue.filter(item => item.status === 'queued' && Number(item.retryAt) > Date.now()).map(item => Number(item.retryAt));
-  if (!waits.length) return;
-  retryPumpTimer = window.setTimeout(() => {
-    retryPumpTimer = 0;
-    pumpGenerationQueue();
-  }, Math.max(200, Math.min(...waits) - Date.now() + 50));
-}
-function autoRetryWillApply(id, err) {
-  if (!(autoRetryAllowance.get(id) > 0) || !AutoRetry) return false;
-  return AutoRetry.isRetrySafeError(err, {online: navigator.onLine !== false});
-}
 function pumpGenerationQueue() {
   if (host.queuePaused) return renderQueue();
   let started = false;
   for (const item of host.generationQueue) {
     if (item.status !== 'queued') continue;
-    if (Number(item.retryAt) > Date.now()) continue;
-    const running = host.providerRunningCounts.get(item.providerId) || 0;
-    if (running >= providerConcurrencyLimit(item.providerId)) continue;
     startQueueItem(item);
     started = true;
   }
   if (started) renderQueue();
-  scheduleRetryPump();
 }
 async function startQueueItem(item) {
   const node = getNode(item.nodeId);
@@ -201,14 +182,10 @@ async function startQueueItem(item) {
   item.status = 'running';
   item.message = '生成中';
   item.startedAt = Date.now();
-  item.retryAt = 0;
   item.attempts += 1;
   saveProject?.();
   host.providerRunningCounts.set(item.providerId, (host.providerRunningCounts.get(item.providerId) || 0) + 1);
   renderQueue();
-  const retryLimit = AutoRetry ? AutoRetry.normalizeLimit(getAutoRetryLimit(), 1) : 0;
-  const retriesUsed = Math.max(0, Number(item.autoRetries || 0));
-  autoRetryAllowance.set(item.nodeId, Math.max(0, retryLimit - retriesUsed));
   try {
     const result = await runImageNow(item.nodeId);
     item.status = 'done';
@@ -216,16 +193,6 @@ async function startQueueItem(item) {
     item.finishedAt = Date.now();
     item.resolve?.(result);
   } catch (err) {
-    if (autoRetryWillApply(item.nodeId, err) && getNode(item.nodeId)) {
-      const retryNumber = retriesUsed + 1;
-      const delayMs = AutoRetry.delayFor(retryNumber, err);
-      item.autoRetries = retryNumber;
-      item.status = 'queued';
-      item.retryAt = Date.now() + delayMs;
-      item.message = AutoRetry.waitingMessage(retryNumber, retryLimit, delayMs);
-      item.diagnosis = null;
-      return;
-    }
     item.status = 'failed';
     const diagnosis = diagnoseGenerationError(err, {
       providerName: item.providerName,
@@ -237,8 +204,6 @@ async function startQueueItem(item) {
     item.finishedAt = Date.now();
     item.reject?.(err);
   } finally {
-    autoRetryAllowance.delete(item.nodeId);
-    if (item.status !== 'queued') quietToastNodeIds.delete(item.nodeId);
     saveProject?.();
     host.providerRunningCounts.set(item.providerId, Math.max(0, (host.providerRunningCounts.get(item.providerId) || 1) - 1));
     renderQueue();
@@ -247,7 +212,6 @@ async function startQueueItem(item) {
 }
 function queueStatusLabel(status, message = '') {
   if (status === 'paused' && /重新打开|待继续/.test(message)) return '待继续';
-  if (status === 'queued' && /自动重试/.test(message)) return '等待重试';
   return ({queued: '排队', paused: '已暂停', running: '运行中', done: '完成', failed: '失败', canceled: '已取消'})[status] || status;
 }
 function queueElapsed(item) {
@@ -352,7 +316,6 @@ function resumeQueueItem(item) {
   if (!item || item.status !== 'paused') return;
   item.status = 'queued';
   item.message = '等待生成';
-  item.retryAt = 0;
   renderQueue();
   saveProject?.();
   pumpGenerationQueue();
@@ -363,8 +326,7 @@ function retryFailedQueue() {
   const nodeIds = [...new Set(failed.map(item => item.nodeId))];
   host.generationQueue = host.generationQueue.filter(item => item.status !== 'failed');
   saveProject?.();
-  // Same rule as the node button: a node that shows a picture keeps it, the retry lands on a new node.
-  nodeIds.forEach(nodeId => Promise.resolve(generateImageKeepingOriginal(getNode(nodeId))).catch(() => {}));
+  nodeIds.forEach(nodeId => enqueueImageGeneration(nodeId).catch(() => {}));
   renderQueue();
 }
 function moveQueueItem(item, direction) {
@@ -383,12 +345,8 @@ function moveQueueItem(item, direction) {
 function copyQueueItem(item) {
   const node = getNode(item?.nodeId);
   if (!node) return toast('原节点已不存在，无法复制任务', 'warn');
-  if (host.generationQueue.some(task => task.nodeId === node.id && (task.status === 'queued' || task.status === 'running'))) {
-    return toast('该节点的任务还在排队或生成中，完成后再复制', 'warn');
-  }
-  const keeps = Boolean(node.data?.url || (Array.isArray(node.data?.urls) && node.data.urls.some(Boolean)));
-  Promise.resolve(generateImageKeepingOriginal(node)).catch(() => {});
-  toast(keeps ? '已复制：将在右侧新节点生成，原图保留' : '已复制为新的排队任务', 'success');
+  enqueueImageGeneration(node.id).catch(() => {});
+  toast('已复制为新的排队任务', 'success');
 }
 function onQueueListClick(e) {
   const card = e.target.closest('[data-queue-id]');
@@ -408,7 +366,7 @@ function onQueueListClick(e) {
   if (e.target.closest('[data-queue-retry]')) {
     const nodeId = item.nodeId;
     host.generationQueue = host.generationQueue.filter(task => task.id !== item.id);
-    Promise.resolve(generateImageKeepingOriginal(getNode(nodeId))).catch(() => {});
+    enqueueImageGeneration(nodeId).catch(() => {});
     renderQueue();
     return;
   }
@@ -434,30 +392,24 @@ async function runImageNow(id, visiting = new Set()) {
   const generationStartedAt = Date.now();
   const previousUrls = Array.isArray(node.data.urls) ? [...node.data.urls] : (node.data.url ? [node.data.url] : []);
   if (visiting.has(id)) throw new Error('参考图连接出现循环，请断开循环连线');
-  // Regenerating keeps the current output in the node's history (‹ › on the node).
-  VariantManager?.ensureCurrentOutput(node.data, 'image');
   visiting.add(id);
   const ownPrompt = String(node.data.prompt || '');
   const linkedPrompt = getInputPrompt(id);
   const prompt = ownPrompt.trim() ? ownPrompt : linkedPrompt;
   let finalPrompt = prompt;
   const refs = await ensureInputImageRefs(id, visiting);
-  // Match saved roles by url (not position) so a role can never land on the wrong image.
-  const savedReferences = Array.isArray(node.data.references) ? node.data.references : [];
   const resolvedReferences = ReferenceRoles?.mergeResolvedReferences({
     nodeType: 'image',
-    references: savedReferences,
-    resolvedItems: refs.map((url, index) => {
-      const saved = savedReferences[index]?.url === url ? savedReferences[index] : savedReferences.find(item => item?.url === url) || {};
-      return Object.assign({}, saved, {url, key: saved.key || `resolved-${index}`});
-    })
+    references: node.data.references,
+    resolvedItems: refs.map((url, index) => Object.assign({}, node.data.references?.[index] || {}, {
+      url,
+      key: node.data.references?.[index]?.key || `resolved-${index}`
+    }))
   }) || refs.map((url, index) => ({url, role: index === 0 ? 'source' : 'reference', order: index}));
   node.data.references = resolvedReferences;
   const imageRequest = buildImageRequest(node, resolvedReferences);
   finalPrompt = imageRequest.prompt;
-  // Images are attached in role-priority order, the same order 图1…图N uses in the prompt.
-  const refUrls = resolvedReferences.map(item => item.url);
-  if (refUrls[0]) node.data.refUrl = refUrls[0];
+  if (refs[0]) node.data.refUrl = refs[0];
   if (!refs.length) {
     node.data.refUrl = '';
     node.data.manualRefUrl = '';
@@ -465,22 +417,23 @@ async function runImageNow(id, visiting = new Set()) {
   }
   hydrateNode(node);
   if (!prompt) {
-    nodeToast(id, '图片节点缺少提示词', 'warn');
+    toast('图片节点缺少提示词', 'warn');
     throw new Error('图片节点缺少提示词');
   }
   const provider = currentProviderForNode(node);
-  const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
+  const apiUrl = provider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, '');
   const imageModel = imageRequest.model;
   if (node.data.model !== imageModel) {
     node.data.model = imageModel;
-    deps.refreshNodeModelSelects?.();
+    const modelControl = node.el.querySelector('[data-field="model"]');
+    if (modelControl) modelControl.value = imageModel;
   }
   if (!apiUrl) {
-    nodeToast(id, '请先在设置里完善该图片节点选择的 API 配置和密钥', 'warn');
+    toast('请先在设置里完善该图片节点选择的 API 配置和密钥', 'warn');
     throw new Error('图片节点缺少 API 配置或密钥');
   }
   if (!imageModel) {
-    nodeToast(id, '请先选择或填写图像模型', 'warn');
+    toast('请先选择或填写图像模型', 'warn');
     throw new Error('图片节点缺少图像模型');
   }
   const count = Math.max(1, Math.min(4, parseInt(node.data.count, 10) || 1));
@@ -497,6 +450,7 @@ async function runImageNow(id, visiting = new Set()) {
   budgetEntryId = await authorizeGenerationBudget?.({node, provider, model: imageModel, kind: 'image', request: budgetRequest, profile: capabilityCheck?.profile}) || '';
   const btn = node.el.querySelector('[data-run="image"]');
   const composerSend = btn?.classList.contains('composer-send');
+  const refUrls = refs;
   setImageStatus(
     node,
     'running',
@@ -533,17 +487,19 @@ async function runImageNow(id, visiting = new Set()) {
       hydrateNode(node);
     };
     const runOneImageRequest = async i => {
+      const scopedKeyCount = provider.useGlobalKey ? 1 : Math.max(1, (provider.keyPool || []).filter(item => item.scope === 'all' || item.scope === 'image').length);
+      let lastKeyError = null;
       const seed = variantSeedFor(i);
       setImageStatus(node, 'running', `正在生成第 ${i + 1}/${count} 张`, count > 1 ? `文生图 ${i + 1}/${count}` : (refUrls.length ? '图生图生成中...' : '文生图生成中...'));
-      {
-        const requestApiKey = provider.type === 'custom-sync' ? '' : await providerApiKey(provider);
-        if (!requestApiKey && provider.type !== 'custom-sync') throw new Error('图片节点没有可用的 Key，请先在设置中保存 API Key');
+      for (let keyAttempt = 0; keyAttempt < scopedKeyCount; keyAttempt += 1) {
+        const requestApiKey = provider.type === 'custom-sync' ? '' : await providerApiKey(provider, 'image', imageModel);
+        if (!requestApiKey && provider.type !== 'custom-sync') break;
         let requestError = null;
         let referenceProfile = '';
         let requestRecord;
         try {
           budgetActualRequests += 1;
-          requestRecord = {...imageRequest, seed: deps.imageRequestSeedFields?.({model: imageModel, seed})?.seed ?? null, provider: provider.name || provider.id, providerId: provider.id || '', keyLabel: provider.useGlobalKey ? '全局 Key' : '服务 Key', requestedModel: imageModel, status: 'submitted', submittedAt: Date.now()};
+          requestRecord = {...imageRequest, seed: deps.imageRequestSeedFields?.({model: imageModel, seed})?.seed ?? null, provider: provider.name || provider.id, providerId: provider.id || '', keyId: String(requestApiKey?.keyId || ''), keyLabel: provider.keyPool?.find(key => key.id === requestApiKey?.keyId)?.label || (provider.useGlobalKey ? '全局 Key' : ''), requestedModel: imageModel, status: 'submitted', submittedAt: Date.now()};
           requestRecords.push(requestRecord);
           node.data.lastImageRequest = requestRecord;
           saveProject();
@@ -552,23 +508,16 @@ async function runImageNow(id, visiting = new Set()) {
             : await imageGenerateRequest({...imageRequest, provider, apiUrl, apiKey: requestApiKey, model: imageModel, prompt: finalPrompt, size: requestSize, quality: imageRequest.quality, resolution: node.data.resolution || '1K', seed});
       outputModels[i] = result.model || imageModel;
       Object.assign(requestRecord, {adapterModel: outputModels[i], status: 'received'});
-      if (result.fallback) {
-        Object.assign(requestRecord, {fallbackNote: result.fallback.note, provider: result.fallback.providerName, providerId: result.fallback.providerId});
-      }
       const persistedUrl = await persistGeneratedImageResult(result, `generated_image_${Date.now()}_${i + 1}`, 'png');
       urls[i] = persistedUrl;
-      if (/^https?:/i.test(String(result.url))) requestRecord.sourceUrl = String(result.url);
       requestRecord.status = 'saved';
           errors[i] = null;
+          if (requestApiKey) reportProviderKeyResult?.(provider, 'image', null, requestApiKey);
           setImageStatus(node, 'running', `已完成 ${completedCount()}/${count} 张`, count > 1 ? `多张生成 ${completedCount()}/${count}` : '');
           applyPartialOutputs();
           return;
         } catch (err) {
           requestError = err;
-          // The provider already accepted the request (result or task id received): a re-run could charge again.
-          if (requestRecord && requestRecord.status !== 'submitted' && err && typeof err === 'object') {
-            try { err.afterSubmit = true; } catch (_) {}
-          }
           if (requestRecord) requestRecord.status = 'failed';
           if (imageRequest.allowReferenceFallback && refUrls.length && isApiGatewayTimeoutError(err)) {
             try {
@@ -589,9 +538,10 @@ async function runImageNow(id, visiting = new Set()) {
               referenceProfile = fallback.referenceProfile;
               outputModels[i] = fallback.model || imageModel;
               const persistedUrl = await persistGeneratedImageResult(fallback, `generated_image_${Date.now()}_${i + 1}`, 'png');
-              if (requestRecord) Object.assign(requestRecord, {adapterModel: outputModels[i], status: 'saved', ...(/^https?:/i.test(String(fallback.url)) ? {sourceUrl: String(fallback.url)} : {})});
+              if (requestRecord) Object.assign(requestRecord, {adapterModel: outputModels[i], status: 'saved'});
               urls[i] = persistedUrl;
               errors[i] = null;
+              if (requestApiKey) reportProviderKeyResult?.(provider, 'image', null, requestApiKey);
               setImageStatus(node, 'running', `已完成 ${completedCount()}/${count} 张`, count > 1 ? `多张生成 ${completedCount()}/${count}` : '');
               applyPartialOutputs();
               return;
@@ -599,13 +549,61 @@ async function runImageNow(id, visiting = new Set()) {
               requestError = new Error(`${err.message || String(err)}\n\n参考图兼容生成也未成功：${fallbackErr.message || String(fallbackErr)}`);
             }
           }
-          throw requestError;
+          lastKeyError = requestError;
+          if (requestApiKey) reportProviderKeyResult?.(provider, 'image', requestError, requestApiKey);
+          const capabilityDisabled = requestError?.code === 'IMAGE_CAPABILITY_DISABLED' || /image generation is not enabled for this group|图片生成未开通|未开通图片生成/i.test(String(requestError?.message || requestError || ''));
+          if (!capabilityDisabled || provider.type === 'custom-sync') throw requestError;
+          setImageStatus(node, 'running', '当前图片 Key 未开通生图，正在自动尝试下一把 Key', '正在切换图片 Key...');
         }
       }
+      throw lastKeyError || new Error('图片节点没有可用的图片 Key，请检查 Key 用途、图片权限、冷却状态或模型绑定');
     };
+    let batchSubmitted = false;
+    if (count > 1 && !refUrls.length && !String(node.data.seed || '').trim()
+      && provider.imageTaskMode !== 'async'
+      && (provider.type || 'openai-images') === 'openai-images' && imageGenerateBatchRequest) {
+      const requestApiKey = await providerApiKey(provider, 'image', imageModel);
+      if (requestApiKey) {
+        let record;
+        try {
+          budgetActualRequests += 1;
+          record = {
+            ...imageRequest, provider: provider.name || provider.id, providerId: provider.id || '',
+            keyId: String(requestApiKey.keyId || ''), requestedModel: imageModel,
+            status: 'submitted', submittedAt: Date.now(), batch: true
+          };
+          requestRecords.push(record);
+          node.data.lastImageRequest = record;
+          saveProject();
+          setImageStatus(node, 'running', `正在一次生成 ${count} 张`, `多张生成 0/${count}`);
+          const results = await imageGenerateBatchRequest({
+            ...imageRequest, provider, apiUrl, apiKey: requestApiKey, model: imageModel,
+            prompt: finalPrompt, size: requestSize, count
+          });
+          batchSubmitted = true;
+          record.status = 'received';
+          for (let i = 0; i < count; i += 1) {
+            try {
+              urls[i] = await persistGeneratedImageResult(results[i], `generated_image_${Date.now()}_${i + 1}`, 'png');
+              outputModels[i] = results[i].model || imageModel;
+              applyPartialOutputs();
+            } catch (err) {
+              errors[i] = err;
+            }
+          }
+          record.status = urls.some(Boolean) ? 'saved' : 'failed';
+          reportProviderKeyResult?.(provider, 'image', null, requestApiKey);
+        } catch (err) {
+          record && (record.status = 'failed');
+          const unsupportedCount = (err.status === 400 || err.status === 422)
+            && (err.param === 'n' || /(?:\bn\b|number of images|image count).{0,60}(?:unsupported|not supported|invalid|must be|maximum|only|不支持|无效)/i.test(err.message || ''));
+          reportProviderKeyResult?.(provider, 'image', unsupportedCount ? {releaseOnly: true} : err, requestApiKey);
+          if (!unsupportedCount) throw err;
+        }
+      }
+    }
     let nextRequestIndex = 0;
-    const requestConcurrency = Math.max(1, Math.min(count, Number(provider.concurrency || 1)));
-    const workers = Array.from({length: requestConcurrency}, async () => {
+    const workers = Array.from({length: batchSubmitted ? 0 : count}, async () => {
       while (nextRequestIndex < count) {
         const requestIndex = nextRequestIndex++;
         try {
@@ -620,11 +618,7 @@ async function runImageNow(id, visiting = new Set()) {
     const failedCount = errors.filter(Boolean).length;
     if (!completedUrls.length) {
       const failedWorker = workerResults.find(item => item.status === 'rejected');
-      const firstError = failedWorker?.reason || errors.find(Boolean) || new Error('全部图片生成失败');
-      if (errors.some(error => error?.afterSubmit) && firstError && typeof firstError === 'object') {
-        try { firstError.afterSubmit = true; } catch (_) {}
-      }
-      throw firstError;
+      throw failedWorker?.reason || errors.find(Boolean) || new Error('全部图片生成失败');
     }
     const firstReadyIndex = urls.findIndex(Boolean);
     node.data.prompt = ownPrompt || node.data.prompt;
@@ -681,11 +675,12 @@ async function runImageNow(id, visiting = new Set()) {
     refreshDownstreamLinkedInputs(node.id);
     addHistory({url: node.data.url, urls: completedUrls, refUrl: refUrls[0] || '', prompt: finalPrompt, model: node.data.outputModel, requestedModel: imageModel, outputModels: urls.flatMap((url, index) => url ? [outputModels[index] || imageModel] : []), provider: provider.name, size: targetSize, request: {...imageRequest}, requests: requestRecords.map(record => ({...record})), time: Date.now()});
     saveProject();
-    if (failedCount) nodeToast(id, `生成完成：${completedUrls.length} 张成功，${failedCount} 张失败`, 'warn');
-    else nodeToast(id, '生成完成：' + completedUrls.length + ' 张', 'success');
+    if (failedCount) toast(`生成完成：${completedUrls.length} 张成功，${failedCount} 张失败`, 'warn');
+    else toast('生成完成：' + completedUrls.length + ' 张', 'success');
     completeGenerationBudget?.(budgetEntryId, {actualRequests: budgetActualRequests, status: 'completed', differenceReason: failedCount ? `${failedCount} 张失败，已保留 ${completedUrls.length} 张成功结果` : (budgetActualRequests > count ? '参考图兼容回退增加了请求' : '')});
     return true;
   } catch (err) {
+    if (imageRequest.promptMode !== 'raw' && isSafetyError(err)) node.data.prompt = softenPrompt(finalPrompt);
     const formatted = formatImageGenerationError(err, {
       refCount: refUrls.length,
       providerName: provider.name,
@@ -706,15 +701,11 @@ async function runImageNow(id, visiting = new Set()) {
       error: err?.message || String(err),
       createdAt: Date.now()
     }]);
-    const willRetry = autoRetryWillApply(id, err);
-    if (willRetry) setImageStatus(node, 'running', '服务暂时繁忙或网络中断，稍后自动重试…', '等待自动重试');
-    else setImageStatus(node, 'error', formatted, imageErrorTitle(refUrls.length), {safety: isSafetyError(err)});
+    setImageStatus(node, 'error', formatted, imageErrorTitle(refUrls.length));
     refreshDownstreamLinkedInputs(node.id);
     saveProject();
     completeGenerationBudget?.(budgetEntryId, {actualRequests: budgetActualRequests, status: 'failed', differenceReason: err?.message || '生成失败'});
-    if (err && typeof err === 'object') { try { err.formattedMessage = formatted; } catch (_) {} }
-    if (willRetry) nodeToast(id, `${nodeDisplayTitle(node)}：服务暂时繁忙或网络中断，稍后会自动重试`, 'warn');
-    else nodeToast(id, formatted, 'error');
+    toast(formatted, 'error');
     throw err;
   } finally {
     if (btn) {

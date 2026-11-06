@@ -1,4 +1,8 @@
 
+.image-request-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 0; }
+.image-request-controls label { display: flex; align-items: center; gap: 6px; color: #e5eaf3; font-size: 12px; }
+.image-request-controls select, .image-request-controls .dark-btn { min-height: 34px; color: #f1f5fb; background: #202b3b; border: 1px solid #52637a; border-radius: 6px; padding: 6px 9px; }
+.image-request-controls small { flex-basis: 100%; color: #becbde; line-height: 1.5; }
 .image-request-dialog { box-sizing: border-box; width: min(820px, calc(100vw - 32px)); max-height: calc(100vh - 40px); padding: 22px; border: 1px solid #586b87; border-radius: 12px; background: #151e2c; color: #ecf1f8; }
 .image-request-dialog::backdrop { background: rgb(0 0 0 / 65%); }
 .image-request-dialog h2 { margin: 0 0 10px; font-size: 20px; }

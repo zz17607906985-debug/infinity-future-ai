@@ -23,6 +23,7 @@
     const zoomAroundPoint = deps.zoomAroundPoint || ((viewport) => viewport);
     const setCanvasProxyActive = deps.setCanvasProxyActive || (() => {});
     const scheduleTransform = deps.scheduleTransform || (() => {});
+    const applyTransform = deps.applyTransform || (() => {});
     const scheduleViewportInteractionEnd = deps.scheduleViewportInteractionEnd || (() => {});
     const updateLinkDrag = deps.updateLinkDrag || (() => {});
     const updateReferenceSort = deps.updateReferenceSort || (() => {});
@@ -36,19 +37,35 @@
     function bindCanvas() {
       const canvas = $('canvas');
       if (!canvas) return;
+      document.addEventListener('keydown', e => {
+        if (e.code !== 'Space' || e.repeat || state.activeWorkspace !== 'canvas' || e.target.closest?.('button,a,input,textarea,select,[contenteditable="true"],[role="dialog"],.command-palette')) return;
+        state.spacePanning = true;
+        canvas.classList.add('is-space-pan');
+        e.preventDefault();
+      });
+      document.addEventListener('keyup', e => {
+        if (e.code !== 'Space') return;
+        state.spacePanning = false;
+        canvas.classList.remove('is-space-pan');
+      });
+      window.addEventListener('blur', () => {
+        state.spacePanning = false;
+        canvas.classList.remove('is-space-pan');
+      });
       canvas.addEventListener('pointerdown', e => {
-        if (e.target.closest('.node') || e.target.closest('.port') || isCanvasOverlayTarget(e.target)) return;
+        if ((e.button !== 1 && !state.spacePanning && (e.target.closest('.node') || e.target.closest('.port'))) || isCanvasOverlayTarget(e.target)) return;
         closeFloatingCanvasUi();
+        if (e.button === 2) return;
         canvas.setPointerCapture?.(e.pointerId);
-        if (e.button === 0 && !e.shiftKey) clearSelection();
-        if (e.button === 0 && e.shiftKey) {
+        if (e.button === 0 && !e.shiftKey && !state.spacePanning) clearSelection();
+        if (e.button === 0 && e.shiftKey && !state.spacePanning) {
           releaseDrags(false);
           state.selecting = {startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, pointerId: e.pointerId, moved: false};
           updateSelectionBox();
           e.preventDefault();
           return;
         }
-        if (e.button === 0 || e.button === 1 || e.button === 2 || e.altKey) {
+        if (e.button === 0 || e.button === 1) {
           releaseDrags(false);
           state.panning = {x: e.clientX, y: e.clientY, pointerId: e.pointerId};
           canvas.classList.add('is-panning');
@@ -56,7 +73,11 @@
           e.preventDefault();
         }
       });
-      canvas.addEventListener('contextmenu', e => e.preventDefault());
+      canvas.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        if (state.activeWorkspace !== 'canvas' || e.target.closest('.node') || isCanvasMenuBlockedTarget(e.target)) return;
+        showNodeTypeMenu(e.clientX, e.clientY);
+      });
       canvas.addEventListener('dblclick', e => {
         if (state.activeWorkspace !== 'canvas') return;
         if (isCanvasMenuBlockedTarget(e.target) || e.target.closest('.node')) return;
@@ -138,13 +159,16 @@
           state.offsetY += e.clientY - state.panning.y;
           state.panning.x = e.clientX;
           state.panning.y = e.clientY;
-          scheduleTransform(false, false);
+          // Keep full-fidelity normal mode directly under the pointer. The proxy
+          // mode still coalesces its snapshot transform on animation frames.
+          if (state.fastCanvasMode) scheduleTransform(false, false);
+          else applyTransform(false, false);
         }
-        if (state.dragging) updateNodeDrag(e.clientX, e.clientY, e.altKey);
+        if (state.dragging) updateNodeDrag(e.clientX, e.clientY);
       });
       document.addEventListener('mousemove', e => {
         if (!state.dragging || state.dragging.pointerId != null) return;
-        updateNodeDrag(e.clientX, e.clientY, e.altKey);
+        updateNodeDrag(e.clientX, e.clientY);
       });
       document.addEventListener('pointerup', e => {
         if (state.linkDrag) {
@@ -163,7 +187,7 @@
         if (state.dragging && state.dragging.pointerId == null) releaseDrags(true);
       });
       document.addEventListener('mousedown', e => {
-        if (state.dragging && !state.panning && !e.target.closest('.node,.canvas-group')) releaseDrags(true);
+        if (state.dragging && !state.panning && !e.target.closest('.node')) releaseDrags(true);
       }, true);
       document.addEventListener('dragstart', e => e.preventDefault());
       window.addEventListener('blur', () => releaseDrags(true));

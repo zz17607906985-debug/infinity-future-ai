@@ -1,72 +1,62 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, safeStorage, globalShortcut } = require('electron');
-const { uniqueTempPath, writeFileAtomic, writeFileAtomicUnlocked, writeJsonAtomic } = require('./runtime/atomic-write');
-const { spawn, spawnSync } = require('child_process');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, safeStorage } = require('electron');
+const { spawn } = require('child_process');
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
 const { fileURLToPath, pathToFileURL } = require('url');
 const crypto = require('crypto');
+const {createCanvasPreviewCache} = require('./runtime/canvas-preview-cache');
 const dns = require('dns').promises;
 const net = require('net');
-const os = require('os');
 const APP_PACKAGE_METADATA = require('../package.json');
 const { internalTestChannelsAllowed, readReleaseChannel } = require('./runtime/release-channel');
-const { isolatedUserFolders, resolveIsolatedProfile } = require('./runtime/test-isolation');
-const { resolveMovedStorageRoot } = require('./runtime/storage-relocate');
-const { normalizeCodexPermission } = require('./runtime/codex-security');
-const CodexCli = require('./runtime/codex-cli');
-const UpdateCheck = require('./support/update-check');
-const AgentPermissions = require('./agent/permissions');
-const AgentLoop = require('./agent/loop');
-const AgentSessionStore = require('./agent/session-store');
-const AgentDocuments = require('./agent/documents');
-const AgentModel = require('./agent/model');
-const AgentTemplates = require('./agent/templates');
-const AgentScheduler = require('./agent/scheduler');
-const AgentAudit = require('./agent/audit');
-const AgentMemory = require('./agent/memory');
-const AgentGuiLock = require('./agent/gui-lock');
-const AgentProcess = require('./agent/process');
-const { createApprovalHub } = require('./agent/approval-queue');
-const agentApprovalHub = createApprovalHub();
-const { ensureRuntimeDirectories, runtimePathsFromRoot, selectRuntimePaths } = require('./runtime/runtime-paths');
+const { codexSelfUpdateAllowed, normalizeCodexPermission, resolveCodexCommandPolicy } = require('./runtime/codex-security');
+const { selectRuntimePaths } = require('./runtime/runtime-paths');
 const { RESTORE_JOURNAL_FORMAT, recoverWorkspaceRestore, restoreJournalFile, writeRestoreJournal } = require('./runtime/workspace-restore');
-const { assertStoreValue, backupStoreSnapshot, backupValidStore, enforceBackupSizeCap, readValidStore, recoverStoreFromBackup } = require('./runtime/json-store-recovery');
-const ProjectFiles = require('./runtime/project-files');
-const MediaResolver = require('./runtime/media-resolver');
+const { assertStoreValue, backupValidStore, readValidStore, recoverStoreFromBackup } = require('./runtime/json-store-recovery');
 const { redactSecrets, safeLogEntry, sanitizeDiagnosticReport } = require('./diagnostics/diagnostic-privacy');
 const { buildSupportInfo, readSupportDocument, resolveLegalRoot } = require('./support/support-service');
+const ProviderConformanceEvidence = require('./providers/provider-conformance');
+const { createLicenseService } = require('./licensing/license-service');
+const { loadIssuerKeyRing } = require('./licensing/issuer-keys');
+const { createRedemptionClient } = require('./licensing/redemption-client');
+const { readWindowsMachineGuid } = require('./licensing/windows-machine-id');
 const {
   createMusicSourcePolicy,
   openMusicRights,
   platformStreamRights
 } = require('./media/music-source-policy');
+const {
+  buildUpdateHelperCommand,
+  loadTrustedPublisherThumbprints,
+  prepareInstallerRollback,
+  prepareInstallerUpdate,
+  verifyInstallerPackage
+} = require('./update/installer-update');
+const {checkLatestGitHubUpdate} = require('./update/github-releases');
+const { parseInstallerUpdateOutcome } = require('./update/update-outcome');
 const { searchSkillMarket } = require('./skills/skill-market');
 const { buildZip, readZipTextSummary, readZipEntries } = require('./runtime/zip-utils');
 const ShortImports = require('./media/short-import-service');
 const MediaProcessContract = require('./media/media-process-contract');
 const ReviewPackage = require('./review/review-package');
-const WallpaperStore = require('./runtime/wallpaper-store');
-const TemplateStore = require('./runtime/template-store');
-const PromptStore = require('./runtime/prompt-store');
-const PortableLibrary = require('./runtime/portable-library');
-const ProviderBalance = require('./runtime/provider-balance');
 const { buildOfflineReviewEntries } = require('./review/review-export');
+const WallpaperStore = require('./runtime/wallpaper-store');
+const UiPreferences = require('./runtime/ui-preferences');
+const ProviderBalance = require('./runtime/provider-balance');
 
 app.setName('∞未来 AI');
 
 const RELEASE_CHANNEL = readReleaseChannel(APP_PACKAGE_METADATA);
 const INTERNAL_TEST_CHANNELS_ALLOWED = internalTestChannelsAllowed(APP_PACKAGE_METADATA);
-const DEFAULT_RUNTIME_ROOT = path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'InfinityFutureAI');
-// Exits early (via throw) when the flag is malformed or points at the real profile.
-const ISOLATED_PROFILE = resolveIsolatedProfile(process.argv, DEFAULT_RUNTIME_ROOT);
-// Test hooks (eval, e2e) run only inside an explicitly isolated profile, regardless of release channel.
-const TEST_HOOKS_ALLOWED = ISOLATED_PROFILE.enabled;
 
 const LOCAL_RUNTIME_DIR = 'runtime-data';
 const STORAGE_ROOTS_FILE = 'allowed-storage-roots.json';
 const API_KEY_FILE = 'api-key.json';
 const PROVIDER_KEYS_FILE = 'provider-api-keys.json';
+const PROJECT_BACKUP_LIMIT = 20;
+/** Keep one previous Codex binary for rollback; extra copies waste ~300MB each. */
+const CODEX_BACKUP_LIMIT = 1;
 /** Keep one previous app.asar under user-data/update-backups for installer rollback. */
 const UPDATE_ASAR_BACKUP_LIMIT = 1;
 const WORKSPACE_BACKUP_FORMAT = 'future-ai-workspace-backup';
@@ -81,17 +71,12 @@ const STORE_FILES = {
   models: 'models.json'
 };
 const DIAGNOSTIC_LOG_FILE = 'app.log';
+const UPDATE_PROTECTED_FILES = ['projects.json', 'history.json', 'assets.json', 'asset-folders.json', 'models.json', 'api-key.json', 'storageDir', 'runtime-data'];
 const allowedStorageRoots = new Set();
+const allowedUpdatePackageDirs = new Set();
 const cleanupScans = new Map();
 const storageWriteQueues = new Map();
 const codexSessions = new Map();
-const agentSessions = new Map();
-const agentCanvasJobs = new Map();
-let agentScheduleTimer = null;
-let agentEmergencyArmed = false;
-let agentLastEmergencyAt = 0;
-const agentScheduleInflight = new Set();
-
 const CODEX_OUTPUT_LIMIT = 240000;
 const CODEX_PROMPT_LIMIT = 12000;
 const CODEX_RUN_TIMEOUT_MS = 20 * 60 * 1000;
@@ -140,10 +125,6 @@ const MANJU_H264_STRATEGIES = [
   {
     id: 'libopenh264',
     args: ['-c:v', 'libopenh264', '-rc_mode', 'quality', '-b:v', '8M', '-maxrate', '12M', '-bufsize', '16M', '-pix_fmt', 'yuv420p']
-  },
-  {
-    id: 'libx264',
-    args: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p']
   }
 ];
 
@@ -153,37 +134,53 @@ function packagedBaseDir() {
 
 function configureLocalRuntimePaths(baseDir = packagedBaseDir()) {
   const legacyRoot = path.join(baseDir, LOCAL_RUNTIME_DIR);
-  // An isolated profile never migrates from or falls back to any other location.
-  const selection = ISOLATED_PROFILE.enabled
-    ? { migrated: false, usingLegacy: false, paths: ensureRuntimeDirectories(runtimePathsFromRoot(ISOLATED_PROFILE.root)) }
-    : selectRuntimePaths({ legacyRoot, targetRoot: DEFAULT_RUNTIME_ROOT });
+  const localAppData = process.env.LOCALAPPDATA || app.getPath('appData');
+  const runtimeRootOverride = INTERNAL_TEST_CHANNELS_ALLOWED ? process.env.FUTURE_AI_RUNTIME_ROOT : '';
+  const targetRoot = runtimeRootOverride || path.join(localAppData, 'InfinityFutureAI');
+  const selection = selectRuntimePaths({ legacyRoot, targetRoot });
   const paths = selection.paths;
 
   app.setPath('userData', paths.userData);
   app.setPath('sessionData', paths.sessionData);
   app.setAppLogsPath(paths.logs);
   app.setPath('crashDumps', paths.crashDumps);
-  if (ISOLATED_PROFILE.enabled) {
-    for (const [name, dir] of Object.entries(isolatedUserFolders(ISOLATED_PROFILE.root))) {
-      fsSync.mkdirSync(dir, { recursive: true });
-      app.setPath(name, dir);
-    }
-  }
   return { ...paths, legacyRoot, migration: selection };
 }
 
 const LOCAL_RUNTIME_PATHS = configureLocalRuntimePaths();
-
-// One running copy per profile: a second launch (double-click, shortcut, 启动.cmd) focuses the open window
-// instead of starting a second process that would fight over the same settings, keys and project files.
-const SINGLE_INSTANCE_LOCK = app.requestSingleInstanceLock();
-if (!SINGLE_INSTANCE_LOCK) app.exit(0);
-app.on('second-instance', () => {
-  const win = BrowserWindow.getAllWindows().find(item => !item.isDestroyed());
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  if (!win.isVisible()) win.show();
-  win.focus();
+const LICENSE_KEY_RING = loadIssuerKeyRing(path.join(__dirname, 'licensing', 'issuer-public-keys.json'));
+const UPDATE_KEY_RING = loadIssuerKeyRing(
+  path.join(__dirname, 'update', 'update-public-keys.json'),
+  'future-ai-update-keys/v1'
+);
+const UPDATE_SOURCE = JSON.parse(fsSync.readFileSync(path.join(__dirname, 'update', 'github-release-config.json'), 'utf8'));
+const TRUSTED_UPDATE_PUBLISHERS = loadTrustedPublisherThumbprints(
+  path.join(__dirname, 'update', 'trusted-publishers.json')
+);
+function loadRedemptionClient() {
+  const file = path.join(__dirname, 'licensing', 'redemption-service.json');
+  let config = {};
+  try { config = JSON.parse(fsSync.readFileSync(file, 'utf8')); } catch (error) {
+    if (error?.code !== 'ENOENT') throw new Error('授权服务配置无效');
+  }
+  const endpoint = INTERNAL_TEST_CHANNELS_ALLOWED && process.env.FUTURE_AI_REDEMPTION_ENDPOINT
+    ? process.env.FUTURE_AI_REDEMPTION_ENDPOINT
+    : config.endpoint;
+  if (config.status !== 'configured' || !endpoint) return null;
+  return createRedemptionClient({
+    endpoint,
+    allowInsecureLocalhost: INTERNAL_TEST_CHANNELS_ALLOWED
+  });
+}
+const REDEMPTION_CLIENT = loadRedemptionClient();
+const licenseService = createLicenseService({
+  userDataDir: LOCAL_RUNTIME_PATHS.userData,
+  safeStorage,
+  keyRing: LICENSE_KEY_RING,
+  expectedProduct: 'future-ai-desktop',
+  appVersion: app.getVersion(),
+  machineIdProvider: readWindowsMachineGuid,
+  redemptionClient: REDEMPTION_CLIENT
 });
 
 function isAllowedExternalUrl(url) {
@@ -224,19 +221,24 @@ function loadAllowedStorageRoots() {
 async function findProjectRoot() {
   const candidates = [];
   for (const root of allowedStorageRoots) {
-    const projects = await readProjectsForScan(root);
-    if (!projects.length) continue;
-    const updatedAt = projects.reduce((latest, project) => Math.max(latest, Number(project?.updatedAt || project?.createdAt || 0)), 0);
-    candidates.push({root, updatedAt, count: projects.length});
+    const file = path.join(root, STORE_FILES.projects);
+    try {
+      const [raw, stats] = await Promise.all([fs.readFile(file, 'utf8'), fs.stat(file)]);
+      const projects = JSON.parse(raw);
+      if (!Array.isArray(projects) || !projects.length) continue;
+      const updatedAt = projects.reduce((latest, project) => Math.max(latest, Number(project?.updatedAt || project?.createdAt || 0)), 0);
+      candidates.push({root, updatedAt, size:stats.size});
+    } catch {}
   }
-  candidates.sort((a, b) => b.count - a.count || b.updatedAt - a.updatedAt || a.root.localeCompare(b.root));
+  candidates.sort((a, b) => b.size - a.size || b.updatedAt - a.updatedAt || a.root.localeCompare(b.root));
   return candidates[0]?.root || '';
 }
 
 async function persistAllowedStorageRoots() {
   const file = storageRootsFile();
-  // Serialized + unique temp names: concurrent agent IPC calls used to collide on the same temp file.
-  await writeJsonAtomic(file, [...allowedStorageRoots].sort());
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify([...allowedStorageRoots].sort(), null, 2), 'utf8');
+  await fs.rename(tempFile, file);
 }
 
 function pathInside(root, target) {
@@ -245,13 +247,12 @@ function pathInside(root, target) {
 }
 
 function hasExistingStoreFiles(root) {
-  return ProjectFiles.hasSplitProjects(root) || Object.values(STORE_FILES).some(file => fsSync.existsSync(path.join(root, file)));
+  return Object.values(STORE_FILES).some(file => fsSync.existsSync(path.join(root, file)));
 }
 
 async function rememberStorageRoot(dir) {
   const root = path.resolve(String(dir || ''));
   if (!root) throw new Error('存储目录无效');
-  if (allowedStorageRoots.has(root)) return root;
   allowedStorageRoots.add(root);
   await persistAllowedStorageRoots();
   return root;
@@ -280,139 +281,6 @@ function safeExistingMediaPath(target) {
     if (pathInside(root, file)) return file;
   }
   throw new Error('未授权的媒体文件路径');
-}
-
-const RELATIVE_MEDIA_REF = /^media\/[^/\\:*?"<>|]+$/;
-
-// Project/history JSON stores keep media as `media/<file>` relative to the
-// storage root so a moved or restored workspace keeps working; the renderer
-// always works with absolute file:// URLs.
-function mapStoreStrings(value, mapString) {
-  if (typeof value === 'string') return mapString(value);
-  if (Array.isArray(value)) return value.map(item => mapStoreStrings(item, mapString));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, mapStoreStrings(item, mapString)]));
-  }
-  return value;
-}
-
-function relativizeStoreMedia(dir, value) {
-  const mediaDir = path.resolve(dir, 'media');
-  return mapStoreStrings(value, text => {
-    if (!text.startsWith('file:')) return text;
-    let file;
-    try { file = fileURLToPath(text); } catch { return text; }
-    return path.relative(mediaDir, path.dirname(file)) === '' ? `media/${path.basename(file)}` : text;
-  });
-}
-
-function absolutizeStoreMedia(dir, value) {
-  return mapStoreStrings(value, text => RELATIVE_MEDIA_REF.test(text)
-    ? pathToFileURL(path.join(path.resolve(dir), 'media', text.slice('media/'.length))).href
-    : text);
-}
-
-// Every place an image may have ended up before the folder moved: the current
-// media folder, other known storage roots, the default folder, the old in-app
-// 数据 folder and the portable library/wallpaper folders.
-function mediaResolverFor(dir) {
-  const roots = [path.resolve(dir), ...allowedStorageRoots];
-  let extra = [];
-  try { extra = [path.join(defaultStorageDir(), 'media'), path.join(installDir(), '数据', 'media')]; } catch {}
-  return MediaResolver.createResolver({
-    mediaDirs: [...roots.map(root => path.join(root, 'media')), ...extra],
-    libraryDirs: (() => { try { return libraryDirs(); } catch { return []; } })(),
-    wallpaperDirs: (() => { try { return wallpaperDirs(); } catch { return []; } })()
-  });
-}
-
-async function repairStoreMediaRefs(dir, value) {
-  if (value == null) return {value, repaired: 0, imported: 0, missing: []};
-  return await MediaResolver.repairStoreRefs(value, {mediaDir: path.join(path.resolve(dir), 'media'), resolver: mediaResolverFor(dir)});
-}
-
-// Store values are written with every media file inside <dir>/media so they can
-// be stored relative to the folder (portable when the folder is moved/copied).
-async function prepareStoreValueForWrite(dir, value, {importForeign = true} = {}) {
-  if (!importForeign) return relativizeStoreMedia(dir, value);
-  const {value: localized} = await MediaResolver.importForeignRefs(value, {mediaDir: path.join(path.resolve(dir), 'media')});
-  return relativizeStoreMedia(dir, localized);
-}
-
-// Before the first automatic ref repair rewrites projects, keep the original files.
-async function backupProjectsBeforeRepair(dir) {
-  const source = safeStoragePath(dir, ProjectFiles.PROJECTS_DIR);
-  const target = safeStoragePath(dir, 'backups', `pre-media-repair-${timestampForBackup()}`);
-  let entries = [];
-  try { entries = await fs.readdir(source, {withFileTypes: true}); } catch { return ''; }
-  await ensureDir(target);
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith('.json')) await fs.copyFile(path.join(source, entry.name), path.join(target, entry.name));
-  }
-  return target;
-}
-
-// Used until the user picks their own folder, so results still persist locally.
-function defaultStorageDir() {
-  return path.join(app.getPath('documents'), '∞未来AI');
-}
-
-async function copyStorageMedia(fromDir, toDir) {
-  const from = safeStoragePath(await ensureStorageRootAllowed(fromDir), 'media');
-  const to = safeStoragePath(await ensureStorageRootAllowed(toDir), 'media');
-  await ensureDir(to);
-  let copied = 0;
-  let entries = [];
-  try { entries = await fs.readdir(from, {withFileTypes: true}); } catch (err) { if (err.code !== 'ENOENT') throw err; }
-  for (const entry of entries) {
-    if (!entry.isFile() || entry.name.endsWith('.tmp')) continue;
-    const target = path.join(to, entry.name);
-    if (fsSync.existsSync(target)) continue;
-    await fs.copyFile(path.join(from, entry.name), target);
-    copied += 1;
-  }
-  return {copied, fromPrefix: `${pathToFileURL(from).href}/`, toPrefix: `${pathToFileURL(to).href}/`};
-}
-
-function installDir() {
-  return path.dirname(app.getPath('exe'));
-}
-
-function storageDirInsideInstallDir(dir) {
-  return app.isPackaged && pathInside(installDir(), path.resolve(String(dir || '')));
-}
-
-const STALE_TEMP_AGE_MS = 60 * 1000;
-
-async function removeStaleTempFiles(dir) {
-  let entries;
-  try { entries = await fs.readdir(dir, {withFileTypes: true}); } catch { return 0; }
-  let removed = 0;
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.tmp')) continue;
-    const file = path.join(dir, entry.name);
-    try {
-      const stats = await fs.stat(file);
-      if (Date.now() - stats.mtimeMs < STALE_TEMP_AGE_MS) continue;
-      await fs.rm(file, {force: true});
-      removed += 1;
-    } catch {}
-  }
-  return removed;
-}
-
-async function cleanStaleStorageTempFiles() {
-  for (const root of allowedStorageRoots) {
-    let removed = 0;
-    const dirs = [root, path.join(root, 'media'), path.join(root, ProjectFiles.PROJECTS_DIR), path.join(root, 'backups', 'projects')];
-    try {
-      for (const entry of await fs.readdir(path.join(root, 'backups', 'stores'), {withFileTypes: true})) {
-        if (entry.isDirectory()) dirs.push(path.join(root, 'backups', 'stores', entry.name));
-      }
-    } catch {}
-    for (const dir of dirs) removed += await removeStaleTempFiles(dir);
-    if (removed) await appendAppLog('info', 'removed stale storage temp files', {count: removed});
-  }
 }
 
 function timestampForBackup(date = new Date()) {
@@ -465,22 +333,28 @@ async function listProjectBackups(dir) {
   }
 }
 
-// Project backups are history-free snapshots of all projects (undo history is excluded).
-async function backupProjectsSnapshot(dir, projects, {force = false} = {}) {
-  return await backupStoreSnapshot({
-    value: ProjectFiles.projectsWithoutHistory(projects),
-    ...(force ? {minIntervalMs: 0} : {}),
+async function pruneProjectBackups(dir) {
+  const backups = await listProjectBackups(dir);
+  const stale = backups.slice(PROJECT_BACKUP_LIMIT);
+  await Promise.all(stale.map(item => fs.rm(safeProjectBackupPath(dir, item.fileName), { force: true })));
+}
+
+async function backupProjectStore(dir, file) {
+  return await backupValidStore({
+    file,
     backupDir: projectBackupsDir(dir),
     backupName: `${timestampForBackup()}-projects.json`,
-    suffix: '-projects.json'
+    limit: PROJECT_BACKUP_LIMIT
   });
 }
 
 async function backupStoreFile(dir, name, file) {
+  if (name === 'projects') return await backupProjectStore(dir, file);
   return await backupValidStore({
     file,
     backupDir: storeBackupsDir(dir, name),
-    backupName: `${timestampForBackup()}-${path.basename(file)}`
+    backupName: `${timestampForBackup()}-${path.basename(file)}`,
+    limit: PROJECT_BACKUP_LIMIT
   });
 }
 
@@ -493,66 +367,23 @@ async function readStoreWithRecovery(dir, name) {
   });
 }
 
-async function recoverProjectFromSnapshots(dir, id) {
-  for (const backup of await listProjectBackups(dir)) {
-    try {
-      const project = (await readValidStore(safeProjectBackupPath(dir, backup.fileName))).find(item => item?.id === id);
-      if (project) return project;
-    } catch {}
-  }
-  return null;
-}
-
-// Single read path for projects: migrates a legacy projects.json, otherwise reads
-// the per-project files (recovering unreadable ones from snapshots).
-async function readProjectsStore(dir) {
-  return await enqueueStorageWrite(safeStoragePath(dir, ProjectFiles.PROJECTS_DIR), async () => {
-    if (ProjectFiles.hasLegacyProjects(dir)) {
-      const legacy = await readStoreWithRecovery(dir, 'projects');
-      const migratedTo = await ProjectFiles.migrateLegacyProjects(dir, legacy.value);
-      await appendAppLog('info', 'projects.json migrated to per-project files', {projects: legacy.value.length, backup: path.basename(migratedTo)});
-      return {value: legacy.value, recovery: legacy.recovered ? {backup: path.basename(legacy.backupFile), corrupt: path.basename(legacy.corruptFile)} : null};
-    }
-    if (!ProjectFiles.hasSplitProjects(dir)) return {value: null, recovery: null};
-    const {projects, recovered} = await ProjectFiles.readSplitProjects(dir, {recoverProject: id => recoverProjectFromSnapshots(dir, id)});
-    return {value: projects, recovery: recovered.length ? {backup: '项目快照备份', corrupt: recovered.join(', ')} : null};
-  });
-}
-
-async function writeProjectsStore(dir, projects) {
-  return await enqueueStorageWrite(safeStoragePath(dir, ProjectFiles.PROJECTS_DIR), async () => {
-    await ProjectFiles.retireLegacyProjects(dir);
-    await ProjectFiles.writeSplitProjects(dir, projects);
-    await backupProjectsSnapshot(dir, projects);
-    await enforceBackupSizeCap([projectBackupsDir(dir), safeStoragePath(dir, 'backups', 'stores')]);
-    return true;
-  });
-}
-
-// Tolerant read for scans/diagnostics: never migrates or throws.
-async function readProjectsForScan(root) {
-  try {
-    if (ProjectFiles.hasSplitProjects(root)) return absolutizeStoreMedia(root, (await ProjectFiles.readSplitProjects(root)).projects);
-    const legacy = JSON.parse(await fs.readFile(path.join(root, ProjectFiles.LEGACY_FILE), 'utf8'));
-    return Array.isArray(legacy) ? absolutizeStoreMedia(root, legacy) : [];
-  } catch {
-    return [];
-  }
-}
-
 async function restoreProjectBackup(dir, fileName) {
   await ensureStorageRootAllowed(dir);
-  const restored = await readValidStore(safeProjectBackupPath(dir, fileName));
-  const current = await readProjectsStore(dir);
-  if (current.value) await backupProjectsSnapshot(dir, current.value, {force: true});
-  await enqueueStorageWrite(safeStoragePath(dir, ProjectFiles.PROJECTS_DIR), () => ProjectFiles.writeSplitProjects(dir, restored));
+  const backupFile = safeProjectBackupPath(dir, fileName);
+  await readValidStore(backupFile);
+  const targetFile = safeStoragePath(dir, safeStoreFile('projects'));
+  await ensureDir(path.dirname(targetFile));
+  if (fsSync.existsSync(targetFile)) await backupProjectStore(dir, targetFile);
+  const tempFile = `${targetFile}.${process.pid}.${Date.now()}.tmp`;
+  await fs.copyFile(backupFile, tempFile);
+  await fs.rename(tempFile, targetFile);
   return true;
 }
 
 loadAllowedStorageRoots();
 
 function e2eConfig() {
-  if (!TEST_HOOKS_ALLOWED || process.env.FUTURE_CANVAS_E2E !== '1') return { enabled: false };
+  if (!INTERNAL_TEST_CHANNELS_ALLOWED || process.env.FUTURE_CANVAS_E2E !== '1') return { enabled: false };
   return {
     enabled: true,
     processId: process.pid,
@@ -573,20 +404,11 @@ if (E2E_CONFIG.enabled && E2E_CONFIG.storageDir) {
 }
 
 async function readApiKeySecret() {
-  await waitForSecretEncryption();
   try {
     const data = JSON.parse(await fs.readFile(apiKeyFile(), 'utf8'));
     if (data.format === 'safeStorage-v1' && typeof data.ciphertext === 'string') {
       requireSecretEncryption();
-      try {
-        return safeStorage.decryptString(Buffer.from(data.ciphertext, 'base64'));
-      } catch (error) {
-        // Ciphertext from an older Windows keyring cannot be decrypted; treat it as
-        // "no saved key" so the user can simply re-enter it instead of seeing a
-        // misleading "secure storage unavailable" warning on every launch.
-        await appendAppLog('warn', 'stale global API key ciphertext ignored', { message: error?.message || String(error) });
-        return '';
-      }
+      return safeStorage.decryptString(Buffer.from(data.ciphertext, 'base64'));
     }
     if (data.format === 'plain-fallback-v1' && typeof data.apiKey === 'string') {
       requireSecretEncryption();
@@ -602,17 +424,6 @@ async function readApiKeySecret() {
     if (err.code === 'ENOENT') return '';
     throw err;
   }
-}
-
-// safeStorage can report unavailable for a short moment right after startup on
-// Windows; poll briefly before concluding the system keyring is unusable.
-async function waitForSecretEncryption(timeoutMs = 2000, intervalMs = 100) {
-  await app.whenReady();
-  const deadline = Date.now() + timeoutMs;
-  while (!safeStorage.isEncryptionAvailable() && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-  }
-  return safeStorage.isEncryptionAvailable();
 }
 
 function requireSecretEncryption() {
@@ -638,7 +449,9 @@ async function writeApiKeySecret(apiKey) {
     format: 'safeStorage-v1',
     ciphertext: safeStorage.encryptString(value).toString('base64')
   };
-  await writeJsonAtomic(file, record);
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify(record, null, 2), 'utf8');
+  await fs.rename(tempFile, file);
   return true;
 }
 
@@ -682,66 +495,182 @@ function encryptProviderKeyRecord(apiKey) {
 }
 
 async function writeProviderKeyStore(store) {
-  await writeJsonAtomic(providerKeysFile(), store);
+  const file = providerKeysFile();
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempFile, JSON.stringify(store, null, 2), 'utf8');
+  await fs.rename(tempFile, file);
 }
 
-// Stored format is {format: 'safeStorage-pool-v1', keys: [...]}; older versions
-// wrote a single safeStorage-v1 record or several pool entries. Only the first
-// decryptable entry is used now.
 function normalizeStoredProviderKeyEntries(record) {
   if (record && record.format === 'safeStorage-pool-v1' && Array.isArray(record.keys)) {
-    return record.keys
-      .map((item, index) => ({id: String(item?.id || `key-${index + 1}`).trim(), ciphertext: String(item?.ciphertext || '')}))
-      .filter(item => item.id && item.ciphertext);
+    return record.keys.map((item, index) => ({
+      id: String(item?.id || `key-${index + 1}`).trim(),
+      label: String(item?.label || `Key ${index + 1}`).trim() || `Key ${index + 1}`,
+      scope: ['all', 'chat', 'image', 'video'].includes(item?.scope) ? item.scope : 'all',
+      lastUsedAt: Number(item?.lastUsedAt || 0),
+      failureCount: Number(item?.failureCount || 0),
+      cooldownUntil: Number(item?.cooldownUntil || 0),
+      lastError: String(item?.lastError || '').slice(0, 240),
+      health: ['unknown', 'ok', 'cooldown', 'blocked'].includes(item?.health) ? item.health : 'unknown',
+      ciphertext: String(item?.ciphertext || '')
+    })).filter(item => item.id && item.ciphertext);
   }
   const value = decryptProviderKeyRecord(record);
-  return value ? [{id: 'key-1', ciphertext: encryptProviderKeyRecord(value).ciphertext}] : [];
+  return value ? [{id: 'key-1', label: '主 Key', scope: 'all', lastUsedAt: 0, failureCount: 0, ciphertext: encryptProviderKeyRecord(value).ciphertext}] : [];
 }
 
 async function readProviderKeyEntries(providerId) {
   const id = sanitizeProviderKeyId(providerId);
-  await waitForSecretEncryption();
   const store = await readProviderKeyStore();
+  const record = store[id];
   let entries = [];
   try {
-    entries = normalizeStoredProviderKeyEntries(store[id]);
-  } catch {
-    // Undecryptable legacy ciphertext (e.g. after a Windows profile migration).
-    entries = [];
+    entries = normalizeStoredProviderKeyEntries(record);
+  } catch (error) {
+    // A legacy ciphertext can become undecryptable after a Windows profile or
+    // machine migration. Preserve the provider as unavailable instead of
+    // making every generation request fail with a raw safeStorage exception.
+    if (record && typeof record === 'object') {
+      entries = [{
+        id: 'key-1',
+        label: '无法解密的 Key',
+        scope: 'all',
+        lastUsedAt: 0,
+        failureCount: 1,
+        cooldownUntil: Date.now() + 24 * 60 * 60 * 1000,
+        lastError: String(error?.message || error).slice(0, 240),
+        health: 'blocked',
+        ciphertext: String(record.ciphertext || '')
+      }].filter(item => item.ciphertext);
+    }
   }
-  const decrypted = entries.map(entry => {
+  if (entries.length && record?.format !== 'safeStorage-pool-v1') {
+    store[id] = {format: 'safeStorage-pool-v1', keys: entries};
+    await writeProviderKeyStore(store);
+  }
+  const decryptedEntries = entries.map(entry => {
     try {
       return {...entry, apiKey: decryptProviderKeyRecord({format: 'safeStorage-v1', ciphertext: entry.ciphertext})};
-    } catch {
-      return {...entry, apiKey: ''};
+    } catch (error) {
+      return {
+        ...entry,
+        apiKey: '',
+        health: 'blocked',
+        failureCount: Math.max(1, Number(entry.failureCount || 0)),
+        cooldownUntil: Math.max(Date.now() + 24 * 60 * 60 * 1000, Number(entry.cooldownUntil || 0)),
+        lastError: String(error?.message || error).slice(0, 240)
+      };
     }
-  }).filter(entry => entry.apiKey);
-  return decrypted;
+  });
+  // Drop ciphertexts that belong to an unavailable Windows keyring. Keeping
+  // them in the pool would make selection prefer an empty, undecryptable key
+  // over a newly saved key.
+  const validEntries = decryptedEntries.filter(entry => entry.apiKey);
+  if (validEntries.length !== decryptedEntries.length) {
+    if (validEntries.length) {
+      store[id] = {
+        format: 'safeStorage-pool-v1',
+        keys: validEntries.map(({apiKey, ...entry}) => entry)
+      };
+    } else {
+      delete store[id];
+    }
+    await writeProviderKeyStore(store);
+  }
+  return validEntries;
 }
 
-async function readProviderApiKey(providerId) {
+async function readProviderApiKey(providerId, keyId = '') {
   const entries = await readProviderKeyEntries(providerId);
-  return entries[0]?.apiKey || '';
+  const selected = (keyId && entries.find(entry => entry.id === keyId)) || entries[0];
+  return selected?.apiKey || '';
 }
 
-async function writeProviderApiKey(providerId, apiKey) {
-  // One Key per provider: saving replaces whatever was stored before (including
-  // extra entries left by older multi-key versions).
+async function listProviderApiKeys(providerId) {
+  const entries = await readProviderKeyEntries(providerId);
+  return entries.map(entry => ({
+    id: entry.id,
+    label: entry.label,
+    scope: entry.scope,
+    lastUsedAt: entry.lastUsedAt,
+    failureCount: entry.failureCount,
+    cooldownUntil: entry.cooldownUntil,
+    lastError: entry.lastError,
+    health: entry.health,
+    masked: entry.apiKey ? `${entry.apiKey.slice(0, 3)}...${entry.apiKey.slice(-4)}` : ''
+  }));
+}
+
+async function writeProviderApiKey(providerId, apiKey, keyId = '', label = '', scope = 'all') {
   const id = sanitizeProviderKeyId(providerId);
   const store = await readProviderKeyStore();
+  const rawExisting = normalizeStoredProviderKeyEntries(store[id]);
+  const existing = rawExisting.filter(entry => {
+    try {
+      return Boolean(decryptProviderKeyRecord({format: 'safeStorage-v1', ciphertext: entry.ciphertext}));
+    } catch {
+      return false;
+    }
+  });
   const record = encryptProviderKeyRecord(apiKey);
   if (!record) return false;
-  store[id] = {format: 'safeStorage-pool-v1', keys: [{id: 'key-1', label: '主 Key', scope: 'all', ciphertext: record.ciphertext}]};
+  const targetId = String(keyId || '').trim() || `key-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const index = existing.findIndex(entry => entry.id === targetId);
+  const previous = index >= 0 ? existing[index] : null;
+  const next = {
+    id: targetId,
+    label: String(label || (index >= 0 ? existing[index].label : `Key ${existing.length + 1}`)).trim() || `Key ${existing.length + 1}`,
+    scope: ['all', 'chat', 'image', 'video'].includes(scope) ? scope : (index >= 0 ? existing[index].scope : 'all'),
+    lastUsedAt: previous?.lastUsedAt || 0,
+    failureCount: 0,
+    cooldownUntil: 0,
+    lastError: '',
+    health: 'unknown',
+    ciphertext: record.ciphertext
+  };
+  if (index >= 0) existing[index] = next;
+  else existing.push(next);
+  store[id] = {format: 'safeStorage-pool-v1', keys: existing};
   await writeProviderKeyStore(store);
-  return {id: 'key-1'};
+  return {id: targetId, label: next.label};
+}
+
+async function updateProviderApiKeyMetadata(providerId, keyId, metadata = {}) {
+  const id = sanitizeProviderKeyId(providerId);
+  const store = await readProviderKeyStore();
+  const entries = normalizeStoredProviderKeyEntries(store[id]);
+  const index = entries.findIndex(entry => entry.id === String(keyId || '').trim());
+  if (index < 0) return false;
+  const current = entries[index];
+  entries[index] = {
+    ...current,
+    lastUsedAt: Number(metadata.lastUsedAt ?? current.lastUsedAt ?? 0),
+    failureCount: Number(metadata.failureCount ?? current.failureCount ?? 0),
+    cooldownUntil: Number(metadata.cooldownUntil ?? current.cooldownUntil ?? 0),
+    lastError: String(metadata.lastError ?? current.lastError ?? '').slice(0, 240),
+    health: ['unknown', 'ok', 'cooldown', 'blocked'].includes(metadata.health) ? metadata.health : (current.health || 'unknown')
+  };
+  store[id] = {format: 'safeStorage-pool-v1', keys: entries};
+  await writeProviderKeyStore(store);
+  return true;
+}
+
+async function removeProviderApiKey(providerId, keyId = '') {
+  const id = sanitizeProviderKeyId(providerId);
+  const store = await readProviderKeyStore();
+  const entries = normalizeStoredProviderKeyEntries(store[id]);
+  if (!keyId) delete store[id];
+  else {
+    const remaining = entries.filter(entry => entry.id !== keyId);
+    if (remaining.length) store[id] = {format: 'safeStorage-pool-v1', keys: remaining};
+    else delete store[id];
+  }
+  await writeProviderKeyStore(store);
+  return true;
 }
 
 async function clearProviderApiKey(providerId) {
-  const id = sanitizeProviderKeyId(providerId);
-  const store = await readProviderKeyStore();
-  delete store[id];
-  await writeProviderKeyStore(store);
-  return true;
+  return removeProviderApiKey(providerId, '');
 }
 
 async function writeE2EReport(report) {
@@ -845,7 +774,7 @@ async function mediaSummary(storageDir) {
 async function buildDiagnosticsReport(payload = {}) {
   const storageDir = payload.storageDir ? await ensureStorageRootAllowed(payload.storageDir) : '';
   const diagnosticReadErrors = [];
-  const projects = storageDir ? await readProjectsForScan(storageDir) : [];
+  const projects = storageDir ? await readJsonIfExists(safeStoragePath(storageDir, 'projects.json'), [], diagnosticReadErrors) : [];
   const history = storageDir ? await readJsonIfExists(safeStoragePath(storageDir, 'history.json'), [], diagnosticReadErrors) : [];
   const models = storageDir ? await readJsonIfExists(safeStoragePath(storageDir, 'models.json'), [], diagnosticReadErrors) : [];
   const report = {
@@ -1011,198 +940,6 @@ async function exportProjectPackage(payload = {}) {
   return { dir, zipFile, manifestFile: path.join(dir, 'media-manifest.json'), files: written, mediaCount: mediaManifest.length };
 }
 
-function exportFileName(item, index, source) {
-  const title = String(item.title || item.mediaType || 'media').replace(/[\\/:*?"<>|\r\n]+/g, '_').trim().slice(0, 60) || 'media';
-  return `${String(index + 1).padStart(3, '0')}-${title}${path.extname(source).toLowerCase()}`;
-}
-
-// Canvas assistant export: the user picks the folder or ZIP file; only local media inside storage roots is read.
-async function exportCanvasMedia(event, payload = {}) {
-  await ensureStorageRootAllowed(payload.storageDir);
-  const items = (Array.isArray(payload.items) ? payload.items : []).slice(0, 2000);
-  if (!items.length) throw new Error('没有可导出的媒体');
-  const zip = payload.format === 'zip';
-  const owner = BrowserWindow.fromWebContents(event.sender);
-  const defaultPath = path.join(app.getPath('documents'), zip ? `画布导出-${timestampForBackup()}.zip` : '');
-  const picked = zip
-    ? await dialog.showSaveDialog(owner, { title: '导出为 ZIP', defaultPath, filters: [{ name: 'ZIP', extensions: ['zip'] }] })
-    : await dialog.showOpenDialog(owner, { title: '选择导出文件夹', defaultPath: app.getPath('documents'), properties: ['openDirectory', 'createDirectory'] });
-  const target = zip ? picked.filePath : picked.filePaths?.[0];
-  if (picked.canceled || !target) return null;
-  const sources = [];
-  let failed = 0;
-  for (const [index, item] of items.entries()) {
-    try {
-      const source = await safeExistingMediaPathReal(item.sourceUrl);
-      sources.push({ source, name: exportFileName(item, index, source) });
-    } catch (_err) {
-      failed += 1;
-    }
-  }
-  if (zip) {
-    const entries = await Promise.all(sources.map(async item => ({ name: item.name, data: await fs.readFile(item.source) })));
-    await writeFileAtomic(target, buildZip(entries));
-  } else {
-    for (const item of sources) {
-      // COPYFILE_EXCL: never overwrite a file already in the chosen folder.
-      await fs.copyFile(item.source, path.join(target, item.name), fsSync.constants.COPYFILE_EXCL).catch(() => { failed += 1; item.skipped = true; });
-    }
-  }
-  const count = sources.filter(item => !item.skipped).length;
-  if (!E2E_CONFIG.enabled) shell.showItemInFolder(zip ? target : path.join(target, sources.find(item => !item.skipped)?.name || ''));
-  await appendAppLog('info', 'canvas media exported', { format: zip ? 'zip' : 'folder', count, failed });
-  return { target, count, failed };
-}
-
-async function exportSharePackage(event, payload = {}) {
-  await ensureStorageRootAllowed(payload.storageDir);
-  const items = (Array.isArray(payload.items) ? payload.items : []).slice(0, 500);
-  if (!items.length) throw new Error('没有可导出的媒体');
-  const owner = BrowserWindow.fromWebContents(event.sender);
-  const stamp = timestampForBackup();
-  const defaultName = `分享包-${stamp}.zip`;
-  let target = '';
-  // Isolated-profile / E2E smokes may pass e2eTarget to skip the save dialog.
-  if (TEST_HOOKS_ALLOWED && payload.e2eTarget) {
-    target = path.resolve(String(payload.e2eTarget));
-  } else {
-    const picked = await dialog.showSaveDialog(owner, {
-      title: '导出分享包',
-      defaultPath: path.join(app.getPath('documents'), defaultName),
-      filters: [{ name: 'ZIP', extensions: ['zip'] }]
-    });
-    if (picked.canceled || !picked.filePath) return null;
-    target = picked.filePath;
-  }
-  if (!/\.zip$/i.test(target)) target += '.zip';
-
-  const zipEntries = [];
-  const manifestItems = [];
-  let mediaCount = 0;
-  let failed = 0;
-  for (const [index, item] of items.entries()) {
-    const title = String(item.title || ('素材' + (index + 1))).replace(/[\\/:*?"<>|\r\n]+/g, ' ').trim() || ('素材' + (index + 1));
-    const fileBase = String(item.fileBase || `${String(index + 1).padStart(3, '0')}-${title.slice(0, 48)}`);
-    const prompt = String(item.prompt || '');
-    try {
-      let data;
-      let ext = '.bin';
-      const sourceUrl = String(item.sourceUrl || '');
-      if (/^data:/i.test(sourceUrl)) {
-        const match = sourceUrl.match(/^data:([^;,]+)?(;base64)?,(.*)$/i);
-        if (!match) throw new Error('无法解析内嵌图片');
-        const mime = match[1] || 'application/octet-stream';
-        const raw = match[3] || '';
-        data = match[2] ? Buffer.from(raw, 'base64') : Buffer.from(decodeURIComponent(raw));
-        if (/png/i.test(mime)) ext = '.png';
-        else if (/jpeg|jpg/i.test(mime)) ext = '.jpg';
-        else if (/webp/i.test(mime)) ext = '.webp';
-        else if (/gif/i.test(mime)) ext = '.gif';
-        else if (/mp4/i.test(mime)) ext = '.mp4';
-        else if (/webm/i.test(mime)) ext = '.webm';
-      } else {
-        const source = await safeExistingMediaPathReal(sourceUrl);
-        data = await fs.readFile(source);
-        ext = path.extname(source).toLowerCase() || (item.mediaType === 'video' ? '.mp4' : '.png');
-      }
-      const mediaName = `media/${fileBase}${ext}`;
-      zipEntries.push({ name: mediaName, data });
-      mediaCount += 1;
-      manifestItems.push({
-        title,
-        mediaType: item.mediaType || 'image',
-        model: item.model || '',
-        size: item.size || '',
-        prompt,
-        file: mediaName,
-        bytes: data.length
-      });
-    } catch (err) {
-      failed += 1;
-      manifestItems.push({
-        title,
-        mediaType: item.mediaType || 'image',
-        prompt,
-        error: String(err?.message || err || '导出失败')
-      });
-    }
-  }
-  if (!mediaCount) throw new Error('没有可复制到分享包的本地媒体（远程未保存的图请先下载或加入资产库）');
-
-  const projectName = String(payload.projectName || '未命名项目');
-  const scopeLabel = payload.scope === 'canvas' ? '整板' : '选中节点';
-  const exportedAt = new Date().toISOString();
-  const readmeLines = [
-    '# ∞未来 AI 分享包',
-    '',
-    '这是用 ∞未来 AI 导出的分享包，可直接发给同事或客户。',
-    '',
-    `- 导出时间：${exportedAt}`,
-    `- 项目：${projectName}`,
-    `- 范围：${scopeLabel}`,
-    `- 素材数：${mediaCount}`
-  ];
-  if (failed) readmeLines.push(`- 跳过：${failed}`);
-  readmeLines.push(
-    '',
-    '## 文件夹说明',
-    '- `media/`：图片和视频文件',
-    '- `prompts.md`：每张图对应的提示词',
-    '- `manifest.json`：机器可读清单',
-    '',
-    '## 使用建议',
-    '- 直接打开 `media` 查看成品。',
-    '- 需要复用提示词时，看 `prompts.md`。',
-    '- 本包不含 API 密钥，也不含完整项目备份。',
-    '',
-    '## 素材列表',
-    ...manifestItems.filter(item => item.file).map((item, index) => `${index + 1}. ${item.title}（${item.mediaType === 'video' ? '视频' : '图片'}）`),
-    ''
-  );
-  const readme = readmeLines.join('\n');
-
-  const promptLines = [
-    '# 提示词清单',
-    '',
-    `项目：${projectName}`,
-    `共 ${manifestItems.length} 项`,
-    ''
-  ];
-  manifestItems.forEach((item, index) => {
-    promptLines.push(`## ${index + 1}. ${item.title}`);
-    promptLines.push(`- 类型：${item.mediaType === 'video' ? '视频' : '图片'}`);
-    if (item.model) promptLines.push(`- 模型：${item.model}`);
-    if (item.size) promptLines.push(`- 尺寸：${item.size}`);
-    if (item.file) promptLines.push(`- 文件：${item.file}`);
-    else promptLines.push(`- 状态：${item.error || '跳过'}`);
-    promptLines.push('');
-    promptLines.push(item.prompt || '（无提示词）');
-    promptLines.push('');
-  });
-  const prompts = promptLines.join('\n');
-
-  zipEntries.push({ name: '分享说明.md', data: Buffer.from(readme, 'utf8') });
-  zipEntries.push({ name: 'prompts.md', data: Buffer.from(prompts, 'utf8') });
-  zipEntries.push({
-    name: 'manifest.json',
-    data: Buffer.from(JSON.stringify({
-      schemaVersion: 1,
-      kind: 'futureai-share-package',
-      exportedAt,
-      projectName,
-      scope: payload.scope || 'selection',
-      mediaCount,
-      failed,
-      items: manifestItems
-    }, null, 2), 'utf8')
-  });
-
-  await writeFileAtomic(target, buildZip(zipEntries));
-  if (!E2E_CONFIG.enabled && !(TEST_HOOKS_ALLOWED && payload.e2eTarget)) shell.showItemInFolder(target);
-  await appendAppLog('info', 'share package exported', { target, mediaCount, failed });
-  return { target, mediaCount, failed, zipFile: target };
-}
-
 async function exportReviewPackage(payload = {}) {
   const storageDir = await ensureStorageRootAllowed(payload.storageDir);
   const baseDir = safeStoragePath(storageDir, 'exports');
@@ -1276,12 +1013,7 @@ async function collectBackupDirectory(root, prefix, output) {
 
 async function collectWorkspaceBackupFiles(storageDir) {
   const files = [];
-  for (const [name, fileName] of Object.entries(STORE_FILES)) {
-    if (name === 'projects' && ProjectFiles.hasSplitProjects(storageDir)) {
-      const {projects} = await ProjectFiles.readSplitProjects(storageDir);
-      files.push({ content: Buffer.from(JSON.stringify(projects), 'utf8'), relative: `stores/${fileName}` });
-      continue;
-    }
+  for (const fileName of Object.values(STORE_FILES)) {
     const source = safeStoragePath(storageDir, fileName);
     if (fsSync.existsSync(source)) files.push({ source, relative: `stores/${fileName}` });
   }
@@ -1301,15 +1033,14 @@ async function copyWorkspaceBackup(storageDir, parentDir, payload = {}, reason =
     const manifestFiles = [];
     let totalBytes = 0;
     for (const item of sources) {
-      const size = item.content ? item.content.length : (await fs.stat(item.source)).size;
-      totalBytes += size;
+      const stats = await fs.stat(item.source);
+      totalBytes += stats.size;
       if (totalBytes > WORKSPACE_BACKUP_TOTAL_LIMIT) throw new Error('工作区超过 20 GB，请先清理无用媒体后再备份');
       const destination = path.join(backupDir, ...backupRelativePath(item.relative).split('/'));
       if (!pathInside(backupDir, destination)) throw new Error('备份目标路径越界');
       await ensureDir(path.dirname(destination));
-      if (item.content) await fs.writeFile(destination, item.content);
-      else await fs.copyFile(item.source, destination);
-      manifestFiles.push({ path: item.relative, size, sha256: await fileSha256(destination) });
+      await fs.copyFile(item.source, destination);
+      manifestFiles.push({ path: item.relative, size: stats.size, sha256: await fileSha256(destination) });
     }
 
     const settings = stripBackupSecrets(payload.settings || {});
@@ -1479,12 +1210,7 @@ async function restoreWorkspaceBackup(payload = {}) {
       const id = crypto.randomUUID();
       planned.push({staged, target, old: `${target}.restore-old-${id}`, id, hadOriginal: fsSync.existsSync(target)});
     };
-    for (const [name, fileName] of Object.entries(STORE_FILES)) {
-      if (name !== 'projects') addPlanned(path.join(stageRoot, 'stores', fileName), safeStoragePath(storageDir, fileName));
-    }
-    await ProjectFiles.writeSplitProjects(stageRoot, JSON.parse(await fs.readFile(path.join(stageRoot, 'stores', STORE_FILES.projects), 'utf8')));
-    addPlanned(path.join(stageRoot, ProjectFiles.PROJECTS_DIR), safeStoragePath(storageDir, ProjectFiles.PROJECTS_DIR));
-    await ProjectFiles.retireLegacyProjects(storageDir);
+    for (const fileName of Object.values(STORE_FILES)) addPlanned(path.join(stageRoot, 'stores', fileName), safeStoragePath(storageDir, fileName));
     for (const [folder, target] of [
       ['media', safeStoragePath(storageDir, 'media')],
       ['attachments', safeStoragePath(storageDir, '.future-ai', 'attachments')]
@@ -1517,7 +1243,6 @@ async function restoreWorkspaceBackup(payload = {}) {
       throw err;
     }
     journal.phase = 'committed';
-    ProjectFiles.forgetWrittenFiles();
     await writeRestoreJournal(storageDir, journal);
     for (const item of transaction) if (item.old) await fs.rm(item.old, { recursive: true, force: true }).catch(() => {});
     await fs.rm(restoreJournalFile(storageDir), {force: true});
@@ -1539,8 +1264,262 @@ function projectRootDir() {
   return path.resolve(__dirname, '..', '..');
 }
 
+function installerCacheDir() {
+  return path.join(LOCAL_RUNTIME_PATHS.root, 'installers');
+}
+
+function installerUpdateStateDir() {
+  return path.join(LOCAL_RUNTIME_PATHS.root, 'updates');
+}
+
 function getCurrentAppVersion() {
   return app.getVersion();
+}
+
+function assertUpdatePackageDirAllowed(value) {
+  const target = path.resolve(String(value || ''));
+  if (!allowedUpdatePackageDirs.has(target)) throw new Error('更新包目录尚未由用户选择');
+  if (!fsSync.existsSync(target) || !fsSync.statSync(target).isDirectory()) throw new Error('更新包目录不存在');
+  return target;
+}
+
+async function chooseUpdatePackageDir() {
+  const result = await dialog.showOpenDialog({
+    title: '选择签名更新包文件夹',
+    properties: ['openDirectory']
+  });
+  if (result.canceled || !result.filePaths[0]) return '';
+  const target = path.resolve(result.filePaths[0]);
+  allowedUpdatePackageDirs.add(target);
+  return target;
+}
+
+async function resolveUpdatePackageDir(payload = {}) {
+  if (payload.updatePath || payload.packageDir) return assertUpdatePackageDirAllowed(payload.updatePath || payload.packageDir);
+  return await chooseUpdatePackageDir();
+}
+
+async function checkForLocalUpdate(payload = {}) {
+  const packageDir = await resolveUpdatePackageDir(payload);
+  const currentVersion = getCurrentAppVersion();
+  if (!packageDir) return { canceled: true, currentVersion, updateAvailable: false };
+  const verified = await verifyInstallerPackage({
+    packageDir,
+    keyRing: UPDATE_KEY_RING,
+    currentVersion,
+    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS
+  });
+  return {
+    currentVersion,
+    availableVersion: verified.version,
+    updateAvailable: true,
+    compatible: true,
+    packageDir,
+    installerPath: verified.installerPath,
+    sha256: verified.sha256,
+    bytes: verified.bytes,
+    notes: verified.notes,
+    publisher: verified.authenticode.subject,
+    publisherThumbprint: verified.authenticode.thumbprint,
+    signatureVerified: true,
+    protected: UPDATE_PROTECTED_FILES,
+    storageDir: payload.storageDir || '',
+    runtimeData: LOCAL_RUNTIME_PATHS.root,
+    manifestFile: verified.manifestFile
+  };
+}
+
+async function checkForGitHubUpdate() {
+  const currentVersion = getCurrentAppVersion();
+  const result = await checkLatestGitHubUpdate({
+    owner: UPDATE_SOURCE.owner,
+    repo: UPDATE_SOURCE.repo,
+    currentVersion,
+    keyRing: UPDATE_KEY_RING,
+    token: process.env.FUTURE_AI_GITHUB_TOKEN || '',
+    cacheDir: installerCacheDir()
+  });
+  if (!result.updateAvailable) return result;
+  const verified = await verifyInstallerPackage({
+    packageDir: result.packageDir,
+    keyRing: UPDATE_KEY_RING,
+    currentVersion,
+    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS
+  });
+  allowedUpdatePackageDirs.add(path.resolve(result.packageDir));
+  return {
+    ...result,
+    sha256: verified.sha256,
+    publisher: verified.authenticode.subject,
+    publisherThumbprint: verified.authenticode.thumbprint,
+    signatureVerified: true,
+    protected: UPDATE_PROTECTED_FILES,
+    runtimeData: LOCAL_RUNTIME_PATHS.root,
+    manifestFile: verified.manifestFile
+  };
+}
+
+function launchInstallerTransaction(prepared) {
+  const command = buildUpdateHelperCommand(prepared);
+  const child = spawn(command.executable, command.args, {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore'
+  });
+  child.unref();
+  setTimeout(() => app.quit(), 250);
+  return child.pid;
+}
+
+async function createPreUpdateWorkspaceBackup(payload, reason) {
+  if (!payload.storageDir) throw new Error('升级前必须先设置本地存储位置');
+  const parent = path.join(installerUpdateStateDir(), 'workspace-backups');
+  const backup = await copyWorkspaceBackup(payload.storageDir, parent, payload, reason);
+  const verified = await verifyWorkspaceBackup(backup.manifestFile);
+  return {
+    schema: 'future-ai-verified-workspace-backup/v1',
+    backupDir: backup.backupDir,
+    manifestFile: backup.manifestFile,
+    manifestSha256: await fileSha256(backup.manifestFile),
+    files: verified.files.length,
+    bytes: verified.totalBytes,
+    verifiedAt: new Date().toISOString()
+  };
+}
+
+async function applyLocalUpdatePackage(payload = {}) {
+  const packageDir = assertUpdatePackageDirAllowed(payload.updatePath || payload.packageDir);
+  await verifyInstallerPackage({
+    packageDir,
+    keyRing: UPDATE_KEY_RING,
+    currentVersion: getCurrentAppVersion(),
+    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS
+  });
+  const safety = await createPreUpdateWorkspaceBackup(payload, 'before-installer-update');
+  const prepared = await prepareInstallerUpdate({
+    packageDir,
+    cacheDir: installerCacheDir(),
+    stateDir: installerUpdateStateDir(),
+    installDir: path.dirname(app.getPath('exe')),
+    applicationExecutable: app.getPath('exe'),
+    currentVersion: getCurrentAppVersion(),
+    sourcePid: process.pid,
+    keyRing: UPDATE_KEY_RING,
+    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS,
+    workspaceBackup: safety
+  });
+  const helperPid = launchInstallerTransaction(prepared);
+  await appendAppLog('info', 'installer update scheduled', {
+    targetVersion: prepared.transaction.targetVersion,
+    helperPid,
+    safetyBackup: safety.backupDir
+  });
+  return {
+    scheduled: true,
+    currentVersion: prepared.transaction.currentVersion,
+    availableVersion: prepared.transaction.targetVersion,
+    helperPid,
+    transactionFile: prepared.transactionFile,
+    safetyBackup: safety.backupDir,
+    protected: UPDATE_PROTECTED_FILES,
+    runtimeData: LOCAL_RUNTIME_PATHS.root
+  };
+}
+
+async function rollbackLastUpdate(payload = {}) {
+  const safety = await createPreUpdateWorkspaceBackup(payload, 'before-installer-rollback');
+  const prepared = await prepareInstallerRollback({
+    cacheDir: installerCacheDir(),
+    stateDir: installerUpdateStateDir(),
+    installDir: path.dirname(app.getPath('exe')),
+    applicationExecutable: app.getPath('exe'),
+    currentVersion: getCurrentAppVersion(),
+    sourcePid: process.pid,
+    trustedPublisherThumbprints: TRUSTED_UPDATE_PUBLISHERS,
+    workspaceBackup: safety
+  });
+  const helperPid = launchInstallerTransaction(prepared);
+  await appendAppLog('info', 'installer rollback scheduled', {
+    targetVersion: prepared.transaction.targetVersion,
+    helperPid,
+    safetyBackup: safety.backupDir
+  });
+  return {
+    scheduled: true,
+    rolledBack: false,
+    currentVersion: prepared.transaction.currentVersion,
+    availableVersion: prepared.transaction.targetVersion,
+    helperPid,
+    transactionFile: prepared.transactionFile,
+    safetyBackup: safety.backupDir,
+    protected: UPDATE_PROTECTED_FILES,
+    runtimeData: LOCAL_RUNTIME_PATHS.root
+  };
+}
+
+function commandLineValue(prefix) {
+  const argument = process.argv.find(item => String(item).startsWith(prefix));
+  return argument ? String(argument).slice(prefix.length) : '';
+}
+
+async function reportInstallerUpdateHealth() {
+  const updateToken = commandLineValue('--future-ai-update-health=');
+  const rollbackToken = commandLineValue('--future-ai-rollback-health=');
+  if (updateToken && rollbackToken) throw new Error('更新健康检查阶段冲突');
+  const token = updateToken || rollbackToken;
+  if (!token) return { reported: false };
+  if (!/^[0-9a-f-]{36}$/i.test(token)) throw new Error('更新健康检查令牌无效');
+  const transactionFile = path.join(installerUpdateStateDir(), 'pending-update.json');
+  const transaction = JSON.parse(await fs.readFile(transactionFile, 'utf8'));
+  const phase = rollbackToken ? 'rollback' : 'target';
+  const expectedVersion = phase === 'rollback' ? transaction?.currentVersion : transaction?.targetVersion;
+  if (transaction?.schema !== 'future-ai-installer-update-transaction/v1'
+    || transaction.token !== token || expectedVersion !== getCurrentAppVersion()) {
+    throw new Error('更新健康检查与当前事务不匹配');
+  }
+  const healthFile = path.resolve(transaction.healthFile);
+  if (!pathInside(installerUpdateStateDir(), healthFile)) throw new Error('更新健康文件路径越界');
+  let workspaceBackupVerified = false;
+  if (phase === 'rollback') {
+    const backupManifest = path.resolve(String(transaction.workspaceBackup?.manifestFile || ''));
+    if (!backupManifest || !pathInside(installerUpdateStateDir(), backupManifest)) throw new Error('rollback workspace backup is missing or outside the update state directory');
+    if (await fileSha256(backupManifest) !== transaction.workspaceBackup.manifestSha256) throw new Error('rollback workspace backup manifest hash does not match transaction');
+    await verifyWorkspaceBackup(backupManifest);
+    workspaceBackupVerified = true;
+  }
+  const health = { token, phase, version: getCurrentAppVersion(), workspaceBackupVerified, readyAt: new Date().toISOString() };
+  const temp = `${healthFile}.${process.pid}.tmp`;
+  await ensureDir(path.dirname(healthFile));
+  await fs.writeFile(temp, JSON.stringify(health), 'utf8');
+  await fs.rename(temp, healthFile);
+  await appendAppLog('info', 'installer update health reported', { version: health.version });
+  return { reported: true, version: health.version };
+}
+
+async function readInstallerUpdateOutcome() {
+  const transactionFile = path.join(installerUpdateStateDir(), 'pending-update.json');
+  const statusFile = `${transactionFile}.status.json`;
+  const acknowledgementFile = path.join(installerUpdateStateDir(), 'acknowledged-update.json');
+  if (!fsSync.existsSync(transactionFile) || !fsSync.existsSync(statusFile)) return null;
+  if (fsSync.statSync(transactionFile).size > 128 * 1024 || fsSync.statSync(statusFile).size > 32 * 1024) throw new Error('update outcome files exceed safety limits');
+  const transaction = JSON.parse(await fs.readFile(transactionFile, 'utf8'));
+  const status = JSON.parse(await fs.readFile(statusFile, 'utf8'));
+  let acknowledgement = null;
+  try { acknowledgement = JSON.parse(await fs.readFile(acknowledgementFile, 'utf8')); } catch {}
+  return parseInstallerUpdateOutcome({transaction, status, acknowledgement});
+}
+
+async function acknowledgeInstallerUpdateOutcome(payload = {}) {
+  const outcome = await readInstallerUpdateOutcome();
+  if (!outcome || outcome.token !== payload.token || outcome.status !== payload.status || outcome.updatedAt !== payload.updatedAt) {
+    return {acknowledged: false};
+  }
+  const file = path.join(installerUpdateStateDir(), 'acknowledged-update.json');
+  const temp = `${file}.${process.pid}.tmp`;
+  await ensureDir(path.dirname(file));
+  await fs.writeFile(temp, JSON.stringify({schema: 'future-ai-update-acknowledgement/v1', token: outcome.token, status: outcome.status, updatedAt: outcome.updatedAt}), 'utf8');
+  await fs.rename(temp, file);
+  return {acknowledged: true};
 }
 
 function safeCleanupPath(target, roots) {
@@ -1609,11 +1588,20 @@ async function fileSha256(file) {
   return hash.digest('hex');
 }
 
+async function packagedAppAsarSha256() {
+  const target = path.resolve(app.getAppPath());
+  const stats = await fs.lstat(target);
+  if (!stats.isFile() || stats.isSymbolicLink() || path.extname(target).toLowerCase() !== '.asar') {
+    throw new Error('商业验收证据只能由已打包的 app.asar 应用导出');
+  }
+  return await fileSha256(target);
+}
+
 async function buildMediaLibraryIndex(payload = {}) {
   const storageDir = await ensureStorageRootAllowed(payload.storageDir);
   const mediaDir = safeStoragePath(storageDir, 'media');
-  const projects = await readProjectsForScan(storageDir);
-  const history = absolutizeStoreMedia(storageDir, await readJsonIfExists(safeStoragePath(storageDir, 'history.json'), []));
+  const projects = await readJsonIfExists(safeStoragePath(storageDir, 'projects.json'), []);
+  const history = await readJsonIfExists(safeStoragePath(storageDir, 'history.json'), []);
   const refs = new Map();
   (Array.isArray(projects) ? projects : []).forEach(project => collectMediaReferences(project, { type: 'project', projectId: project?.id || '', projectName: project?.name || '', path: '$' }, refs));
   (Array.isArray(history) ? history : []).forEach(item => collectMediaReferences(item, { type: 'history', projectId: item?.projectId || '', historyId: item?.id || '', path: '$' }, refs));
@@ -1739,14 +1727,12 @@ async function cleanupStaleUpdateAsarBackups() {
   );
 }
 
-// Earlier versions copied the bundled Codex (~300MB each) into user-data; nothing uses them now.
-async function cleanupLegacyCodexCopies() {
-  const entries = [];
-  for (const [name, label] of [['codex', '旧版内置 Codex 副本'], ['codex-backups', '旧版 Codex 备份']]) {
-    const file = path.join(LOCAL_RUNTIME_PATHS.userData, name);
-    if (fsSync.existsSync(file)) entries.push(cleanupItem('codexBackup', file, label, await fileSizeIfExists(file)));
-  }
-  return entries;
+async function cleanupStaleCodexBackups() {
+  const dir = codexBackupsDir();
+  const items = await listTimestampedBackups(dir, /^codex\.exe\.\d{8}-\d{6}$/);
+  return items.slice(CODEX_BACKUP_LIMIT).map(item =>
+    cleanupItem('codexBackup', item.file, item.name, item.size)
+  );
 }
 
 /**
@@ -1775,6 +1761,9 @@ async function cleanupOrphanInstallRuntime(root) {
   for (const target of orphanTargets) {
     const file = path.join(installRuntime, target.rel);
     if (!fsSync.existsSync(file)) continue;
+    // Never touch the active writable Codex path
+    if (path.resolve(file) === path.resolve(path.dirname(writableCodexCommand()))) continue;
+    if (path.resolve(file) === path.resolve(writableCodexCommand())) continue;
     entries.push(cleanupItem(target.type, file, target.label, await fileSizeIfExists(file)));
   }
   return entries;
@@ -1825,70 +1814,23 @@ async function cleanupOldLogs() {
   return items;
 }
 
-// Media cleanup must never delete a file that anything may still point at:
-// every JSON store and project backup is scanned, a file counts as referenced
-// when its name appears in any string (relative, absolute or old-folder path),
-// recent files are kept (a generation may not be saved yet), and the scan is
-// aborted when the projects cannot be read.
-const CLEANUP_MEDIA_MIN_AGE_MS = 24 * 60 * 60 * 1000;
-function collectMediaNames(value, names = new Set(), depth = 0) {
-  if (typeof value === 'string') {
-    if (value.length < 4096 || !value.startsWith('data:')) {
-      const re = /([0-9a-f]{16,}|[\w.-]+)\.(png|jpe?g|webp|gif|bmp|avif|mp4|webm|mov|mp3|wav|m4a|ogg|flac)\b/ig;
-      let m;
-      while ((m = re.exec(value))) names.add(m[0].toLowerCase());
-    }
-    return names;
-  }
-  if (depth > 40 || !value || typeof value !== 'object') return names;
-  for (const item of Array.isArray(value) ? value : Object.values(value)) collectMediaNames(item, names, depth + 1);
-  return names;
-}
-async function collectStoreMediaNames(root) {
-  const names = new Set();
-  if (ProjectFiles.hasSplitProjects(root)) {
-    collectMediaNames((await ProjectFiles.readSplitProjects(root)).projects, names);
-  }
-  const jsonDirs = [root, path.join(root, 'projects'), path.join(root, 'backups', 'projects')];
-  try {
-    for (const entry of await fs.readdir(path.join(root, 'backups'), { withFileTypes: true })) {
-      if (entry.isDirectory()) jsonDirs.push(path.join(root, 'backups', entry.name));
-    }
-  } catch {}
-  try {
-    for (const entry of await fs.readdir(path.join(root, 'backups', 'stores'), { withFileTypes: true })) {
-      if (entry.isDirectory()) jsonDirs.push(path.join(root, 'backups', 'stores', entry.name));
-    }
-  } catch {}
-  for (const dir of jsonDirs) {
-    let entries = [];
-    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (!entry.isFile() || !/\.json(\.bak)?$/i.test(entry.name)) continue;
-      try { collectMediaNames(JSON.parse(await fs.readFile(path.join(dir, entry.name), 'utf8')), names); }
-      catch (err) {
-        if (dir === root && /^projects/i.test(entry.name)) throw new Error(`无法读取 ${entry.name}，已停止清理媒体以免误删：${err.message}`);
-      }
-    }
-  }
-  return names;
-}
-
 async function cleanupUnreferencedMedia(storageDir) {
   if (!storageDir) return [];
   const root = await ensureStorageRootAllowed(storageDir);
   const mediaDir = safeStoragePath(root, 'media');
-  const names = await collectStoreMediaNames(root);
+  const projects = await readJsonIfExists(safeStoragePath(root, 'projects.json'), []);
+  const history = await readJsonIfExists(safeStoragePath(root, 'history.json'), []);
+  const assets = await readJsonIfExists(safeStoragePath(root, 'assets.json'), []);
+  const refs = collectReferencedMedia(projects);
+  collectReferencedMedia(history, refs);
+  collectReferencedMedia(assets, refs);
   const items = [];
-  const now = Date.now();
   try {
     for (const entry of await fs.readdir(mediaDir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
       const file = path.join(mediaDir, entry.name);
-      if (names.has(entry.name.toLowerCase())) continue;
-      const stats = await fs.stat(file).catch(() => null);
-      if (!stats || now - stats.mtimeMs < CLEANUP_MEDIA_MIN_AGE_MS) continue;
-      items.push(cleanupItem('unreferencedMedia', file, entry.name, stats.size));
+      if (refs.has(path.resolve(file))) continue;
+      items.push(cleanupItem('unreferencedMedia', file, entry.name, await fileSizeIfExists(file)));
     }
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
@@ -1916,7 +1858,7 @@ async function scanCleanupTargets(payload = {}) {
   const items = [
     ...await cleanupAsarBackups(root),
     ...await cleanupStaleUpdateAsarBackups(),
-    ...await cleanupLegacyCodexCopies(),
+    ...await cleanupStaleCodexBackups(),
     ...await cleanupOrphanInstallRuntime(root),
     ...await cleanupInstallRootDebris(root),
     ...await cleanupTmpE2E(root),
@@ -1931,10 +1873,12 @@ async function scanCleanupTargets(payload = {}) {
     summary: cleanupSummary(items),
     protected: [
       'resources/app.asar',
+      'resources/codex',
       'resources/ffmpeg',
+      'resources/ffmpeg-lgpl',
       'api-key.json',
       'provider-api-keys.json',
-      'projects/',
+      'projects.json',
       'history.json',
       'assets.json',
       'asset-folders.json',
@@ -1967,6 +1911,9 @@ async function executeCleanupTargets(payload = {}) {
       const resolved = path.resolve(item.path);
       if (resolved === path.resolve(path.join(scan.root, 'resources', 'app.asar'))) {
         throw new Error('禁止删除当前 app.asar');
+      }
+      if (resolved === path.resolve(writableCodexCommand()) || resolved === path.resolve(bundledCodexCommand())) {
+        throw new Error('禁止删除当前使用的 Codex');
       }
       if (path.basename(resolved) === API_KEY_FILE || path.basename(resolved) === PROVIDER_KEYS_FILE) {
         throw new Error('禁止删除密钥文件');
@@ -2003,76 +1950,95 @@ function safeStoreFile(name) {
   return file;
 }
 
+function findWindowsAppsCodexCommand() {
+  if (process.platform !== 'win32') return '';
+  const resourceDir = process.resourcesPath || path.join(path.dirname(app.getPath('exe')), 'resources');
+  // Prefer writable user copy, then signed/bundled resources. Avoid machine-specific
+  // absolute paths so portable installs keep working on any drive letter.
+  const portableCandidates = [
+    writableCodexCommand(),
+    path.join(resourceDir, 'codex', 'codex.exe'),
+    path.join(resourceDir, 'codex.exe'),
+    path.join(packagedBaseDir(), 'codex', 'codex.exe')
+  ];
+  if (INTERNAL_TEST_CHANNELS_ALLOWED) {
+    const sharedHome = sharedCodexHomeDir();
+    if (sharedHome) {
+      portableCandidates.push(
+        path.join(sharedHome, '.sandbox-bin', 'codex.exe'),
+        path.join(sharedHome, 'plugins', '.plugin-appserver', 'codex.exe')
+      );
+    }
+  }
+  const portable = portableCandidates.find(candidate => fsSync.existsSync(candidate));
+  if (portable) return portable;
+  const roots = [
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps'),
+    path.join(process.env.PROGRAMFILES || '', 'WindowsApps'),
+    path.join(process.env.ProgramW6432 || '', 'WindowsApps')
+  ].filter(Boolean);
+  for (const root of roots) {
+    for (const name of ['codex.exe', 'codex.cmd', 'codex']) {
+      const direct = path.join(root, name);
+      if (fsSync.existsSync(direct)) return direct;
+    }
+    let entries = [];
+    try {
+      entries = fsSync.readdirSync(root, { withFileTypes: true });
+    } catch (_err) {
+      continue;
+    }
+    const packages = entries
+      .filter(entry => entry.isDirectory() && /^OpenAI\.Codex_/i.test(entry.name))
+      .map(entry => entry.name)
+      .sort((a, b) => b.localeCompare(a));
+    for (const packageName of packages) {
+      const nested = [
+        path.join(root, packageName, 'app', 'resources', 'codex.exe'),
+        path.join(root, packageName, 'app', 'resources', 'codex'),
+        path.join(root, packageName, 'codex.exe')
+      ].find(candidate => fsSync.existsSync(candidate));
+      if (nested) return nested;
+    }
+  }
+  return '';
+}
+
+function normalizeCodexCommand(command) {
+  const environmentOverride = INTERNAL_TEST_CHANNELS_ALLOWED ? process.env.CODEX_CLI_PATH : '';
+  const resolved = resolveCodexCommandPolicy({
+    command,
+    environmentOverride,
+    internal: INTERNAL_TEST_CHANNELS_ALLOWED,
+    bundled: bundledCodexCommand(),
+    writable: writableCodexCommand(),
+    existsSync: fsSync.existsSync
+  });
+  if (resolved !== 'codex') return resolved;
+  return findWindowsAppsCodexCommand() || resolved;
+}
+
 function trimCodexOutput(output) {
   const text = String(output || '');
   return text.length > CODEX_OUTPUT_LIMIT ? text.slice(-CODEX_OUTPUT_LIMIT) : text;
 }
 
+function bundledCodexCommand() {
+  const resourceDir = process.resourcesPath || path.join(path.dirname(app.getPath('exe')), 'resources');
+  const candidates = [
+    path.join(resourceDir, 'codex', 'codex.exe'),
+    path.join(resourceDir, 'codex.exe'),
+    path.join(packagedBaseDir(), 'codex', 'codex.exe')
+  ];
+  return candidates.find(candidate => fsSync.existsSync(candidate)) || candidates[0];
+}
+
+function writableCodexCommand() {
+  return path.join(LOCAL_RUNTIME_PATHS.userData, 'codex', 'codex.exe');
+}
+
 function codexHomeDir() {
   return path.join(LOCAL_RUNTIME_PATHS.userData, 'codex-home');
-}
-
-// A Codex CLI path the user picked in Settings. Only main writes it, after a file dialog.
-function codexCommandFile() {
-  return path.join(LOCAL_RUNTIME_PATHS.userData, 'codex-command.json');
-}
-
-function savedCodexCommand() {
-  try {
-    return String(JSON.parse(fsSync.readFileSync(codexCommandFile(), 'utf8')).path || '');
-  } catch (_err) {
-    return '';
-  }
-}
-
-function runCodexProbe(launch, args, timeoutMs = 10000) {
-  return new Promise(resolve => {
-    let child;
-    let output = '';
-    try {
-      child = spawn(launch.command, [...launch.prefixArgs, ...args], { windowsHide: true, env: { ...process.env, ...launch.env, NO_COLOR: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch (err) {
-      resolve({ ok: false, output: '', error: err?.message || String(err) });
-      return;
-    }
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve({ ok: false, output, error: '检测超时' });
-    }, timeoutMs);
-    child.stdout?.on('data', data => { output += data.toString(); });
-    child.stderr?.on('data', data => { output += data.toString(); });
-    child.on('error', err => {
-      clearTimeout(timer);
-      resolve({ ok: false, output, error: err?.message || String(err) });
-    });
-    child.on('close', code => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0, output: trimCodexOutput(output), error: code === 0 ? '' : `退出码 ${code}` });
-    });
-  });
-}
-
-function whereCodexOutput() {
-  const finder = process.platform === 'win32' ? 'where.exe' : 'which';
-  const result = spawnSync(finder, process.platform === 'win32' ? ['codex'] : ['-a', 'codex'], { windowsHide: true, encoding: 'utf8', timeout: 5000 });
-  return result.status === 0 ? result.stdout : '';
-}
-
-let codexDetection = null;
-
-async function detectCodex({ force = false } = {}) {
-  if (codexDetection && !force) return codexDetection;
-  codexDetection = CodexCli.detectCodexCli({
-    override: savedCodexCommand(),
-    candidates: CodexCli.codexCandidates({ env: process.env, homedir: os.homedir(), whereOutput: whereCodexOutput() }),
-    fsApi: fsSync,
-    run: runCodexProbe
-  });
-  return codexDetection;
-}
-
-function codexStatusForRenderer(result) {
-  return { ok: result.ok, path: result.path, version: result.version, overridden: !!result.overridden, error: result.error || '', installUrl: CodexCli.CODEX_INSTALL_URL };
 }
 
 function sharedCodexHomeDir() {
@@ -2263,57 +2229,72 @@ function tomlQuoted(value) {
   return JSON.stringify(String(value ?? ''));
 }
 
-/**
- * Which CODEX_HOME a run uses:
- * - With the app's text API configured, an app-managed home is written for each run,
- *   so the user's own ~/.codex config is never rewritten.
- * - Without it, the user's own Codex home is used as-is, so an existing `codex login`
- *   works and they do not have to sign in twice.
- */
 async function codexLaunchEnv({ apiKey = '', baseUrl = '', model = '', useSharedExtensions = true, sharedPluginIds = null } = {}) {
-  const normalizedBaseUrl = String(baseUrl || '').trim().replace(/\/$/, '');
-  if (!normalizedBaseUrl || !apiKey) {
-    const userHome = CodexCli.userCodexHome({ env: process.env, homedir: os.homedir() });
-    if (!fsSync.existsSync(path.join(userHome, 'auth.json'))) {
-      throw new Error('Codex 尚未登录：请在设置里配置文本 API 和密钥，或在终端运行 codex login 后重试');
-    }
-    const env = { ...process.env, CODEX_HOME: userHome, NO_COLOR: '1' };
-    delete env.OPENAI_API_KEY;
-    return env;
-  }
   const home = codexHomeDir();
   await ensureDir(home);
   const configFile = path.join(home, 'config.toml');
+  const normalizedBaseUrl = String(baseUrl || '').trim().replace(/\/$/, '');
   const extensions = useSharedExtensions ? await sharedCodexExtensionCatalog({ enabledPluginIds: sharedPluginIds }) : { config: '' };
-  const config = [
-    model ? `model = ${tomlQuoted(model)}` : '',
-    'model_provider = "future_ai_provider"',
-    '',
-    '[model_providers.future_ai_provider]',
-    'name = "future_ai_provider"',
-    'wire_api = "responses"',
-    'requires_openai_auth = false',
-    'env_key = "OPENAI_API_KEY"',
-    `base_url = ${tomlQuoted(normalizedBaseUrl)}`,
-    extensions.config,
-    ''
-  ].filter(Boolean).join('\n');
-  await fs.writeFile(configFile, config, 'utf8');
+  if (normalizedBaseUrl) {
+    const config = [
+      model ? `model = ${tomlQuoted(model)}` : '',
+      'model_provider = "future_ai_provider"',
+      '',
+      '[model_providers.future_ai_provider]',
+      'name = "future_ai_provider"',
+      'wire_api = "responses"',
+      'requires_openai_auth = false',
+      'env_key = "OPENAI_API_KEY"',
+      `base_url = ${tomlQuoted(normalizedBaseUrl)}`,
+      extensions.config,
+      ''
+    ].filter(Boolean).join('\n');
+    await fs.writeFile(configFile, config, 'utf8');
+  } else if (extensions.config) {
+    await fs.writeFile(configFile, extensions.config + '\n', 'utf8');
+  } else {
+    await fs.rm(configFile, { force: true });
+  }
   // Do not inherit a developer's global Codex home: its plugins and agent files
   // are unrelated to this application's assistant and can break every run.
   const env = { ...process.env, CODEX_HOME: home, NO_COLOR: '1' };
   delete env.OPENAI_BASE_URL;
   delete env.OPENAI_MODEL;
-  env.OPENAI_API_KEY = String(apiKey);
+  if (apiKey) env.OPENAI_API_KEY = String(apiKey);
+  else delete env.OPENAI_API_KEY;
   return env;
+}
+
+async function ensureWritableCodexCommand() {
+  const target = writableCodexCommand();
+  if (fsSync.existsSync(target)) return target;
+  const bundled = bundledCodexCommand();
+  if (!fsSync.existsSync(bundled)) return bundled;
+  await ensureDir(path.dirname(target));
+  await fs.copyFile(bundled, target);
+  return target;
+}
+
+function codexBackupsDir() {
+  return path.join(LOCAL_RUNTIME_PATHS.userData, 'codex-backups');
+}
+
+async function pruneCodexBackups() {
+  const items = await listTimestampedBackups(codexBackupsDir(), /^codex\.exe\.\d{8}-\d{6}$/);
+  const stale = items.slice(CODEX_BACKUP_LIMIT);
+  await Promise.all(stale.map(item => fs.rm(item.file, { force: true })));
+  return stale.length;
 }
 
 async function pruneRuntimeDiskFootprint() {
   try {
+    const codexRemoved = await pruneCodexBackups();
     const updateRemoved = await pruneUpdateAsarBackups();
-    if (updateRemoved) {
+    if (codexRemoved || updateRemoved) {
       await appendAppLog('info', 'runtime disk footprint pruned', {
+        codexBackupsRemoved: codexRemoved,
         updateAsarBackupsRemoved: updateRemoved,
+        codexBackupLimit: CODEX_BACKUP_LIMIT,
         updateAsarBackupLimit: UPDATE_ASAR_BACKUP_LIMIT
       });
     }
@@ -2350,48 +2331,108 @@ function codexActivityFromJsonLine(line) {
 
 function codexPermissionConfig(mode) {
   const key = normalizeCodexPermission(mode, { internal: INTERNAL_TEST_CHANNELS_ALLOWED });
-  if (key === 'readonly') return { sandbox: 'read-only', label: '只读审查' };
-  if (key === 'full') return { sandbox: 'danger-full-access', label: '完全开发' };
-  return { sandbox: 'workspace-write', label: '项目内开发' };
+  if (key === 'readonly') return { sandbox: 'read-only', approval: 'never', label: '只读审查' };
+  if (key === 'full') return { sandbox: 'danger-full-access', approval: 'never', label: '完全开发' };
+  return { sandbox: 'workspace-write', approval: 'never', label: '项目内开发' };
 }
 
-// Codex never works inside the install directory: use the chosen storage folder, or the default one.
-async function codexWorkingDir(storageDir) {
-  if (storageDir) return await ensureStorageRootAllowed(storageDir);
-  const root = await rememberStorageRoot(defaultStorageDir());
-  await ensureDir(root);
-  return root;
-}
-
-// `codex exec` is non-interactive, so any run that may write files is approved here, per run.
-async function approveCodexRun(event, { cwd, permission, prompt }) {
-  if (permission.sandbox === 'read-only') return;
-  const full = permission.sandbox === 'danger-full-access';
-  const result = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
+async function confirmInternalFullCodexRun(event) {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showMessageBox(owner, {
     type: 'warning',
-    title: '确认 Codex 任务',
-    message: full ? '本次 Codex 任务可以执行命令并修改工作目录之外的文件。' : `本次 Codex 任务可以执行命令并修改：${cwd}`,
-    detail: `权限：${permission.label}\n任务：${prompt.length > 300 ? `${prompt.slice(0, 300)}…` : prompt}\n\n此确认只对本次运行有效。`,
-    buttons: ['取消', '允许运行'],
+    title: '确认完全开发权限',
+    message: '本次 Codex 任务可以访问和修改工作目录之外的文件。',
+    detail: '仅在你理解任务内容和风险时继续。此确认只对本次运行有效。',
+    buttons: ['取消', '继续运行'],
     defaultId: 0,
     cancelId: 0,
     noLink: true
   });
-  if (result.response !== 1) throw new Error('已取消 Codex 任务');
+  if (result.response !== 1) throw new Error('已取消完全开发权限任务');
+}
+
+async function runCodexCheck(command) {
+  const env = await codexLaunchEnv();
+  return new Promise(resolve => {
+    let child;
+    let output = '';
+    try {
+      child = spawn(normalizeCodexCommand(command), ['--version'], { windowsHide: true, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      resolve({ ok: false, error: err?.message || String(err) });
+      return;
+    }
+    const done = result => resolve({ ...result, output: trimCodexOutput(output).trim() });
+    const timer = setTimeout(() => {
+      child.kill();
+      done({ ok: false, error: '检测超时' });
+    }, 8000);
+    child.stdout?.on('data', data => { output += data.toString(); });
+    child.stderr?.on('data', data => { output += data.toString(); });
+    child.on('error', err => {
+      clearTimeout(timer);
+      done({ ok: false, error: err?.message || String(err) });
+    });
+    child.on('close', code => {
+      clearTimeout(timer);
+      done({ ok: code === 0, code, error: code === 0 ? '' : 'Codex CLI 未正常返回' });
+    });
+  });
+}
+
+async function backupBundledCodex(command) {
+  const source = path.resolve(command || bundledCodexCommand());
+  if (!fsSync.existsSync(source)) return '';
+  const allowedDirs = [path.dirname(bundledCodexCommand()), path.dirname(writableCodexCommand())].map(item => path.resolve(item));
+  if (!allowedDirs.some(dir => pathInside(dir, source))) return '';
+  const dir = codexBackupsDir();
+  await ensureDir(dir);
+  const backupFile = path.join(dir, `codex.exe.${timestampForBackup()}`);
+  await fs.copyFile(source, backupFile);
+  await pruneCodexBackups();
+  return backupFile;
+}
+
+async function runCodexUpdate(event, payload = {}) {
+  if (!codexSelfUpdateAllowed({ internal: INTERNAL_TEST_CHANNELS_ALLOWED })) throw new Error('正式版 Codex 随软件签名更新，不支持单独替换');
+  const command = payload.command ? normalizeCodexCommand(payload.command) : await ensureWritableCodexCommand();
+  const before = await runCodexCheck(command);
+  const backupFile = await backupBundledCodex(command);
+  const sessionId = crypto.randomUUID();
+  const sender = event.sender;
+  const env = await codexLaunchEnv();
+  let child;
+  try {
+    child = spawn(command, ['update'], { cwd: path.dirname(command), env, windowsHide: true });
+  } catch (err) {
+    throw new Error(err?.message || String(err));
+  }
+  codexSessions.set(sessionId, child);
+  sendCodexOutput(sender, { sessionId, type: 'start', text: `Codex 更新开始\n当前版本：${before.output || '未知'}\n${backupFile ? `已备份：${backupFile}\n` : ''}` });
+  const append = (type, data) => sendCodexOutput(sender, { sessionId, type, text: data.toString() });
+  child.stdout?.on('data', data => append('stdout', data));
+  child.stderr?.on('data', data => append('stderr', data));
+  child.on('error', err => {
+    codexSessions.delete(sessionId);
+    sendCodexOutput(sender, { sessionId, type: 'error', text: err?.message || String(err) });
+  });
+  child.on('close', async code => {
+    codexSessions.delete(sessionId);
+    const after = await runCodexCheck(command).catch(err => ({ ok: false, output: '', error: err?.message || String(err) }));
+    sendCodexOutput(sender, { sessionId, type: 'close', code, text: code === 0 ? `\nCodex 更新完成。当前版本：${after.output || '未知'}\n` : `\nCodex 更新结束，退出码：${code}\n${after.error || ''}` });
+  });
+  return { ok: true, sessionId, beforeVersion: before.output || '', backupFile };
 }
 
 async function startCodexRun(event, payload = {}) {
   const prompt = String(payload.prompt || '').trim();
   if (!prompt) throw new Error('请先输入要交给 Codex 的任务');
-  let cli = await detectCodex();
-  if (!cli.ok) cli = await detectCodex({ force: true });
-  if (!cli.ok) throw new Error(`安装 Codex 以启用电脑自动化：${CodexCli.CODEX_INSTALL_URL}`);
   if (prompt.length > CODEX_PROMPT_LIMIT) throw new Error('任务内容过长，请拆成更小的任务');
-  const cwd = await codexWorkingDir(payload.storageDir);
+  const cwd = payload.storageDir ? await ensureStorageRootAllowed(payload.storageDir) : packagedBaseDir();
   const sessionId = crypto.randomUUID();
   const requestedPermission = normalizeCodexPermission(payload.permission, { internal: INTERNAL_TEST_CHANNELS_ALLOWED, scheduled: payload.scheduled === true });
+  if (requestedPermission === 'full' && INTERNAL_TEST_CHANNELS_ALLOWED) await confirmInternalFullCodexRun(event);
   const permission = codexPermissionConfig(requestedPermission);
-  await approveCodexRun(event, { cwd, permission, prompt });
   const model = String(payload.model || '').trim();
   const resultDir = path.join(codexHomeDir(), 'results');
   await ensureDir(resultDir);
@@ -2405,7 +2446,7 @@ async function startCodexRun(event, payload = {}) {
   const env = await codexLaunchEnv({ apiKey: payload.apiKey, baseUrl: payload.baseUrl, model, useSharedExtensions: payload.useSharedExtensions !== false, sharedPluginIds: Array.isArray(payload.sharedPluginIds) ? payload.sharedPluginIds : null });
   let child;
   try {
-    child = spawn(cli.launch.command, [...cli.launch.prefixArgs, ...args], { cwd, env: { ...env, ...cli.launch.env }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(normalizeCodexCommand(payload.command), args, { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     throw new Error(err?.message || String(err));
   }
@@ -2438,7 +2479,7 @@ async function startCodexRun(event, payload = {}) {
     }
     sendCodexOutput(sender, { sessionId, type, text });
   };
-  sendCodexOutput(sender, { sessionId, type: 'start', text: `Codex：${cli.path}（${cli.version}）\n工作目录：${cwd}\n开发权限：${permission.label}\n模型：${model || 'Codex 默认'}\nAPI：${payload.baseUrl ? '已接入' : '使用 Codex 默认'}\n` });
+  sendCodexOutput(sender, { sessionId, type: 'start', text: `工作目录：${cwd}\n开发权限：${permission.label}\n模型：${model || 'Codex 默认'}\nAPI：${payload.baseUrl ? '已接入' : '使用 Codex 默认'}\n` });
   child.stdout?.on('data', data => append('stdout', data));
   child.stderr?.on('data', data => append('stderr', data));
   child.on('error', err => {
@@ -2460,326 +2501,6 @@ async function startCodexRun(event, payload = {}) {
     sendCodexOutput(sender, { sessionId, type: 'close', code, text: code === 0 ? '\n任务完成。' : `\n任务结束，退出码：${code}` });
   });
   return { ok: true, sessionId };
-}
-
-
-function agentBlockedRoots() {
-  return AgentPermissions.blockedRoots({
-    platform: process.platform,
-    env: process.env,
-    homedir: require('os').homedir(),
-    installDir: packagedBaseDir()
-  });
-}
-
-function agentCheckPath(workspace, target) {
-  return AgentPermissions.checkPath(target, {
-    workspace,
-    blocked: agentBlockedRoots(),
-    platform: process.platform
-  });
-}
-
-function sendAgentEvent(sender, payload) {
-  if (!sender || sender.isDestroyed?.()) return;
-  sender.send('agent:event', payload);
-}
-
-
-function agentStorageRoot(preferred = '') {
-  const candidate = path.resolve(String(preferred || ''));
-  if (candidate && allowedStorageRoots.has(candidate)) return candidate;
-  for (const root of allowedStorageRoots) return root;
-  return '';
-}
-
-async function agentAudit(storageDir, event) {
-  const root = agentStorageRoot(storageDir);
-  if (!root) return;
-  try { await AgentAudit.appendAudit(root, event); } catch (_err) { /* ignore audit failures */ }
-}
-
-function emergencyStopAllAgents(reason = '紧急停止') {
-  agentLastEmergencyAt = Date.now();
-  let stopped = 0;
-  for (const [sessionId, session] of agentSessions.entries()) {
-    try { session.controller.abort(); } catch (_err) { /* ignore */ }
-    stopped += 1;
-    sendAgentEvent(session.sender, { sessionId, type: 'emergency', reason });
-  }
-  const killedJobs = AgentProcess.killAllJobs();
-  try {
-    for (const sessionId of [...codexSessions.keys()]) cancelCodexRun(sessionId);
-  } catch (_err) { /* ignore */ }
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('agent:event', { type: 'emergency', reason, stopped, killedJobs: killedJobs.length, at: agentLastEmergencyAt });
-  }
-  return { stopped, killedJobs: killedJobs.length, at: agentLastEmergencyAt };
-}
-
-function registerAgentEmergencyHotkey(accelerator) {
-  const key = String(accelerator || 'CommandOrControl+Alt+Shift+S');
-  try { globalShortcut.unregisterAll(); } catch (_err) { /* ignore */ }
-  agentEmergencyArmed = false;
-  try {
-    agentEmergencyArmed = globalShortcut.register(key, () => {
-      emergencyStopAllAgents('快捷键紧急停止');
-    });
-  } catch (_err) {
-    agentEmergencyArmed = false;
-  }
-  return { ok: agentEmergencyArmed, accelerator: key };
-}
-
-const APPROVAL_DIFF_LINES = 40;
-
-function approvalDiffPreview(diff) {
-  const lines = String(diff).split('\n');
-  return lines.length > APPROVAL_DIFF_LINES ? `${lines.slice(0, APPROVAL_DIFF_LINES).join('\n')}\n…（共 ${lines.length} 行改动预览）` : lines.join('\n');
-}
-
-async function agentApprove(event, request) {
-  if (request?.unattended) return 'deny';
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const labels = (request.categories || []).map(category => AgentPermissions.CATEGORY_LABELS[category] || category).join('、');
-  const result = await dialog.showMessageBox(win, {
-    type: 'warning',
-    buttons: ['允许一次', '本次会话总是允许', '拒绝'],
-    defaultId: 0,
-    cancelId: 2,
-    title: '确认智能体操作',
-    message: `智能体请求：${request.name}`,
-    detail: `${request.reason || labels}\n\n${request.diff ? approvalDiffPreview(request.diff) : AgentModel.summarizeResult(request.arguments || {})}`
-  });
-  return result.response === 0 ? 'allow' : result.response === 1 ? 'always' : 'deny';
-}
-
-
-async function agentCanvasPlan(event, sessionId, payload) {
-  const jobId = crypto.randomUUID();
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      agentCanvasJobs.delete(jobId);
-      reject(new Error('画布操作超时'));
-    }, 120000);
-    agentCanvasJobs.set(jobId, { resolve, reject, timer });
-    sendAgentEvent(event.sender, { sessionId, type: 'canvas_request', jobId, request: payload.request, selection: payload.selection || [], batch: payload.batch || null });
-  });
-}
-
-function agentSessionRoot() {
-  return path.join(LOCAL_RUNTIME_PATHS.userData, 'agent-sessions');
-}
-
-// Resuming reuses the snapshot's task, workspace and history; permissions and the model come from
-// the current settings, so a resumed run never gains rights the user has since taken away.
-async function loadResumeSnapshot(sessionId) {
-  const id = String(sessionId || '');
-  if (agentSessions.has(id) && !agentSessions.get(id).done) throw new Error('该会话仍在运行');
-  return await AgentSessionStore.loadSession(agentSessionRoot(), id);
-}
-
-async function startAgentRun(event, payload = {}) {
-  const resume = payload.resumeSessionId ? await loadResumeSnapshot(payload.resumeSessionId) : null;
-  const prompt = String(resume?.prompt || payload.prompt || '').trim();
-  if (!prompt) throw new Error('请先输入任务');
-  const workspace = path.resolve(String(resume?.workspace || payload.workspace || payload.storageDir || ''));
-  if (!workspace) throw new Error('请先选择工作区');
-  await rememberStorageRoot(workspace);
-  const storageDir = path.resolve(String(resume?.storageDir || payload.storageDir || workspace));
-  if (storageDir) await rememberStorageRoot(storageDir);
-  const scheduled = !resume && payload.scheduled === true;
-  const settings = AgentPermissions.effectiveRunSettings(payload.settings || {}, {
-    scheduled,
-    scheduleMode: payload.scheduleMode || payload.settings?.scheduleMode
-  });
-  if (settings.mode === 'full' && !scheduled) {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    const warn = await dialog.showMessageBox(win, {
-      type: 'warning',
-      buttons: ['继续完全访问', '取消'],
-      defaultId: 1,
-      cancelId: 1,
-      title: '完全访问',
-      message: '完全访问不会再询问危险操作，可能修改工作区外的文件并运行命令。',
-      detail: '系统目录、安装目录和凭证位置仍会硬性拦截。'
-    });
-    if (warn.response !== 0) throw new Error('已取消完全访问任务');
-  }
-  const modelConfig = {
-    baseUrl: String(payload.baseUrl || '').trim(),
-    apiKey: String(payload.apiKey || ''),
-    model: String(payload.model || '').trim(),
-    fastModel: String(payload.fastModel || '').trim(),
-    format: String(payload.format || payload.providerType || '')
-  };
-  if (!modelConfig.baseUrl || !modelConfig.apiKey || !modelConfig.model) throw new Error('请先在设置中配置聊天供应商、模型和密钥');
-  const maxConcurrent = Math.min(Math.max(Number(settings.maxConcurrent) || Number(payload.maxConcurrent) || 3, 1), 8);
-  const runningCount = [...agentSessions.values()].filter(item => !item.done).length;
-  if (runningCount >= maxConcurrent) {
-    throw new Error(`已达并发上限（${maxConcurrent}）。请先停止一个会话，或在设置中提高上限。`);
-  }
-  const sessionId = resume?.sessionId || AgentLoop.createSessionId();
-  const controller = new AbortController();
-  agentSessions.set(sessionId, {
-    controller,
-    sender: event.sender,
-    logPath: '',
-    backupDir: '',
-    storageDir,
-    workspace,
-    scheduled,
-    scheduleId: payload.scheduleId || '',
-    templateId: payload.templateId || '',
-    prompt: prompt.slice(0, 200),
-    plan: [],
-    status: 'running',
-    startedAt: Date.now(),
-    done: false,
-    mode: settings.mode
-  });
-  const logDir = path.join(LOCAL_RUNTIME_PATHS.logs, 'agent-runs');
-  const backupRoot = path.join(LOCAL_RUNTIME_PATHS.userData, 'agent-backups');
-  await agentAudit(storageDir, { type: 'start', sessionId, prompt, mode: settings.mode, scheduled, scheduleId: payload.scheduleId || '', templateId: payload.templateId || '' });
-  const runPromise = AgentLoop.runAgent({
-    prompt,
-    workspace,
-    settings,
-    modelConfig,
-    maxSteps: Math.min(Math.max(Number(payload.maxSteps) || settings.maxSteps || AgentLoop.DEFAULT_MAX_STEPS, 1), AgentPermissions.MAX_STEPS),
-    sessionId,
-    resume,
-    sessionStore: {
-      save: state => AgentSessionStore.saveSession(agentSessionRoot(), state),
-      clear: () => AgentSessionStore.deleteSession(agentSessionRoot(), sessionId),
-      child: childId => ({
-        load: () => AgentSessionStore.loadSession(agentSessionRoot(), childId),
-        save: state => AgentSessionStore.saveSession(agentSessionRoot(), state),
-        clear: () => AgentSessionStore.deleteSession(agentSessionRoot(), childId)
-      })
-    },
-    storageDir,
-    memoryRoot: storageDir,
-    checkPath: target => agentCheckPath(workspace, target),
-    canvasPlan: request => agentCanvasPlan(event, sessionId, request),
-    approve: request => agentApprove(event, { ...request, unattended: !!settings.unattended }),
-    waitForApproval: async request => {
-      const item = await agentApprovalHub.enqueue(storageDir, {
-        ...request,
-        scheduleId: payload.scheduleId || '',
-        templateId: payload.templateId || '',
-        ttlMs: Number(payload.approvalTtlMs || settings.approvalTtlMs || 0) || undefined
-      });
-      sendAgentEvent(event.sender, {
-        sessionId,
-        type: 'approval_queued',
-        approvalId: item.id,
-        name: item.name,
-        reason: item.reason,
-        categories: item.categories,
-        expiresAt: item.expiresAt,
-        pendingCount: await agentApprovalHub.pendingCount(storageDir)
-      });
-      // Broadcast badge update to all windows
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) win.webContents.send('agent:event', {
-          type: 'approval_badge',
-          pendingCount: await agentApprovalHub.pendingCount(storageDir),
-          storageDir
-        });
-      }
-      const ttlLeft = Math.max(1000, item.expiresAt - Date.now());
-      const answer = await agentApprovalHub.wait(item.id, { signal: controller.signal, timeoutMs: ttlLeft });
-      if (answer === 'expire') {
-        try { await agentApprovalHub.resolve(storageDir, item.id, 'expire', { actor: 'system' }); } catch (_err) { /* already resolved */ }
-      }
-      sendAgentEvent(event.sender, {
-        sessionId,
-        type: 'approval_resolved',
-        approvalId: item.id,
-        answer,
-        pendingCount: await agentApprovalHub.pendingCount(storageDir)
-      });
-      return answer;
-    },
-    onEvent: evt => {
-      const session = agentSessions.get(sessionId);
-      if (session) {
-        if (evt.logPath) session.logPath = evt.logPath;
-        if (evt.backupDir) session.backupDir = evt.backupDir;
-        if (evt.type === 'plan' && Array.isArray(evt.steps)) session.plan = evt.steps;
-        if (evt.type === 'start') session.status = evt.scheduled ? 'scheduled' : 'running';
-        if (evt.type === 'approval' || evt.type === 'approval_queued') session.status = 'awaiting_approval';
-        if (evt.type === 'done') { session.status = evt.cancelled ? 'stopped' : evt.truncated ? 'truncated' : 'done'; session.done = true; }
-        if (evt.type === 'error') { session.status = 'error'; session.done = true; }
-        if (evt.type === 'emergency') { session.status = 'emergency'; session.done = true; }
-      }
-      const audited = (evt.type === 'tool' && evt.status !== 'output') || evt.type === 'approval' || evt.type === 'done' || evt.type === 'error' || evt.type === 'plan';
-      if (audited) {
-        agentAudit(storageDir, { ...evt, sessionId: evt.sessionId || sessionId });
-      }
-      sendAgentEvent(event.sender, evt);
-    },
-    signal: controller.signal,
-    logDir,
-    backupRoot
-  }).finally(() => {
-    const session = agentSessions.get(sessionId);
-    if (session) {
-      session.done = true;
-      if (session.status === 'running' || session.status === 'awaiting_approval' || session.status === 'scheduled') {
-        session.status = 'done';
-      }
-      // Keep briefly for session list, then drop.
-      setTimeout(() => { if (agentSessions.get(sessionId)?.done) agentSessions.delete(sessionId); }, 30_000);
-    } else {
-      agentSessions.delete(sessionId);
-    }
-  });
-  runPromise.then(async result => {
-    if (payload.scheduleId && storageDir) {
-      await AgentScheduler.markScheduleRun(storageDir, payload.scheduleId, { status: result?.cancelled ? 'cancelled' : result?.ok ? 'ok' : 'failed' });
-      await AgentScheduler.appendHistory(storageDir, {
-        scheduleId: payload.scheduleId,
-        templateId: payload.templateId || '',
-        sessionId,
-        status: result?.cancelled ? 'cancelled' : result?.ok ? 'ok' : 'failed',
-        summary: String(result?.content || '').slice(0, 500)
-      });
-    }
-  }).catch(err => sendAgentEvent(event.sender, { sessionId, type: 'error', error: err?.message || String(err) }));
-  return { ok: true, sessionId };
-}
-
-
-async function listAgentSessions() {
-  const live = [...agentSessions.entries()].map(([sessionId, session]) => ({
-    sessionId,
-    prompt: session.prompt || '',
-    status: session.status || (session.done ? 'done' : 'running'),
-    workspace: session.workspace || '',
-    storageDir: session.storageDir || '',
-    scheduled: !!session.scheduled,
-    scheduleId: session.scheduleId || '',
-    templateId: session.templateId || '',
-    mode: session.mode || '',
-    plan: Array.isArray(session.plan) ? session.plan : [],
-    startedAt: session.startedAt || 0,
-    logPath: session.logPath || '',
-    backupDir: session.backupDir || '',
-    done: !!session.done
-  }));
-  const liveIds = new Set(live.filter(item => !item.done).map(item => item.sessionId));
-  const resumable = await AgentSessionStore.listResumable(agentSessionRoot(), liveIds);
-  const resumableIds = new Set(resumable.map(item => item.sessionId));
-  return [...live.filter(item => !resumableIds.has(item.sessionId)), ...resumable];
-}
-
-function cancelAgentRun(sessionId) {
-  const session = agentSessions.get(String(sessionId || ''));
-  if (!session) return false;
-  session.controller.abort();
-  return true;
 }
 
 function cancelCodexRun(sessionId) {
@@ -2998,6 +2719,34 @@ async function archivePlayableFile(identifier) {
     .filter(item => item.score > -10)
     .sort((a, b) => b.score - a.score);
   return playable[0]?.file || files.find(file => /\.(mp3|ogg|m4a)$/i.test(file.name || '')) || null;
+}
+
+async function searchFreeMusic(payload = {}) {
+  return await searchFreeMusicV2(payload);
+  const query = String(payload.query || '').trim().slice(0, 80);
+  const page = Math.max(1, Number(payload.page || 1) || 1);
+  const response = await mediaFetch(url, { headers: { 'User-Agent': 'FutureAI-Music-Player' } });
+  if (!response.ok) throw new Error(`音乐搜索失败：${response.status}`);
+  const data = await response.json();
+  const docs = data?.response?.docs || [];
+  const tracks = [];
+  for (const doc of docs) {
+    const file = await archivePlayableFile(doc.identifier).catch(() => null);
+    if (!file) continue;
+    tracks.push({
+      id: `archive-${doc.identifier}-${file.name}`.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120),
+      title: String(doc.title || file.name || '免费音乐').slice(0, 120),
+      artist: String(doc.creator || '未知作者').slice(0, 80),
+      source: 'Internet Archive',
+      license: String(doc.licenseurl || '请打开来源确认授权').slice(0, 180),
+      year: String(doc.date || '').slice(0, 10),
+      url: archiveDownloadUrl(doc.identifier, file.name),
+      pageUrl: `https://archive.org/details/${encodeURIComponent(doc.identifier)}`,
+      fileName: file.name,
+      size: Number(file.size || 0)
+    });
+  }
+  return { query, page, source: 'Internet Archive', tracks, total: Number(data?.response?.numFound || 0) };
 }
 
 function ccmixterSearchTerm(profile) {
@@ -3609,8 +3358,6 @@ async function searchArchiveMusicTracks(profile, page, literalTerms) {
   return docs.map((doc, index) => {
     const file = files[index]?.status === 'fulfilled' ? files[index].value : null;
     if (!file) return null;
-    const rights = openMusicRights(doc.licenseurl, doc.licenseurl);
-    if (!rights) return null;
     const creator = Array.isArray(doc.creator) ? doc.creator.join(' / ') : doc.creator;
     return {
       id: trackId('archive-audio', `${doc.identifier}-${file.name}`),
@@ -3718,6 +3465,16 @@ function runFfmpeg(args, onProgress) {
     });
   });
 }
+
+const canvasPreviewCache = createCanvasPreviewCache({
+  cacheDir: path.join(LOCAL_RUNTIME_PATHS.userData, 'canvas-previews'),
+  resolveSource: safeExistingMediaPathReal,
+  convert: (source, output) => runFfmpeg([
+    '-y', '-threads', '1', '-i', source, '-frames:v', '1', '-threads', '1',
+    '-vf', 'scale=768:768:force_original_aspect_ratio=decrease:flags=fast_bilinear,format=rgba',
+    '-c:v', 'png', '-compression_level', '3', output
+  ])
+});
 
 function mediaProcessExtension(payload) {
   if (payload.operation.startsWith('extract-') || payload.operation.startsWith('image-')) return payload.format === 'jpg' || payload.format === 'webp' ? payload.format : 'png';
@@ -4207,6 +3964,33 @@ async function synthesizeManjuVoice(payload = {}) {
   });
 }
 
+async function exportProviderConformanceEvidence(payload = {}) {
+  if (E2E_CONFIG.enabled) throw new Error('内部 E2E 模式不能导出商业验收证据');
+  await assertPublicMediaUrl(String(payload.apiUrl || ''));
+  const appAsarSha256 = await packagedAppAsarSha256();
+  const candidate = {
+    ...(payload.evidence && typeof payload.evidence === 'object' ? payload.evidence : {}),
+    appVersion: String(APP_PACKAGE_METADATA.version || ''),
+    runtime: {releaseChannel: RELEASE_CHANNEL, testMode: false, appAsarSha256}
+  };
+  const evidence = ProviderConformanceEvidence.validateCommercialEvidence(candidate);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const save = await dialog.showSaveDialog({
+    title: '导出 API 商业验收证据',
+    defaultPath: path.join(app.getPath('documents'), `FutureAI-provider-validation-${stamp}.json`),
+    filters: [{name: 'JSON', extensions: ['json']}]
+  });
+  if (save.canceled || !save.filePath) return {canceled: true};
+  const file = save.filePath.toLowerCase().endsWith('.json') ? save.filePath : `${save.filePath}.json`;
+  const bytes = Buffer.from(JSON.stringify(evidence, null, 2), 'utf8');
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempFile, bytes);
+  await fs.rename(tempFile, file);
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  await shell.showItemInFolder(file);
+  return {canceled: false, file, sha256};
+}
+
 function isTrustedRendererUrl(value) {
   try {
     const url = new URL(String(value || ''));
@@ -4240,18 +4024,15 @@ function assertTrustedRenderer(event) {
 }
 
 const createWindow = () => {
-  // Test-only: an isolated-profile copy driven by automation can ask to stay off-screen,
-  // inactive and off the taskbar so it never appears on the user's desktop.
-  const offscreen = TEST_HOOKS_ALLOWED && process.env.FUTURE_AI_TEST_OFFSCREEN === '1';
   const win = new BrowserWindow({
-    ...(offscreen ? {x: -32000, y: -32000, show: false, skipTaskbar: true, focusable: false} : {}),
+    show: !(INTERNAL_TEST_CHANNELS_ALLOWED && process.env.FUTURE_AI_LICENSE_E2E === '1'),
     width: 1440,
     height: 920,
     minWidth: 1100,
     minHeight: 720,
     backgroundColor: '#0b1020',
     title: '∞未来 AI',
-    icon: path.join(__dirname, 'assets', 'app-icon.ico'),
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
@@ -4267,10 +4048,6 @@ const createWindow = () => {
       webSecurity: true
     }
   });
-  if (offscreen) {
-    win.setPosition(-32000, -32000);
-    win.showInactive();
-  }
   if (process.platform === 'win32' && typeof win.setTitleBarOverlay === 'function') {
     win.setTitleBarOverlay({
       color: '#090b0f',
@@ -4294,178 +4071,18 @@ const createWindow = () => {
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
-  installRendererRecovery(win, {quiet: offscreen});
-  installCloseFlush(win);
 };
-
-// Closing the window first lets the page write its pending canvas save (the
-// 300 ms debounce, the last generated image) and then waits for every queued
-// store write in this process, so a close right after a result never loses it.
-const CLOSE_FLUSH_TIMEOUT_MS = 6000;
-let closeFlushSeq = 0;
-async function drainStorageWrites(timeoutMs = CLOSE_FLUSH_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
-  while (storageWriteQueues.size && Date.now() < deadline) {
-    const pending = Promise.allSettled([...storageWriteQueues.values()]);
-    await Promise.race([pending, new Promise(resolve => setTimeout(resolve, Math.max(10, deadline - Date.now())))]);
-  }
-  return storageWriteQueues.size === 0;
-}
-function requestRendererFlush(win, timeoutMs = CLOSE_FLUSH_TIMEOUT_MS) {
-  return new Promise(resolve => {
-    if (!win || win.isDestroyed() || win.webContents.isCrashed?.()) return resolve(false);
-    const id = ++closeFlushSeq;
-    let timer = null;
-    const done = (event, replyId) => {
-      if (replyId !== id || event.sender !== win.webContents) return;
-      finish(true);
-    };
-    const finish = ok => {
-      clearTimeout(timer);
-      ipcMain.removeListener('app:flush-done', done);
-      resolve(ok);
-    };
-    ipcMain.on('app:flush-done', done);
-    timer = setTimeout(() => finish(false), timeoutMs);
-    try { win.webContents.send('app:flush-request', id); } catch { finish(false); }
-  });
-}
-function installCloseFlush(win) {
-  let flushed = false;
-  let flushing = false;
-  win.on('close', event => {
-    if (flushed || win.isDestroyed()) return;
-    event.preventDefault();
-    if (flushing) return;
-    flushing = true;
-    (async () => {
-      const rendererOk = await requestRendererFlush(win);
-      const writesOk = await drainStorageWrites();
-      if (!rendererOk || !writesOk) await appendAppLog('warn', 'close flush incomplete', {rendererOk, writesOk}).catch(() => {});
-    })().catch(() => {}).finally(() => {
-      flushed = true;
-      if (!win.isDestroyed()) win.close();
-    });
-  });
-}
-
-// 界面进程崩溃或卡死时自动恢复：崩溃后自动重新加载（5 分钟内最多 3 次），卡死时让用户选择等待或重新加载。
-let pendingRecoveryNotice = null;
-function installRendererRecovery(win, {quiet = false} = {}) {
-  const recoveries = [];
-  let hangDialogOpen = false;
-  const reloadWindow = reason => {
-    if (win.isDestroyed()) return;
-    pendingRecoveryNotice = {reason, at: Date.now()};
-    win.webContents.reload();
-  };
-  win.webContents.on('render-process-gone', (_event, details = {}) => {
-    appendAppLog('error', 'renderer process gone', {reason: details.reason, exitCode: details.exitCode}).catch(() => {});
-    if (details.reason === 'clean-exit' || win.isDestroyed()) return;
-    const now = Date.now();
-    while (recoveries.length && now - recoveries[0] > 5 * 60 * 1000) recoveries.shift();
-    if (recoveries.length < 3) {
-      recoveries.push(now);
-      setTimeout(() => reloadWindow(details.reason || 'crashed'), 300);
-      return;
-    }
-    if (quiet) return;
-    dialog.showMessageBox(win, {
-      type: 'error',
-      title: '∞未来 AI',
-      message: '界面连续意外退出',
-      detail: '5 分钟内已经自动恢复了 3 次，仍然出错。建议先关闭软件再重新打开；如果反复出现，请到「设置 → 本地存储 → 导出诊断包」并发给售后。',
-      buttons: ['再试一次', '关闭软件'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    }).then(result => {
-      if (result.response === 1) app.quit();
-      else reloadWindow(details.reason || 'crashed');
-    }).catch(() => {});
-  });
-  win.on('unresponsive', () => {
-    appendAppLog('warn', 'window unresponsive', {}).catch(() => {});
-    if (quiet || hangDialogOpen || win.isDestroyed()) return;
-    hangDialogOpen = true;
-    dialog.showMessageBox(win, {
-      type: 'warning',
-      title: '∞未来 AI',
-      message: '软件暂时没有响应',
-      detail: '可能正在处理很大的图片或项目，可以再等一会儿。如果一直卡住，选「重新加载界面」：项目会自动保存，但最近几秒的改动可能丢失。',
-      buttons: ['继续等待', '重新加载界面'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    }).then(result => {
-      hangDialogOpen = false;
-      if (result.response === 1 && !win.isDestroyed()) {
-        win.webContents.forcefullyCrashRenderer();
-        reloadWindow('unresponsive');
-      }
-    }).catch(() => { hangDialogOpen = false; });
-  });
-  win.on('responsive', () => {
-    appendAppLog('info', 'window responsive again', {}).catch(() => {});
-  });
-}
 
 ipcMain.handle('storage:chooseDir', async event => {
   assertTrustedRenderer(event);
   const result = await dialog.showOpenDialog({
     title: '选择本地存储文件夹',
-    defaultPath: app.getPath('documents'),
     properties: ['openDirectory', 'createDirectory']
   });
   if (result.canceled || !result.filePaths[0]) return '';
   const root = await rememberStorageRoot(result.filePaths[0]);
   await ensureDir(safeStoragePath(root, 'media'));
   return root;
-});
-
-ipcMain.handle('storage:defaultDir', async (event, {create = false} = {}) => {
-  assertTrustedRenderer(event);
-  const dir = defaultStorageDir();
-  if (!create) return dir;
-  await ensureDir(path.join(dir, 'media'));
-  return await rememberStorageRoot(dir);
-});
-
-ipcMain.handle('storage:copyMedia', async (event, fromDir, toDir) => {
-  assertTrustedRenderer(event);
-  return await copyStorageMedia(fromDir, toDir);
-});
-
-ipcMain.handle('storage:inspectDir', (event, dir) => {
-  assertTrustedRenderer(event);
-  return {insideInstallDir: Boolean(dir) && storageDirInsideInstallDir(dir)};
-});
-
-// The saved storage folder no longer exists (app/project folder copied to another PC or drive):
-// find the same folder under the current install dir, profile or Documents instead of recreating
-// an empty store at the old path.
-ipcMain.handle('storage:resolveMovedRoot', async (event, dir) => {
-  assertTrustedRenderer(event);
-  const bases = [];
-  try { bases.push(installDir(), path.dirname(installDir())); } catch {}
-  try { bases.push(app.getPath('documents'), path.dirname(app.getPath('documents'))); } catch {}
-  try { bases.push(path.dirname(LOCAL_RUNTIME_PATHS.userData)); } catch {}
-  try { bases.push(app.getPath('home')); } catch {}
-  const extra = [defaultStorageDir()];
-  try { const found = await findProjectRoot(); if (found) extra.push(found); } catch {}
-  const result = await resolveMovedStorageRoot(dir, {
-    bases,
-    extra,
-    exists: async target => fsSync.existsSync(target),
-    hasStore: async target => fsSync.existsSync(target) && hasExistingStoreFiles(target)
-  });
-  if (result.moved) {
-    await rememberStorageRoot(result.dir);
-    await appendAppLog('info', 'storage folder moved, switched automatically', {from: result.from, to: result.dir});
-  } else if (result.missing) {
-    await appendAppLog('warn', 'storage folder missing', {dir: result.dir});
-  }
-  return result;
 });
 
 ipcMain.handle('storage:findProjectRoot', event => {
@@ -4486,7 +4103,7 @@ ipcMain.handle('storage:checkWritable', async (event, dir) => {
   assertTrustedRenderer(event);
   const root = await ensureStorageRootAllowed(dir);
   const probeDir = safeStoragePath(root, '.future-ai');
-  const probe = uniqueTempPath(path.join(probeDir, '.write-test'));
+  const probe = path.join(probeDir, `.write-test-${process.pid}-${Date.now()}.tmp`);
   await ensureDir(probeDir);
   await fs.writeFile(probe, 'ok', 'utf8');
   await fs.rm(probe, {force: true});
@@ -4498,33 +4115,12 @@ ipcMain.handle('storage:readJson', async (event, dir, name) => {
   if (!dir) return null;
   await ensureStorageRootAllowed(dir);
   safeStoreFile(name);
-  if (name === 'projects') {
-    const {value, recovery} = await readProjectsStore(dir);
-    if (recovery) {
-      event.sender.send('storage:recovery', {store: name, ...recovery});
-      await appendAppLog('warn', 'project store automatically recovered', recovery);
-    }
-    const absolute = absolutizeStoreMedia(dir, value);
-    const repair = await repairStoreMediaRefs(dir, absolute);
-    if (repair.repaired) {
-      try {
-        const backup = await backupProjectsBeforeRepair(dir);
-        await writeProjectsStore(dir, await prepareStoreValueForWrite(dir, repair.value));
-        await appendAppLog('info', 'project media references repaired', {repaired: repair.repaired, imported: repair.imported, missing: repair.missing.length, backup: backup ? path.basename(backup) : ''});
-      } catch (err) {
-        await appendAppLog('warn', 'project media repair write failed', {message: err?.message || String(err)});
-      }
-    } else if (repair.missing.length) {
-      await appendAppLog('warn', 'project media files missing', {missing: repair.missing.length});
-    }
-    return repair.value;
-  }
   const result = await readStoreWithRecovery(dir, name);
   if (result.recovered) {
     event.sender.send('storage:recovery', {store: name, backup: path.basename(result.backupFile), corrupt: path.basename(result.corruptFile)});
     await appendAppLog('warn', 'json store automatically recovered', {store: name, backup: path.basename(result.backupFile), corrupt: path.basename(result.corruptFile)});
   }
-  return (await repairStoreMediaRefs(dir, absolutizeStoreMedia(dir, result.value))).value;
+  return result.value;
 });
 
 ipcMain.handle('storage:writeJson', async (event, dir, name, data) => {
@@ -4534,96 +4130,51 @@ ipcMain.handle('storage:writeJson', async (event, dir, name, data) => {
   await ensureDir(path.resolve(dir));
   const file = safeStoragePath(dir, safeStoreFile(name));
   assertStoreValue(data);
-  const prepared = await prepareStoreValueForWrite(dir, data, {importForeign: name === 'projects'});
-  if (name === 'projects') return await writeProjectsStore(dir, prepared);
   return await enqueueStorageWrite(file, async () => {
     await backupStoreFile(dir, name, file);
-    await writeFileAtomicUnlocked(file, JSON.stringify(prepared, null, 2));
-    return true;
+    const tempFile = `${file}.${process.pid}.${Date.now()}-${crypto.randomBytes(4).toString('hex')}.tmp`;
+    try {
+      await fs.writeFile(tempFile, JSON.stringify(data, null, 2), 'utf8');
+      await fs.rename(tempFile, file);
+      return true;
+    } finally {
+      await fs.rm(tempFile, {force: true}).catch(() => {});
+    }
   });
 });
-
-const REMOTE_MEDIA_LIMITS = {
-  image: {maxBytes: 100 * 1024 * 1024, timeoutMs: 90 * 1000, label: '图片'},
-  video: {maxBytes: 1024 * 1024 * 1024, timeoutMs: 10 * 60 * 1000, label: '视频'}
-};
-
-function sniffMediaExt(bytes) {
-  const head = bytes.subarray(0, 16);
-  if (head.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return {ext: 'png', kind: 'image'};
-  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return {ext: 'jpg', kind: 'image'};
-  if (head.subarray(0, 6).toString('ascii').startsWith('GIF8')) return {ext: 'gif', kind: 'image'};
-  if (head.subarray(0, 4).toString('ascii') === 'RIFF' && head.subarray(8, 12).toString('ascii') === 'WEBP') return {ext: 'webp', kind: 'image'};
-  if (head.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return {ext: 'webm', kind: 'video'};
-  if (head.subarray(4, 8).toString('ascii') === 'ftyp') {
-    const brand = head.subarray(8, 12).toString('ascii');
-    if (brand === 'avif' || brand === 'avis') return {ext: 'avif', kind: 'image'};
-    if (brand === 'qt  ') return {ext: 'mov', kind: 'video'};
-    return {ext: 'mp4', kind: 'video'};
-  }
-  return {ext: '', kind: ''};
-}
-
-async function fetchRemoteMedia(rawUrl, kind = 'image') {
-  const limits = REMOTE_MEDIA_LIMITS[kind] || REMOTE_MEDIA_LIMITS.image;
-  let url;
-  try { url = new URL(String(rawUrl || '')); } catch { throw new Error(`${limits.label}地址无效`); }
-  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error(`仅支持下载 HTTP/HTTPS ${limits.label}`);
-  const tooLarge = `${limits.label}超过 ${Math.round(limits.maxBytes / 1024 / 1024)} MB 下载限制`;
-  const response = await fetch(url.href, {redirect: 'follow', signal: AbortSignal.timeout(limits.timeoutMs)});
-  if (!response.ok) throw new Error(`${limits.label}服务器返回 ${response.status}`);
-  if (Number(response.headers.get('content-length') || 0) > limits.maxBytes) throw new Error(tooLarge);
-  const chunks = [];
-  let received = 0;
-  for await (const chunk of response.body) {
-    received += chunk.byteLength;
-    if (received > limits.maxBytes) throw new Error(tooLarge);
-    chunks.push(Buffer.from(chunk));
-  }
-  const bytes = Buffer.concat(chunks, received);
-  if (!bytes.length) throw new Error(`${limits.label}内容为空`);
-  const sniffed = sniffMediaExt(bytes);
-  if (!sniffed.ext || (kind === 'image' && sniffed.kind !== 'image')) {
-    const mime = String(response.headers.get('content-type') || '').toLowerCase();
-    throw new Error(mime.includes('json') ? `${limits.label}服务器返回了 JSON 错误内容，请检查链接是否已过期` : `服务器返回的内容不是受支持的${limits.label}格式`);
-  }
-  return {bytes, ext: sniffed.ext};
-}
-
-// Content-addressed, atomic write into <storageDir>/media/<sha256>.<ext>.
-async function writeStorageMedia(dir, bytes, ext) {
-  await ensureStorageRootAllowed(dir);
-  const mediaDir = safeStoragePath(dir, 'media');
-  await ensureDir(mediaDir);
-  const hash = crypto.createHash('sha256').update(bytes).digest('hex');
-  const file = safeStoragePath(dir, 'media', `${hash}.${ext}`);
-  if (!fsSync.existsSync(file)) {
-    await writeFileAtomic(file, bytes);
-  }
-  return pathToFileURL(file).href;
-}
 
 ipcMain.handle('storage:saveMedia', async (event, dir, payload) => {
   assertTrustedRenderer(event);
   if (!dir || !payload?.dataUrl) return '';
+  await ensureStorageRootAllowed(dir);
+  const mediaDir = safeStoragePath(dir, 'media');
+  await ensureDir(mediaDir);
   const match = String(payload.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
   if (!match) throw new Error('素材不是可保存的数据格式');
   const mime = match[1];
   const defaultExt = mime.includes('video') ? 'mp4' : mime.includes('jpeg') ? 'jpg' : 'png';
   const requestedExt = String(payload.ext || '').trim().toLowerCase().replace(/^\./, '');
   const ext = /^[a-z0-9]{1,12}$/.test(requestedExt) ? requestedExt : defaultExt;
-  return await writeStorageMedia(dir, Buffer.from(match[2], 'base64'), ext);
+  const safeName = String(payload.name || 'media').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80);
+  const file = path.join(mediaDir, `${Date.now()}_${safeName}.${ext}`);
+  await fs.writeFile(file, Buffer.from(match[2], 'base64'));
+  return pathToFileURL(file).href;
 });
 
-// Uploaded canvas wallpapers are copied next to the exe so they travel with a copied app folder.
-// userData is the fallback when the install folder is read-only, and the only location in dev.
 function wallpaperDirs() {
-  const ownDir = path.join(app.getPath('userData'), 'wallpapers');
-  return app.isPackaged ? [path.join(installDir(), 'wallpapers'), ownDir] : [ownDir];
+  const userDir = path.join(app.getPath('userData'), 'wallpapers');
+  return app.isPackaged ? [path.join(path.dirname(app.getPath('exe')), 'wallpapers'), userDir] : [userDir];
 }
 
 function wallpaperInfo(file) {
   return file ? {url: pathToFileURL(file).href, dir: path.dirname(file)} : null;
+}
+
+function wallpaperImageExt(bytes) {
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpg';
+  if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+  throw new Error('壁纸仅支持 PNG、JPG 或 WebP 图片');
 }
 
 ipcMain.handle('wallpaper:current', async event => {
@@ -4639,7 +4190,7 @@ ipcMain.handle('wallpaper:import', async (event, payload = {}) => {
   if (!stats.isFile()) throw new Error('请选择本地图片文件');
   WallpaperStore.assertWallpaperSize(stats.size);
   const bytes = await fs.readFile(source);
-  return wallpaperInfo(await WallpaperStore.saveWallpaper(wallpaperDirs(), bytes, sniffMediaExt(bytes).ext));
+  return wallpaperInfo(await WallpaperStore.saveWallpaper(wallpaperDirs(), bytes, wallpaperImageExt(bytes)));
 });
 
 ipcMain.handle('wallpaper:delete', async event => {
@@ -4648,142 +4199,60 @@ ipcMain.handle('wallpaper:delete', async event => {
   return null;
 });
 
-// User workflow templates are JSON files next to the exe (templates/), same portability as wallpapers/.
-function templateDirs() {
-  const ownDir = path.join(app.getPath('userData'), 'templates');
-  return app.isPackaged ? [path.join(installDir(), 'templates'), ownDir] : [ownDir];
-}
+let uiPreferencesWriteQueue = Promise.resolve();
 
-function publicTemplate(item) {
-  if (!item) return null;
-  const copy = Object.assign({}, item);
-  delete copy._file;
-  delete copy._dir;
-  return copy;
-}
-
-ipcMain.handle('templates:list', async event => {
+ipcMain.handle('uiPreferences:load', async event => {
   assertTrustedRenderer(event);
-  return (await TemplateStore.listTemplates(templateDirs())).map(publicTemplate);
+  return UiPreferences.readUiPreferences(path.join(app.getPath('userData'), 'ui-preferences.json'));
 });
 
-ipcMain.handle('templates:save', async (event, definition = {}) => {
+ipcMain.handle('uiPreferences:save', async (event, value) => {
   assertTrustedRenderer(event);
-  return publicTemplate(await TemplateStore.saveTemplate(templateDirs(), definition));
-});
-
-ipcMain.handle('templates:delete', async (event, id) => {
-  assertTrustedRenderer(event);
-  await TemplateStore.deleteTemplate(templateDirs(), id);
-  return true;
-});
-
-// User prompt snippets are JSON files next to the exe (prompts/), same portability as templates/.
-function promptDirs() {
-  const ownDir = path.join(app.getPath('userData'), 'prompts');
-  return app.isPackaged ? [path.join(installDir(), 'prompts'), ownDir] : [ownDir];
-}
-
-function publicPromptSnippet(item) {
-  if (!item) return null;
-  const copy = Object.assign({}, item);
-  delete copy._file;
-  delete copy._dir;
-  return copy;
-}
-
-ipcMain.handle('prompts:list', async event => {
-  assertTrustedRenderer(event);
-  return (await PromptStore.listSnippets(promptDirs())).map(publicPromptSnippet);
-});
-
-ipcMain.handle('prompts:save', async (event, definition = {}) => {
-  assertTrustedRenderer(event);
-  return publicPromptSnippet(await PromptStore.saveSnippet(promptDirs(), definition));
-});
-
-ipcMain.handle('prompts:delete', async (event, id) => {
-  assertTrustedRenderer(event);
-  await PromptStore.deleteSnippet(promptDirs(), id);
-  return true;
-});
-
-// Portable media library next to the exe (library/). Travels when the app folder is copied.
-function libraryDirs() {
-  const ownDir = path.join(app.getPath('userData'), 'library');
-  return app.isPackaged ? [path.join(installDir(), 'library'), ownDir] : [ownDir];
-}
-
-ipcMain.handle('library:list', async event => {
-  assertTrustedRenderer(event);
-  return await PortableLibrary.listItems(libraryDirs());
-});
-
-ipcMain.handle('library:save', async (event, payload = {}) => {
-  assertTrustedRenderer(event);
-  let bytes = null;
-  let ext = String(payload.ext || '').trim().toLowerCase().replace(/^\./, '');
-  const kind = payload.kind === 'video' ? 'video' : 'image';
-  if (payload.dataUrl) {
-    const match = String(payload.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) throw new Error('素材不是可保存的数据格式');
-    bytes = Buffer.from(match[2], 'base64');
-    if (!ext) {
-      const mime = match[1].toLowerCase();
-      ext = mime.includes('video') ? 'mp4' : mime.includes('jpeg') ? 'jpg' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'png';
-    }
-  } else if (payload.url || payload.filePath) {
-    const target = String(payload.filePath || payload.url || '');
-    if (/^https?:\/\//i.test(target)) {
-      const fetched = await fetchRemoteMedia(target, kind);
-      bytes = fetched.bytes;
-      ext = ext || fetched.ext;
-    } else {
-      let file;
-      try {
-        file = safeExistingMediaPath(target);
-      } catch {
-        const candidate = path.resolve(String(target || '').startsWith('file:') ? fileURLToPath(target) : String(target || ''));
-        const roots = [...libraryDirs(), installDir(), app.getPath('userData')];
-        if (!roots.some(root => pathInside(root, candidate))) throw new Error('未授权的媒体文件路径');
-        file = candidate;
-      }
-      bytes = await fs.readFile(file);
-      if (!ext) ext = path.extname(file).replace(/^\./, '').toLowerCase() || (kind === 'video' ? 'mp4' : 'png');
-    }
-  } else {
-    throw new Error('请提供素材内容');
-  }
-  return await PortableLibrary.saveBytes(libraryDirs(), {
-    id: payload.id,
-    name: payload.name,
-    kind,
-    prompt: payload.prompt,
-    tags: payload.tags,
-    mime: payload.mime,
-    size: payload.size,
-    model: payload.model,
-    time: payload.time,
-    ext
-  }, bytes);
-});
-
-ipcMain.handle('library:delete', async (event, id) => {
-  assertTrustedRenderer(event);
-  return await PortableLibrary.deleteItem(libraryDirs(), id);
-});
-
-
-ipcMain.handle('storage:saveRemoteMedia', async (event, dir, payload = {}) => {
-  assertTrustedRenderer(event);
-  if (!dir) throw new Error('请先选择本地存储文件夹');
-  const {bytes, ext} = await fetchRemoteMedia(payload.url, payload.kind === 'video' ? 'video' : 'image');
-  return await writeStorageMedia(dir, bytes, ext);
+  const file = path.join(app.getPath('userData'), 'ui-preferences.json');
+  const next = uiPreferencesWriteQueue.catch(() => {}).then(async () => {
+    const current = await UiPreferences.readUiPreferences(file);
+    return UiPreferences.writeUiPreferences(file, {...current, ...UiPreferences.normalizeUiPreferences(value)});
+  });
+  uiPreferencesWriteQueue = next;
+  return next;
 });
 
 ipcMain.handle('media:downloadRemoteImage', async (event, payload = {}) => {
   assertTrustedRenderer(event);
-  const {bytes, ext} = await fetchRemoteMedia(payload.url, 'image');
+  let url;
+  try { url = new URL(String(payload.url || '')); } catch { throw new Error('图片地址无效'); }
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('仅支持下载 HTTP/HTTPS 图片');
+
+  const response = await fetch(url.href, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(45000),
+    headers: {Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'}
+  });
+  if (!response.ok) throw new Error(`图片服务器返回 ${response.status}`);
+  const declaredSize = Number(response.headers.get('content-length') || 0);
+  const maxSize = 100 * 1024 * 1024;
+  if (declaredSize > maxSize) throw new Error('图片超过 100 MB 下载限制');
+  const chunks = [];
+  let received = 0;
+  for await (const chunk of response.body) {
+    received += chunk.byteLength;
+    if (received > maxSize) throw new Error('图片超过 100 MB 下载限制');
+    chunks.push(Buffer.from(chunk));
+  }
+  const bytes = Buffer.concat(chunks, received);
+  if (!bytes.length) throw new Error('图片内容为空');
+
+  const mime = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const isPng = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isGif = bytes.subarray(0, 6).toString('ascii').startsWith('GIF8');
+  const isWebp = bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP';
+  const isAvif = bytes.subarray(4, 12).toString('ascii').includes('ftypavif') || bytes.subarray(4, 12).toString('ascii').includes('ftypavis');
+  const ext = isPng ? 'png' : isJpeg ? 'jpg' : isGif ? 'gif' : isWebp ? 'webp' : isAvif ? 'avif' : '';
+  if (!ext || (!mime.startsWith('image/') && mime !== 'application/octet-stream')) {
+    throw new Error(mime.includes('json') ? '图片服务器返回了 JSON 错误内容，请检查图片链接是否已过期' : '服务器返回的内容不是受支持的图片格式');
+  }
+
   const requestedName = path.basename(String(payload.name || 'future_canvas_image')).replace(/[\\/:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '').slice(0, 100) || 'future_canvas_image';
   const save = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
     title: '保存图片',
@@ -4802,6 +4271,11 @@ ipcMain.handle('storage:readMedia', async (event, target) => {
   const file = safeExistingMediaPath(target);
   const data = await fs.readFile(file);
   return `data:${mimeFromPath(file)};base64,${data.toString('base64')}`;
+});
+
+ipcMain.handle('storage:canvasPreview', async (event, target) => {
+  assertTrustedRenderer(event);
+  return await canvasPreviewCache.previewUrl(target);
 });
 
 ipcMain.handle('media:index', async (event, payload) => {
@@ -4842,9 +4316,29 @@ ipcMain.handle('secret:getProviderApiKey', async (event, providerId) => {
   return await readProviderApiKey(providerId);
 });
 
-ipcMain.handle('secret:setProviderApiKey', async (event, providerId, apiKey) => {
+ipcMain.handle('secret:getProviderApiKeyForKey', async (event, providerId, keyId) => {
   assertTrustedRenderer(event);
-  return await writeProviderApiKey(providerId, apiKey);
+  return await readProviderApiKey(providerId, keyId);
+});
+
+ipcMain.handle('secret:listProviderApiKeys', async (event, providerId) => {
+  assertTrustedRenderer(event);
+  return await listProviderApiKeys(providerId);
+});
+
+ipcMain.handle('secret:setProviderApiKey', async (event, providerId, apiKey, keyId, label, scope) => {
+  assertTrustedRenderer(event);
+  return await writeProviderApiKey(providerId, apiKey, keyId, label, scope);
+});
+
+ipcMain.handle('secret:updateProviderApiKeyMetadata', async (event, providerId, keyId, metadata) => {
+  assertTrustedRenderer(event);
+  return await updateProviderApiKeyMetadata(providerId, keyId, metadata);
+});
+
+ipcMain.handle('secret:removeProviderApiKey', async (event, providerId, keyId) => {
+  assertTrustedRenderer(event);
+  return await removeProviderApiKey(providerId, keyId);
 });
 
 ipcMain.handle('secret:clearProviderApiKey', async (event, providerId) => {
@@ -4852,77 +4346,61 @@ ipcMain.handle('secret:clearProviderApiKey', async (event, providerId) => {
   return await clearProviderApiKey(providerId);
 });
 
-// Relay balance: the key is resolved here and never crosses IPC.
 const providerBalance = ProviderBalance.createBalanceService({
-  readKey: ({providerId, useGlobalKey}) => useGlobalKey ? readApiKeySecret() : readProviderApiKey(providerId)
+  readKey: ({providerId, useGlobalKey, keyId}) => useGlobalKey ? readApiKeySecret() : readProviderApiKey(providerId, keyId)
 });
 ipcMain.handle('provider:balance', async (event, request = {}) => {
   assertTrustedRenderer(event);
-  return await providerBalance.query({
-    providerId: String(request?.providerId || ''),
-    apiUrl: String(request?.apiUrl || ''),
-    useGlobalKey: request?.useGlobalKey === true,
-    force: request?.force === true
+  return providerBalance.query({
+    providerId: String(request.providerId || ''),
+    apiUrl: String(request.apiUrl || ''),
+    keyId: String(request.keyId || ''),
+    useGlobalKey: request.useGlobalKey === true,
+    force: request.force === true
   });
 });
 
-// Agent benchmark mode (isolated profiles only): the renderer hands over the configured chat
-// provider, the suite in FUTURE_AI_AGENT_EVAL_DIR runs against the real agent loop, then the app quits.
-function agentEvalConfig() {
-  const dir = TEST_HOOKS_ALLOWED ? String(process.env.FUTURE_AI_AGENT_EVAL_DIR || '') : '';
-  return {
-    enabled: !!dir,
-    dir,
-    outDir: String(process.env.FUTURE_AI_AGENT_EVAL_OUT || (dir && path.join(dir, 'results'))),
-    only: String(process.env.FUTURE_AI_AGENT_EVAL_ONLY || '').split(',').map(item => item.trim()).filter(Boolean),
-    concurrency: Number(process.env.FUTURE_AI_AGENT_EVAL_CONCURRENCY) || 3,
-    build: String(process.env.FUTURE_AI_AGENT_EVAL_BUILD || '')
-  };
-}
-
-ipcMain.handle('agent-eval:config', async event => {
+ipcMain.handle('license:getStatus', async event => {
   assertTrustedRenderer(event);
-  return { enabled: agentEvalConfig().enabled };
+  await appendAppLog('info', 'license status requested');
+  const status = await licenseService.getStatus();
+  await appendAppLog('info', 'license status returned', { status: status.status });
+  return status;
 });
 
-// A renderer reload re-sends the request; the suite runs once per app launch.
-let agentEvalStarted = false;
-
-ipcMain.handle('agent-eval:run', async (event, api = {}) => {
+ipcMain.handle('license:redeem', async (event, redemptionCode) => {
   assertTrustedRenderer(event);
-  const config = agentEvalConfig();
-  if (!config.enabled) throw new Error('评测模式未启用');
-  if (agentEvalStarted) return false;
-  agentEvalStarted = true;
-  // Programs the agent starts (e.g. the app exe as a script runtime) must not start another suite.
-  Object.keys(process.env).filter(key => key.startsWith('FUTURE_AI_AGENT_EVAL_')).forEach(key => delete process.env[key]);
-  const { runSuite } = require(path.join(config.dir, 'runner.js'));
-  await fs.mkdir(config.outDir, { recursive: true });
-  const progress = path.join(config.outDir, 'progress.log');
-  try {
-    await runSuite({
-      agent: { runAgent: AgentLoop.runAgent, Permissions: AgentPermissions, SessionStore: AgentSessionStore },
-      modelConfig: {
-        baseUrl: String(api.baseUrl || ''),
-        apiKey: String(api.apiKey || ''),
-        model: String(api.model || ''),
-        fastModel: String(api.fastModel || ''),
-        format: String(api.format || api.providerType || '')
-      },
-      helpers: { buildZip, buildDocx: AgentDocuments.buildDocx },
-      outDir: config.outDir,
-      build: `${app.getVersion()} ${config.build}`.trim(),
-      only: config.only,
-      concurrency: config.concurrency,
-      nodePath: process.execPath,
-      nodeEnv: { ELECTRON_RUN_AS_NODE: '1' },
-      log: line => fsSync.appendFileSync(progress, `${new Date().toISOString()} ${line}\n`)
-    });
-  } catch (err) {
-    fsSync.appendFileSync(progress, `${new Date().toISOString()} FAILED ${err.message}\n`);
-  }
-  setTimeout(() => app.quit(), 500);
-  return true;
+  const result = await licenseService.redeem(redemptionCode);
+  await appendAppLog('info', 'license redeemed', {status: result.status, generation: result.generation});
+  return result;
+});
+
+ipcMain.handle('license:release', async event => {
+  assertTrustedRenderer(event);
+  const result = await licenseService.release();
+  await appendAppLog('info', 'license released', {deactivated: result.deactivated});
+  return result;
+});
+
+ipcMain.handle('license:createActivationRequest', async (event, payload) => {
+  assertTrustedRenderer(event);
+  const result = await licenseService.createActivationRequest(payload || {});
+  await appendAppLog('info', 'license activation request created');
+  return result;
+});
+
+ipcMain.handle('license:importActivation', async (event, activationCode) => {
+  assertTrustedRenderer(event);
+  const result = await licenseService.importActivation(activationCode);
+  await appendAppLog('info', 'license activation imported', { status: result.status, generation: result.generation });
+  return result;
+});
+
+ipcMain.handle('license:deactivate', async event => {
+  assertTrustedRenderer(event);
+  const receipt = await licenseService.deactivate();
+  await appendAppLog('info', 'license deactivated');
+  return receipt;
 });
 
 ipcMain.handle('e2e:getConfig', async event => {
@@ -4971,52 +4449,9 @@ ipcMain.handle('support:getInfo', async event => {
   return await buildSupportInfo({
     legalRoot: supportLegalRoot(),
     version: app.getVersion(),
-    buildLabel: APP_PACKAGE_METADATA.buildLabel,
     releaseChannel: releaseChannel(),
     packaged: app.isPackaged
   });
-});
-
-ipcMain.handle('support:consumeRecoveryNotice', event => {
-  assertTrustedRenderer(event);
-  const notice = pendingRecoveryNotice;
-  pendingRecoveryNotice = null;
-  return notice && Date.now() - notice.at < 2 * 60 * 1000 ? notice : null;
-});
-
-function portableAppDir() {
-  return app.isPackaged ? path.dirname(process.execPath) : '';
-}
-
-ipcMain.handle('support:updateSourceDefault', async event => {
-  assertTrustedRenderer(event);
-  return await UpdateCheck.readDefaultSource(portableAppDir());
-});
-
-ipcMain.handle('support:checkUpdate', async (event, payload = {}) => {
-  assertTrustedRenderer(event);
-  const source = String(payload?.source || '').trim() || await UpdateCheck.readDefaultSource(portableAppDir());
-  try {
-    return await UpdateCheck.checkForUpdate({source, current: {version: app.getVersion(), build: APP_PACKAGE_METADATA.buildLabel || ''}});
-  } catch (err) {
-    await appendAppLog('warn', 'update check failed', {message: err?.message || String(err)});
-    return {status: 'error', message: err?.message || String(err)};
-  }
-});
-
-ipcMain.handle('support:openUpdateDownload', async (event, target) => {
-  assertTrustedRenderer(event);
-  const value = String(target || '').trim();
-  if (UpdateCheck.isHttpUrl(value)) {
-    await shell.openExternal(value);
-    return true;
-  }
-  if (!value || !path.isAbsolute(value)) return false;
-  const stat = await fs.stat(value).catch(() => null);
-  if (!stat) return false;
-  if (stat.isDirectory()) return (await shell.openPath(value)) === '';
-  shell.showItemInFolder(value);
-  return true;
 });
 
 ipcMain.handle('support:readDocument', async (event, id) => {
@@ -5027,42 +4462,6 @@ ipcMain.handle('support:readDocument', async (event, id) => {
 ipcMain.handle('export:projectPackage', async (event, payload) => {
   assertTrustedRenderer(event);
   return await exportProjectPackage(payload || {});
-});
-
-ipcMain.handle('export:canvasMedia', async (event, payload) => {
-  assertTrustedRenderer(event);
-  return await exportCanvasMedia(event, payload || {});
-});
-
-// 花费管理 → 导出表格：只写用户在保存对话框里选的 .csv（测试隔离模式可直接给目标路径）。
-async function exportSpendCsv(event, payload = {}) {
-  const csv = String(payload.csv || '');
-  if (!csv || csv.length > 20 * 1024 * 1024) throw new Error('没有可导出的记录');
-  let target = '';
-  if (TEST_HOOKS_ALLOWED && payload.e2eTarget) {
-    target = path.resolve(String(payload.e2eTarget));
-  } else {
-    const picked = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
-      title: '导出扣费记录',
-      defaultPath: path.join(app.getPath('documents'), `扣费记录-${timestampForBackup()}.csv`),
-      filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
-    });
-    if (picked.canceled || !picked.filePath) return null;
-    target = picked.filePath;
-  }
-  if (!/\.csv$/i.test(target)) target += '.csv';
-  await fs.writeFile(target, csv, 'utf8');
-  return { path: target };
-}
-
-ipcMain.handle('export:spendCsv', async (event, payload) => {
-  assertTrustedRenderer(event);
-  return await exportSpendCsv(event, payload || {});
-});
-
-ipcMain.handle('export:sharePackage', async (event, payload) => {
-  assertTrustedRenderer(event);
-  return await exportSharePackage(event, payload || {});
 });
 
 ipcMain.handle('review:export', async (event, payload) => {
@@ -5107,6 +4506,11 @@ ipcMain.handle('manju:synthesizeVoice', async (event, payload) => {
   }
 });
 
+ipcMain.handle('provider:exportConformanceEvidence', async (event, payload) => {
+  assertTrustedRenderer(event);
+  return await exportProviderConformanceEvidence(payload || {});
+});
+
 ipcMain.handle('cleanup:scan', async (event, payload) => {
   assertTrustedRenderer(event);
   return await scanCleanupTargets(payload || {});
@@ -5117,33 +4521,84 @@ ipcMain.handle('cleanup:execute', async (event, payload) => {
   return await executeCleanupTargets(payload || {});
 });
 
-ipcMain.handle('codex:status', async (event, payload = {}) => {
+ipcMain.handle('update:check', async (event, payload) => {
   assertTrustedRenderer(event);
-  return codexStatusForRenderer(await detectCodex({ force: payload.force === true }));
+  return await checkForLocalUpdate(payload || {});
+});
+
+ipcMain.handle('update:checkOnline', async event => {
+  assertTrustedRenderer(event);
+  return await checkForGitHubUpdate();
+});
+
+ipcMain.handle('update:capabilities', event => {
+  assertTrustedRenderer(event);
+  return {
+    mode: 'signed-nsis-installer',
+    asarIntegrityPreserved: true,
+    publisherManifestRequired: true,
+    authenticodeRequired: true,
+    workspaceBackupRequired: true,
+    healthCheckRequired: true,
+    automaticRollback: true,
+    protected: UPDATE_PROTECTED_FILES,
+    runtimeData: LOCAL_RUNTIME_PATHS.root
+  };
+});
+
+ipcMain.handle('update:apply', async (event, payload) => {
+  assertTrustedRenderer(event);
+  return await applyLocalUpdatePackage(payload || {});
+});
+
+ipcMain.handle('update:applyOnline', async (event, payload) => {
+  assertTrustedRenderer(event);
+  return await applyLocalUpdatePackage(payload || {});
+});
+
+ipcMain.handle('update:rollback', async (event, payload) => {
+  assertTrustedRenderer(event);
+  return await rollbackLastUpdate(payload || {});
+});
+
+ipcMain.handle('update:healthReady', async event => {
+  assertTrustedRenderer(event);
+  return await reportInstallerUpdateHealth();
+});
+
+ipcMain.handle('update:getOutcome', async event => {
+  assertTrustedRenderer(event);
+  return await readInstallerUpdateOutcome();
+});
+
+ipcMain.handle('update:acknowledgeOutcome', async (event, payload) => {
+  assertTrustedRenderer(event);
+  return await acknowledgeInstallerUpdateOutcome(payload || {});
+});
+
+ipcMain.handle('codex:check', async (event, payload) => {
+  assertTrustedRenderer(event);
+  return await runCodexCheck(payload?.command);
 });
 
 ipcMain.handle('codex:chooseCommand', async event => {
   assertTrustedRenderer(event);
+  if (!INTERNAL_TEST_CHANNELS_ALLOWED) return '';
   const result = await dialog.showOpenDialog({
     title: '选择 Codex CLI 程序',
     properties: ['openFile'],
-    filters: process.platform === 'win32'
-      ? [{ name: 'Codex CLI', extensions: ['exe', 'cmd'] }, { name: '所有文件', extensions: ['*'] }]
-      : [{ name: '所有文件', extensions: ['*'] }]
+    filters: [
+      { name: '可执行程序', extensions: ['exe', 'cmd', 'bat', 'ps1'] },
+      { name: '所有文件', extensions: ['*'] }
+    ]
   });
-  if (result.canceled || !result.filePaths[0]) return null;
-  const picked = await CodexCli.detectCodexCli({ override: result.filePaths[0], fsApi: fsSync, run: runCodexProbe });
-  if (picked.ok) {
-    await ensureDir(path.dirname(codexCommandFile()));
-    await fs.writeFile(codexCommandFile(), JSON.stringify({ path: picked.path }, null, 2), 'utf8');
-    codexDetection = Promise.resolve(picked);
-  }
-  return codexStatusForRenderer(picked);
+  if (result.canceled || !result.filePaths[0]) return '';
+  return result.filePaths[0];
 });
 
 ipcMain.handle('codex:saveAttachment', async (event, payload = {}) => {
   assertTrustedRenderer(event);
-  const cwd = await codexWorkingDir(payload.storageDir);
+  const cwd = payload.storageDir ? await ensureStorageRootAllowed(payload.storageDir) : packagedBaseDir();
   const sourcePath = String(payload.sourcePath || '').trim();
   const sourceStats = sourcePath ? await fs.stat(sourcePath) : null;
   if (sourceStats && !sourceStats.isFile()) throw new Error('附件不是可读取文件');
@@ -5179,7 +4634,7 @@ ipcMain.handle('codex:saveAttachment', async (event, payload = {}) => {
 
 ipcMain.handle('codex:videoFrames', async (event, payload = {}) => {
   assertTrustedRenderer(event);
-  const cwd = await codexWorkingDir(payload.storageDir);
+  const cwd = payload.storageDir ? await ensureStorageRootAllowed(payload.storageDir) : packagedBaseDir();
   const source = path.resolve(String(payload.path || ''));
   if (!pathInside(cwd, source)) throw new Error('视频路径超出当前工作目录');
   const stats = await fs.stat(source);
@@ -5189,7 +4644,7 @@ ipcMain.handle('codex:videoFrames', async (event, payload = {}) => {
 
 ipcMain.handle('codex:readTextAttachment', async (event, payload = {}) => {
   assertTrustedRenderer(event);
-  const cwd = await codexWorkingDir(payload.storageDir);
+  const cwd = payload.storageDir ? await ensureStorageRootAllowed(payload.storageDir) : packagedBaseDir();
   const source = path.resolve(String(payload.path || ''));
   if (!pathInside(cwd, source)) throw new Error('附件路径超出当前工作目录');
   const stats = await fs.stat(source);
@@ -5258,148 +4713,15 @@ ipcMain.handle('codex:importExtension', async (event, payload = {}) => {
   return await importCodexExtension(payload.kind, payload.source);
 });
 
+ipcMain.handle('codex:update', async (event, payload) => {
+  assertTrustedRenderer(event);
+  return await runCodexUpdate(event, payload || {});
+});
+
 ipcMain.handle('codex:cancel', async (event, sessionId) => {
   assertTrustedRenderer(event);
   return cancelCodexRun(sessionId);
 });
-
-ipcMain.handle('agent:start', async (event, payload) => {
-  assertTrustedRenderer(event);
-  return await startAgentRun(event, payload || {});
-});
-
-ipcMain.handle('agent:cancel', async (event, sessionId) => {
-  assertTrustedRenderer(event);
-  return cancelAgentRun(sessionId);
-});
-
-ipcMain.handle('agent:sessions', async event => {
-  assertTrustedRenderer(event);
-  return await listAgentSessions();
-});
-
-ipcMain.handle('agent:discardSession', async (event, sessionId) => {
-  assertTrustedRenderer(event);
-  if (agentSessions.has(String(sessionId || '')) && !agentSessions.get(String(sessionId)).done) throw new Error('该会话仍在运行');
-  await AgentSessionStore.deleteSession(agentSessionRoot(), sessionId);
-  return true;
-});
-ipcMain.handle('agent:memory:list', async (event, storageDir) => {
-  assertTrustedRenderer(event);
-  return AgentMemory.listMemory(await withAgentStorageReadOnly(event, storageDir));
-});
-ipcMain.handle('agent:memory:upsert', async (event, payload = {}) => {
-  assertTrustedRenderer(event);
-  return AgentMemory.upsertMemory(await withAgentStorage(event, payload.storageDir), payload);
-});
-ipcMain.handle('agent:memory:delete', async (event, payload = {}) => {
-  assertTrustedRenderer(event);
-  return AgentMemory.deleteMemory(await withAgentStorage(event, payload.storageDir), payload.id || payload.key);
-});
-
-ipcMain.handle('agent:restore', async (event, logPath) => {
-  assertTrustedRenderer(event);
-  return await AgentLoop.restoreFromLog(String(logPath || ''));
-});
-
-ipcMain.handle('agent:chooseWorkspace', async event => {
-  assertTrustedRenderer(event);
-  const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
-    title: '选择智能体工作区',
-    properties: ['openDirectory', 'createDirectory']
-  });
-  if (result.canceled || !result.filePaths[0]) return '';
-  const dir = path.resolve(result.filePaths[0]);
-  await rememberStorageRoot(dir);
-  return dir;
-});
-
-ipcMain.handle('agent:canvasResult', async (event, payload = {}) => {
-  assertTrustedRenderer(event);
-  const job = agentCanvasJobs.get(String(payload.jobId || ''));
-  if (!job) return false;
-  clearTimeout(job.timer);
-  agentCanvasJobs.delete(String(payload.jobId || ''));
-  if (payload.error) job.reject(new Error(payload.error));
-  else job.resolve(payload.result || {});
-  return true;
-});
-
-async function withAgentStorage(event, storageDir) {
-  assertTrustedRenderer(event);
-  const root = path.resolve(String(storageDir || ''));
-  if (!root) throw new Error('请先选择本地存储目录');
-  await rememberStorageRoot(root);
-  return root;
-}
-
-// Read-only agent IPC (list/history/count/read) must never write user-data files: it authorizes
-// the root for this session in memory only. Write handlers persist it via withAgentStorage.
-function withAgentStorageReadOnly(event, storageDir) {
-  assertTrustedRenderer(event);
-  const raw = String(storageDir || '').trim();
-  if (!raw) throw new Error('请先选择本地存储目录');
-  const root = path.resolve(raw);
-  allowedStorageRoots.add(root);
-  return root;
-}
-
-ipcMain.handle('agent:templates:list', async (event, storageDir) => AgentTemplates.listTemplates(await withAgentStorageReadOnly(event, storageDir)));
-ipcMain.handle('agent:templates:upsert', async (event, payload = {}) => AgentTemplates.upsertTemplate(await withAgentStorage(event, payload.storageDir), payload));
-ipcMain.handle('agent:templates:delete', async (event, payload = {}) => AgentTemplates.deleteTemplate(await withAgentStorage(event, payload.storageDir), payload.id));
-ipcMain.handle('agent:templates:render', async (event, payload = {}) => {
-  const root = await withAgentStorageReadOnly(event, payload.storageDir);
-  const template = await AgentTemplates.getTemplate(root, payload.id);
-  if (!template) throw new Error('模板不存在');
-  return { template, prompt: AgentTemplates.renderPrompt(template, payload.values || {}) };
-});
-
-ipcMain.handle('agent:schedules:list', async (event, storageDir) => AgentScheduler.listSchedules(await withAgentStorageReadOnly(event, storageDir)));
-ipcMain.handle('agent:schedules:upsert', async (event, payload = {}) => AgentScheduler.upsertSchedule(await withAgentStorage(event, payload.storageDir), payload));
-ipcMain.handle('agent:schedules:delete', async (event, payload = {}) => AgentScheduler.deleteSchedule(await withAgentStorage(event, payload.storageDir), payload.id));
-ipcMain.handle('agent:schedules:history', async (event, payload = {}) => AgentScheduler.listHistory(await withAgentStorageReadOnly(event, payload.storageDir), { limit: payload.limit || 50 }));
-
-ipcMain.handle('agent:audit:months', async (event, storageDir) => AgentAudit.listAuditMonths(await withAgentStorageReadOnly(event, storageDir)));
-ipcMain.handle('agent:audit:read', async (event, payload = {}) => AgentAudit.readAudit(await withAgentStorageReadOnly(event, payload.storageDir), payload));
-
-ipcMain.handle('agent:emergencyStop', async event => {
-  assertTrustedRenderer(event);
-  return emergencyStopAllAgents('界面紧急停止');
-});
-
-ipcMain.handle('agent:emergencyHotkey', async (event, payload = {}) => {
-  assertTrustedRenderer(event);
-  return registerAgentEmergencyHotkey(payload.accelerator);
-});
-
-ipcMain.handle('agent:approvals:list', async (event, payload = {}) => {
-  const root = await withAgentStorageReadOnly(event, payload.storageDir);
-  return agentApprovalHub.list(root, { includeResolved: !!payload.includeResolved });
-});
-
-ipcMain.handle('agent:approvals:resolve', async (event, payload = {}) => {
-  const root = await withAgentStorage(event, payload.storageDir);
-  const item = await agentApprovalHub.resolve(root, payload.id, payload.answer || 'deny', { actor: 'user' });
-  const pendingCount = await agentApprovalHub.pendingCount(root);
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('agent:event', {
-      type: 'approval_badge',
-      pendingCount,
-      storageDir: root,
-      resolvedId: item.id,
-      resolution: item.resolution
-    });
-  }
-  return { item, pendingCount };
-});
-
-ipcMain.handle('agent:approvals:count', async (event, storageDir) => {
-  const root = await withAgentStorageReadOnly(event, storageDir);
-  return { pendingCount: await agentApprovalHub.pendingCount(root) };
-});
-
-
-
 
 ipcMain.handle('skillMarket:search', async (event, payload) => {
   assertTrustedRenderer(event);
@@ -5451,46 +4773,7 @@ process.on('unhandledRejection', reason => {
   });
 });
 
-async function tickAgentSchedules() {
-  for (const root of [...allowedStorageRoots]) {
-    let schedules = [];
-    try { schedules = await AgentScheduler.listSchedules(root); } catch (_err) { continue; }
-    for (const schedule of AgentScheduler.dueSchedules(schedules)) {
-      if (agentScheduleInflight.has(schedule.id)) continue;
-      agentScheduleInflight.add(schedule.id);
-      try {
-        const template = await AgentTemplates.getTemplate(root, schedule.templateId);
-        if (!template) {
-          await AgentScheduler.markScheduleRun(root, schedule.id, { status: 'missing-template' });
-          await AgentScheduler.appendHistory(root, { scheduleId: schedule.id, templateId: schedule.templateId, status: 'missing-template', summary: '模板不存在' });
-          continue;
-        }
-        const prompt = AgentTemplates.renderPrompt(template, {});
-        const wins = BrowserWindow.getAllWindows().filter(win => !win.isDestroyed());
-        if (!wins.length) {
-          await AgentScheduler.markScheduleRun(root, schedule.id, { status: 'no-window' });
-          await AgentScheduler.appendHistory(root, { scheduleId: schedule.id, templateId: template.id, status: 'no-window', summary: '应用无窗口，已跳过' });
-          continue;
-        }
-        await AgentScheduler.markScheduleRun(root, schedule.id, { status: 'triggered' });
-        wins[0].webContents.send('agent:event', {
-          type: 'schedule_due',
-          storageDir: root,
-          schedule,
-          template,
-          prompt
-        });
-      } catch (err) {
-        await AgentScheduler.appendHistory(root, { scheduleId: schedule.id, status: 'error', summary: err?.message || String(err) }).catch(() => {});
-      } finally {
-        agentScheduleInflight.delete(schedule.id);
-      }
-    }
-  }
-}
-
 app.whenReady().then(async () => {
-  cleanStaleStorageTempFiles().catch(() => {});
   for (const root of allowedStorageRoots) {
     try {
       const recovery = await recoverWorkspaceRestore(root);
@@ -5499,30 +4782,14 @@ app.whenReady().then(async () => {
       await appendAppLog('error', 'workspace restore recovery failed', {root, message: error?.message || String(error)});
     }
   }
-  appendAppLog('info', 'app ready', { version: app.getVersion(), buildLabel: APP_PACKAGE_METADATA.buildLabel || '', appPath: app.getAppPath(), releaseChannel: RELEASE_CHANNEL || 'development', runtimePaths: LOCAL_RUNTIME_PATHS });
+  appendAppLog('info', 'app ready', { version: app.getVersion(), releaseChannel: RELEASE_CHANNEL || 'development', runtimePaths: LOCAL_RUNTIME_PATHS });
   // Non-blocking: keep only the latest Codex/update binary backups
   pruneRuntimeDiskFootprint();
-  registerAgentEmergencyHotkey('CommandOrControl+Alt+Shift+S');
-  if (agentScheduleTimer) clearInterval(agentScheduleTimer);
-  agentScheduleTimer = setInterval(() => { tickAgentSchedules().catch(() => {}); }, 30_000);
-  setTimeout(() => { tickAgentSchedules().catch(() => {}); }, 5_000);
   createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-});
-
-let quitDrained = false;
-app.on('before-quit', event => {
-  if (quitDrained || !storageWriteQueues.size) return;
-  event.preventDefault();
-  drainStorageWrites().finally(() => { quitDrained = true; app.quit(); });
-});
-
-app.on('will-quit', () => {
-  try { globalShortcut.unregisterAll(); } catch (_err) { /* ignore */ }
-  if (agentScheduleTimer) clearInterval(agentScheduleTimer);
 });
 
 app.on('window-all-closed', () => {

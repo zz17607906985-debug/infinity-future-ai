@@ -57,14 +57,8 @@
     };
   }
 
-  // Models confirmed by the provider's last “检测可用模型” come first and are marked.
-  function selectOptionsHtml({models = [], available = [], esc = defaultEsc} = {}) {
-    const ok = new Set(available.map(m => String(m).toLowerCase()));
-    const isOk = m => ok.has(String(m).toLowerCase());
-    const ordered = [...models.filter(isOk), ...models.filter(m => !isOk(m))];
-    return ordered.map(m => isOk(m)
-      ? `<option value="${esc(m)}" class="model-option-available">✓ ${esc(m)} · 可用</option>`
-      : `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  function selectOptionsHtml({models = [], esc = defaultEsc} = {}) {
+    return models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   }
 
   function modelGroupHtml({title = '', models = [], kind = 'chat', active = '', esc = defaultEsc} = {}) {

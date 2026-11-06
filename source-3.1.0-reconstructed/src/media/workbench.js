@@ -573,113 +573,7 @@ function addAssetLibraryItem(item) {
     toast('资产库空间较大，已自动压缩部分记录。', 'warn');
   }
   renderAssetLibrary();
-  if (item?.skipPortable !== true) {
-    saveAssetToPortableLibrary(entry).catch(err => console.warn('portable library save failed', err));
-  }
   return entry;
-}
-
-async function saveAssetToPortableLibrary(asset, {quiet = true} = {}) {
-  const bridge = window.portableLibraryBridge;
-  if (!bridge?.save) return null;
-  const url = assetPrimaryUrl(asset);
-  if (!url) return null;
-  try {
-    const payload = {
-      name: assetDisplayName(asset),
-      kind: assetKind(asset),
-      prompt: asset.prompt || '',
-      tags: Array.isArray(asset.tags) ? asset.tags : [],
-      mime: asset.mime || '',
-      size: asset.size || '',
-      model: asset.model || '',
-      time: asset.time || Date.now()
-    };
-    if (/^data:/i.test(url)) payload.dataUrl = url;
-    else payload.url = url;
-    const saved = await bridge.save(payload);
-    if (saved?.id) {
-      const record = assetRecordById(asset.id) || host.assetLibrary.find(a => assetPrimaryUrl(a) === url);
-      if (record) {
-        record.portable = true;
-        record.portableId = saved.id;
-        record.sha256 = saved.sha256 || record.sha256 || '';
-        if (saved.url) {
-          record.url = saved.url;
-          record.urls = [saved.url];
-        }
-        const tags = Array.isArray(record.tags) ? record.tags.slice() : [];
-        if (!tags.includes('便携')) tags.unshift('便携');
-        record.tags = tags.slice(0, 12);
-        // Drop any duplicate cards that just got merged via portable id/sha
-        host.assetLibrary = host.assetLibrary.filter((a, idx, arr) => {
-          if (a === record) return true;
-          if (record.portableId && a.portableId === record.portableId) return false;
-          if (record.sha256 && a.sha256 && a.sha256 === record.sha256) return false;
-          return true;
-        });
-        trySaveAssetLibrary();
-        renderAssetLibrary();
-      }
-      if (!quiet) toast('已存入便携素材库（随软件文件夹一起带走）', 'success');
-    }
-    return saved;
-  } catch (error) {
-    if (!quiet) toast(`存入便携素材库失败：${error?.message || error}`, 'warn');
-    throw error;
-  }
-}
-
-async function syncPortableLibraryIntoAssets() {
-  const bridge = window.portableLibraryBridge;
-  if (!bridge?.list) return {merged: 0};
-  let items = [];
-  try { items = await bridge.list() || []; } catch (error) {
-    console.warn('portable library list failed', error);
-    return {merged: 0};
-  }
-  let merged = 0;
-  for (const item of items) {
-    if (!item?.url) continue;
-    const existing = host.assetLibrary.find(asset => {
-      if (asset.portableId && asset.portableId === item.id) return true;
-      if (asset.sha256 && item.sha256 && asset.sha256 === item.sha256) return true;
-      return assetPrimaryUrl(asset) === item.url;
-    });
-    if (existing) {
-      existing.portable = true;
-      existing.portableId = item.id;
-      existing.sha256 = item.sha256 || existing.sha256 || '';
-      if (!Array.isArray(existing.tags)) existing.tags = [];
-      if (!existing.tags.includes('便携')) existing.tags = ['便携', ...existing.tags].slice(0, 12);
-      if (!existing.url && item.url) existing.url = item.url;
-      continue;
-    }
-    host.assetLibrary.unshift(compactHistoryItem({
-      id: item.id || ('lib_' + Date.now()),
-      projectId: '',
-      time: item.time || item.updatedAt || Date.now(),
-      type: item.kind === 'video' ? 'video' : 'image',
-      url: item.url,
-      urls: item.urls || [item.url],
-      name: item.name || '便携素材',
-      prompt: item.prompt || '',
-      tags: Array.isArray(item.tags) && item.tags.length ? item.tags : ['便携'],
-      model: item.model || '',
-      size: item.size || '',
-      mime: item.mime || '',
-      portable: true,
-      portableId: item.id,
-      sha256: item.sha256 || ''
-    }));
-    merged += 1;
-  }
-  if (merged) {
-    host.assetLibrary = host.assetLibrary.slice(0, 120);
-    trySaveAssetLibrary();
-  }
-  renderAssetLibrary();
-  return {merged, total: items.length};
 }
 function trySaveHistory() {
   try {
@@ -906,10 +800,7 @@ function normalizeAssetItem(item) {
     deletedAt: Number(item.deletedAt || 0),
     visualFeature: item.visualFeature?.hash ? {...item.visualFeature} : null,
     visualIndexError: String(item.visualIndexError || ''),
-    smartCollections: Array.isArray(item.smartCollections) ? [...item.smartCollections] : [],
-    portable: !!item.portable,
-    portableId: item.portableId || '',
-    sha256: item.sha256 || ''
+    smartCollections: Array.isArray(item.smartCollections) ? [...item.smartCollections] : []
   };
   if (!normalized.smartCollections.length && SmartIndex) normalized.smartCollections = SmartIndex.semanticCollections(normalized);
   return normalized;
@@ -927,7 +818,7 @@ function duplicateAssetGroups(items = []) {
 }
 function assetLibraryCardsHtml(items) {
   const assets = items.map(normalizeAssetItem).filter(Boolean);
-  if (!assets.length) return '<div class="history-empty"><strong>还没有资产</strong><span>导入图片/视频，或在节点菜单选择“加入我的资产”。存入便携库的素材会放在软件旁的 library 文件夹，复制到其他电脑也能用。</span><button type="button" class="ghost-btn" data-asset-empty-action="import"><i class="fa-solid fa-upload" aria-hidden="true"></i>导入第一个资产</button></div>';
+  if (!assets.length) return '<div class="history-empty"><strong>还没有资产</strong><span>导入图片/视频，或在节点菜单选择“加入我的资产”。</span><button type="button" class="ghost-btn" data-asset-empty-action="import"><i class="fa-solid fa-upload" aria-hidden="true"></i>导入第一个资产</button></div>';
   return assets.map(asset => {
     const safeUrl = safeMediaUrl(asset.url);
     return `
@@ -935,7 +826,6 @@ function assetLibraryCardsHtml(items) {
       ${safeUrl ? (asset.kind === 'video' ? `<video src="${esc(safeUrl)}" muted playsinline></video>` : `<img src="${esc(safeUrl)}" alt="${esc(asset.name)}">`) : '<i class="fa-solid fa-file-circle-question"></i>'}
       <strong>${esc(asset.name)}</strong>
       <div class="asset-folder-label"><i class="fa-solid fa-folder"></i>${esc(folderNameById(asset.folderId))}</div>
-      ${asset.portable ? '<span class="asset-index-badge" title="已存入便携素材库，复制软件文件夹即可带走"><i class="fa-solid fa-suitcase"></i> 便携</span>' : ''}
       ${asset.visualFeature?.hash ? '<span class="asset-index-badge" title="已建立本地视觉索引"><i class="fa-solid fa-fingerprint"></i> 已索引</span>' : ''}
       ${asset.tags.length ? `<div class="asset-tags">${asset.tags.slice(0, 4).map(tag => `<span>${esc(tag)}</span>`).join('')}</div>` : ''}
       <p>${esc(asset.prompt || (asset.kind === 'video' ? '视频素材' : '图片素材'))}</p>
@@ -949,7 +839,6 @@ function assetLibraryCardsHtml(items) {
         <button type="button" data-asset-action="move" data-asset-id="${esc(asset.id)}" title="移动到文件夹"><i class="fa-solid fa-folder-tree"></i></button>
         ${asset.kind === 'image' ? `<button type="button" data-asset-action="similar" data-asset-id="${esc(asset.id)}" title="查找视觉相近素材"><i class="fa-solid fa-object-group"></i></button>` : ''}
         <button type="button" data-asset-action="impact" data-asset-id="${esc(asset.id)}" title="查看替换影响"><i class="fa-solid fa-code-branch"></i></button>
-        ${asset.deletedAt || asset.portable ? '' : `<button type="button" data-asset-action="portable" data-asset-id="${esc(asset.id)}" title="存到便携素材库（随软件文件夹带走）"><i class="fa-solid fa-suitcase"></i></button>`}
         ${asset.deletedAt ? '' : `<button type="button" data-asset-action="delete" data-asset-id="${esc(asset.id)}" title="移入回收站"><i class="fa-regular fa-trash-can"></i></button>`}
       </div>
     </article>`;
@@ -1000,11 +889,6 @@ async function onAssetLibraryActionClick(e) {
   if (btn.dataset.assetAction === 'impact') return showAssetReplacementImpact(btn.dataset.assetId);
   if (btn.dataset.assetAction === 'restore') return restoreAssetLibraryItem(btn.dataset.assetId);
   if (btn.dataset.assetAction === 'dedupe') return dedupeAssetLibrary();
-  if (btn.dataset.assetAction === 'portable') {
-    const record = assetRecordById(btn.dataset.assetId);
-    if (!record) return toast('资产不可用', 'warn');
-    return saveAssetToPortableLibrary(record, {quiet: false});
-  }
   if (btn.dataset.assetAction === 'delete') return deleteAssetLibraryItem(btn.dataset.assetId);
 }
 function onAssetLibraryReportClick(e) {
@@ -1199,8 +1083,6 @@ async function importAssetLibraryFiles(files) {
       renderMusicResultsShell,
       renderMusicPlayer,
       addAssetLibraryItem,
-      saveAssetToPortableLibrary,
-      syncPortableLibraryIntoAssets,
       trySaveHistory,
       trySaveAssetLibrary,
       onHistoryClick,

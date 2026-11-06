@@ -1,5 +1,4 @@
 const fs = require('fs');
-const {uniqueTempPath, writeFileAtomic} = require('./atomic-write');
 const fsp = fs.promises;
 const path = require('path');
 
@@ -16,46 +15,7 @@ async function readValidStore(file) {
   return assertStoreValue(JSON.parse(await fsp.readFile(file, 'utf8')));
 }
 
-const BACKUP_MIN_INTERVAL_MS = 5 * 60 * 1000;
-const BACKUP_KEEP_RECENT = 10;
-const BACKUP_KEEP_DAILY = 7;
-const BACKUP_TOTAL_LIMIT_BYTES = 500 * 1024 * 1024;
-
-// Names start with YYYYMMDD-HHMMSS, so lexical order is chronological.
-// Keep the newest `keepRecent` plus the newest backup of each of the last `keepDaily` days.
-function staleBackupNames(names, {keepRecent = BACKUP_KEEP_RECENT, keepDaily = BACKUP_KEEP_DAILY} = {}) {
-  const sorted = [...names].sort((a, b) => b.localeCompare(a));
-  const keep = new Set(sorted.slice(0, keepRecent));
-  const days = new Set();
-  for (const name of sorted) {
-    const day = name.slice(0, 8);
-    if (days.has(day)) continue;
-    days.add(day);
-    if (days.size > keepDaily) break;
-    keep.add(name);
-  }
-  return sorted.filter(name => !keep.has(name));
-}
-
-// Throttled, rotated backup: `writeBackup(target)` produces the backup file.
-async function rotateBackup({backupDir, backupName, suffix, writeBackup, minIntervalMs = BACKUP_MIN_INTERVAL_MS, now = Date.now()}) {
-  await fsp.mkdir(backupDir, {recursive: true});
-  const existing = (await fsp.readdir(backupDir, {withFileTypes: true}))
-    .filter(entry => entry.isFile() && entry.name.endsWith(suffix))
-    .map(entry => entry.name)
-    .sort((a, b) => b.localeCompare(a));
-  if (existing.length) {
-    const latest = await fsp.stat(path.join(backupDir, existing[0]));
-    if (now - latest.mtimeMs < minIntervalMs) return '';
-  }
-  const backupFile = path.join(backupDir, backupName);
-  await writeBackup(backupFile);
-  const stale = staleBackupNames([backupName, ...existing.filter(name => name !== backupName)]);
-  await Promise.all(stale.map(name => fsp.rm(path.join(backupDir, name), {force: true})));
-  return backupFile;
-}
-
-async function backupValidStore({file, backupDir, backupName, minIntervalMs, now}) {
+async function backupValidStore({file, backupDir, backupName, limit = 20}) {
   try {
     await readValidStore(file);
   } catch (error) {
@@ -63,61 +23,16 @@ async function backupValidStore({file, backupDir, backupName, minIntervalMs, now
     if (error instanceof SyntaxError || error.code === 'STORE_INVALID_SHAPE') return '';
     throw error;
   }
-  return await rotateBackup({
-    backupDir, backupName, minIntervalMs, now,
-    suffix: `-${path.basename(file)}`,
-    writeBackup: target => fsp.copyFile(file, target)
-  });
-}
-
-async function backupStoreSnapshot({value, backupDir, backupName, suffix, minIntervalMs, now}) {
-  assertStoreValue(value);
-  return await rotateBackup({
-    backupDir, backupName, suffix, minIntervalMs, now,
-    writeBackup: async target => {
-      await writeFileAtomic(target, JSON.stringify(value));
-    }
-  });
-}
-
-async function listFilesRecursive(dir) {
-  let entries;
-  try { entries = await fsp.readdir(dir, {withFileTypes: true}); } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  }
-  const files = [];
-  for (const entry of entries) {
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...await listFilesRecursive(file));
-    else if (entry.isFile()) files.push(file);
-  }
-  return files;
-}
-
-// Deletes the oldest store backups until the given backup folders fit `limitBytes`
-// together; the newest backup in each folder is always kept.
-async function enforceBackupSizeCap(backupDirs, limitBytes = BACKUP_TOTAL_LIMIT_BYTES) {
-  const all = (await Promise.all(backupDirs.map(listFilesRecursive))).flat();
-  const files = await Promise.all(all.map(async file => {
-    const stats = await fsp.stat(file);
-    return {file, size: stats.size, mtimeMs: stats.mtimeMs};
-  }));
-  const newestPerDir = new Map();
-  for (const item of files) {
-    const dir = path.dirname(item.file);
-    if (!newestPerDir.has(dir) || newestPerDir.get(dir).mtimeMs < item.mtimeMs) newestPerDir.set(dir, item);
-  }
-  let total = files.reduce((sum, item) => sum + item.size, 0);
-  const removed = [];
-  for (const item of files.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
-    if (total <= limitBytes) break;
-    if (newestPerDir.get(path.dirname(item.file)) === item) continue;
-    await fsp.rm(item.file, {force: true});
-    total -= item.size;
-    removed.push(item.file);
-  }
-  return {removed, totalBytes: total};
+  await fsp.mkdir(backupDir, {recursive: true});
+  const backupFile = path.join(backupDir, backupName);
+  await fsp.copyFile(file, backupFile);
+  const suffix = `-${path.basename(file)}`;
+  const entries = (await fsp.readdir(backupDir, {withFileTypes: true}))
+    .filter(entry => entry.isFile() && entry.name.endsWith(suffix))
+    .map(entry => entry.name)
+    .sort((a, b) => b.localeCompare(a));
+  await Promise.all(entries.slice(limit).map(name => fsp.rm(path.join(backupDir, name), {force: true})));
+  return backupFile;
 }
 
 async function recoverStoreFromBackup({file, backupDir, corruptDir}) {
@@ -144,7 +59,7 @@ async function recoverStoreFromBackup({file, backupDir, corruptDir}) {
       }
       await fsp.mkdir(corruptDir, {recursive: true});
       const corruptFile = path.join(corruptDir, `${Date.now()}-${path.basename(file)}.corrupt`);
-      const tempFile = uniqueTempPath(file, 'recovery.tmp');
+      const tempFile = `${file}.${process.pid}.${Date.now()}.recovery.tmp`;
       await fsp.copyFile(backupFile, tempFile);
       await fsp.rename(file, corruptFile);
       try {
@@ -165,10 +80,7 @@ async function recoverStoreFromBackup({file, backupDir, corruptDir}) {
 
 module.exports = {
   assertStoreValue,
-  backupStoreSnapshot,
   backupValidStore,
-  enforceBackupSizeCap,
-  staleBackupNames,
   readValidStore,
   recoverStoreFromBackup
 };

@@ -1,5 +1,4 @@
 const fs = require('fs');
-const {writeJsonAtomic} = require('./atomic-write');
 const fsp = fs.promises;
 const path = require('path');
 
@@ -58,7 +57,9 @@ async function writeRestoreJournal(storageDir, journal) {
   validateRestoreJournal(storageDir, journal);
   const file = restoreJournalFile(storageDir);
   await fsp.mkdir(path.dirname(file), {recursive: true});
-  await writeJsonAtomic(file, journal);
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await fsp.writeFile(temp, JSON.stringify(journal, null, 2), 'utf8');
+  await fsp.rename(temp, file);
   return file;
 }
 

@@ -34,6 +34,13 @@
         if (item?.actual && typeof item.actual === 'object') delete item.actual.size;
       });
     }
+    if (Array.isArray(normalized.videoVersions)) {
+      normalized.videoVersions.forEach(item => {
+        if (!item || typeof item !== 'object') return;
+        delete item.outputDimensions;
+        if (item.outputMetadata && typeof item.outputMetadata === 'object') delete item.outputMetadata.actualSize;
+      });
+    }
     return Object.assign(normalized, {
       favorite: Boolean(data?.favorite),
       tags: normalizeTags(data?.tags)
@@ -43,28 +50,23 @@
   function normalizeData(type, data, defaults = {}) {
     const dimensions = window.FutureAIMediaDimensions;
     const base = type === 'image'
-      ? {prompt: '', model: defaults.imageModel || 'gpt-image2', aspect: '16:9', size: '1024x576', resolution: '1K', count: '1', url: '', urls: [], refUrl: '', manualRefUrl: '', refOrder: [], references: []}
+      ? {prompt: '', model: defaults.imageModel || 'gpt-image2', quality: 'high', backgroundMode: 'opaque', promptMode: 'raw', aspect: '16:9', size: '1024x576', resolution: '1K', count: '1', url: '', urls: [], refUrl: '', manualRefUrl: '', refOrder: [], references: []}
       : type === 'video'
-        ? {prompt: '', model: defaults.videoModel || 'omni-flash', operation: 'text-to-video', mode: 'auto', size: '1280x720', customWidth: '', customHeight: '', duration: '5', speed: '1', loop: false, url: '', urls: [], refUrl: '', manualRefUrl: '', refOrder: [], references: [], outputMetadata: null}
+        ? {prompt: '', model: defaults.videoModel || 'omni-flash', operation: 'text-to-video', mode: 'auto', size: '1280x720', customWidth: '', customHeight: '', duration: '5', speed: '1', loop: false, url: '', urls: [], refUrl: '', manualRefUrl: '', refOrder: [], references: [], videoVersions: [], outputMetadata: null}
         : type === 'upload'
           ? {url: '', name: '', mime: '', kind: '', prompt: ''}
           : type === 'media-tool'
-            ? {operation: 'extract-first-frame', sourceUrls: [], url: '', urls: [], status: '', statusType: '', width: '1280', height: '720', start: '0', duration: '5', time: '0', speed: '1', loops: '2', volume: '1', shiftSeconds: '0', format: 'png', background: '#000000', subtitleText: '', transformations: []}
+            ? {operation: 'extract-first-frame', sourceUrls: [], url: '', urls: [], status: '', statusType: '', width: '1280', height: '720', start: '0', duration: '5', time: '0', speed: '1', loops: '2', volume: '1', shiftSeconds: '0', format: 'png', background: '#000000', subtitleText: '', mediaVersions: [], transformations: []}
           : type === 'comfyui'
             ? {prompt: '', negative: '', seed: '', width: '1024', height: '1024', workflowName: defaults.comfyWorkflowName || '默认工作流', workflowJson: defaults.comfyWorkflowJson || '', promptId: '', url: '', urls: [], status: '', statusType: '', statusTitle: ''}
             : {prompt: ''};
     const normalized = Object.assign(base, data || {});
     if ((type === 'image' || type === 'video') && !Array.isArray(normalized.references)) normalized.references = [];
-    if (type === 'image' || type === 'video') window.FutureAIVariantManager?.migrateLegacyHistory(normalized, type);
-    if (type === 'image') {
-      // Retired per-node settings: image quality is always 'high' and the prompt is always composed the same way.
-      delete normalized.quality;
-      delete normalized.promptMode;
-    }
     if (type === 'video') {
       const director = window.FutureAIVideoDirector;
       normalized.operation = director?.normalizeOperation(normalized.operation, normalized.mode) || normalized.operation || (normalized.mode === 'image' ? 'image-to-video' : 'text-to-video');
       normalized.speed = String(Math.max(0.1, Math.min(4, Number(normalized.speed || 1) || 1)));
+      normalized.videoVersions = Array.isArray(normalized.videoVersions) ? normalized.videoVersions : [];
     }
     if (type === 'image' && dimensions) {
       const oldSelection = String(data?.aspect || data?.size || '16:9');
@@ -112,61 +114,6 @@
     ].map(value => String(value || '').toLowerCase()).join('\n');
   }
 
-  // 2x upscale target for the local image-resize tool, capped to the tool's 7680px limit.
-  function upscaleSize(size, factor = 2, max = 7680) {
-    const width = Number(size?.width || 0);
-    const height = Number(size?.height || 0);
-    if (!(width > 0 && height > 0)) return null;
-    const scale = Math.min(factor, max / Math.max(width, height));
-    if (scale <= 1) return null;
-    return {width: Math.round(width * scale), height: Math.round(height * scale)};
-  }
-
-  // Next-step choices when a wire is dropped on empty canvas. io is the dragged port side;
-  // mediaKind is what the source outputs ('text' | 'image' | 'video' | ''), sourceSize its pixel size if known.
-  function wireDropOptions(node, io, mediaKind = '', sourceSize = null) {
-    if (!node) return [];
-    const option = (id, label, icon, type, data = {}) => ({id, label, icon, type, data});
-    if (io === 'in') {
-      if (node.type === 'media-tool') return [option('upload', '上传素材', 'fa-upload', 'upload')];
-      if (node.type !== 'image' && node.type !== 'video') return [];
-      return [
-        option('prompt', '提示词', 'fa-note-sticky', 'prompt', {prompt: ''}),
-        option('upload', '上传参考', 'fa-upload', 'upload'),
-        option('image', node.type === 'video' ? '生成首帧图' : '生成参考图', 'fa-image', 'image')
-      ];
-    }
-    if (mediaKind === 'text') {
-      return [
-        option('text-to-image', '文生图', 'fa-image', 'image'),
-        option('text-to-video', '文生视频', 'fa-video', 'video', {operation: 'text-to-video'})
-      ];
-    }
-    if (mediaKind === 'image') {
-      const list = [
-        option('image-to-image', '图生图', 'fa-rotate', 'image'),
-        option('image-to-video', '图生视频', 'fa-wand-magic-sparkles', 'video', {operation: 'image-to-video'})
-      ];
-      const size = upscaleSize(sourceSize);
-      if (size) list.push(option('upscale', `放大 2× · ${size.width}×${size.height}`, 'fa-up-right-and-down-left-from-center', 'media-tool', {operation: 'image-resize', width: String(size.width), height: String(size.height), format: 'png'}));
-      return list;
-    }
-    if (mediaKind === 'video') {
-      return [
-        option('last-frame', '截取尾帧', 'fa-forward-step', 'media-tool', {operation: 'extract-last-frame', format: 'png'}),
-        option('first-frame', '截取首帧', 'fa-backward-step', 'media-tool', {operation: 'extract-first-frame', format: 'png'}),
-        option('trim', '剪辑片段', 'fa-scissors', 'media-tool', {operation: 'video-trim'})
-      ];
-    }
-    return [];
-  }
-
-  // Stacking order from the context menu (置顶/置底); 0 keeps the stylesheet default.
-  function layerZIndex(data) {
-    const z = Math.round(Number(data?.z) || 0);
-    return z ? String(Math.max(3, Math.min(70, 10 + z))) : '';
-  }
-
   window.FutureAICanvasNodes = {
     defaultPromptFor,
     normalizeTags,
@@ -174,9 +121,6 @@
     normalizeData,
     nodeDefaultTitle,
     nodeDisplayTitle,
-    canvasSearchText,
-    upscaleSize,
-    wireDropOptions,
-    layerZIndex
+    canvasSearchText
   };
 })();

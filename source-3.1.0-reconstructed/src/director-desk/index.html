@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; media-src 'self' file: data: blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self' blob:">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; media-src 'self' file: data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'self' blob:">
     <title>∞未来 AI · 3D 导演台</title>
     <style>
       html,
@@ -43,8 +43,6 @@
       }
     </style>
     <script src="./boot-error.js"></script>
-    <script src="./third-party/meshopt_decoder.js"></script>
-    <script src="./meshopt-bridge.js"></script>
     <script type="module" src="./assets/index-CR8HYQHT.js"></script>
   </head>
   <body>

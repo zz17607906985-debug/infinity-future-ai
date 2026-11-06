@@ -17,7 +17,6 @@
     const ShortBatch = deps.ShortBatch;
     const addNode = deps.addNode;
     const drawEdges = deps.drawEdges;
-    const connect = deps.connect;
     const viewCenter = deps.viewCenter;
     const saveProject = deps.saveProject;
     const queueSave = deps.queueSave;
@@ -35,6 +34,7 @@
     const applyModelAgnosticTextRules = deps.applyModelAgnosticTextRules;
     const globalProviderForKind = deps.globalProviderForKind;
     const providerApiKey = deps.providerApiKey;
+    const reportProviderKeyResult = deps.reportProviderKeyResult;
     const persistGeneratedImageResult = deps.persistGeneratedImageResult;
     const persistMediaUrl = deps.persistMediaUrl;
     const blobToDataUrl = deps.blobToDataUrl;
@@ -738,6 +738,7 @@ async function shortSpeechRequest(item) {
     requestError = error;
     throw error;
   } finally {
+    reportShortApiResult(settings.apiSettings, 'chat', requestError);
   }
 }
 
@@ -824,6 +825,7 @@ async function generateAllShortVoices() {
   setShortBusy('shortGenerateAllVoices', true, '批量配音中');
   try {
     const settings = await shortTtsSettings();
+    reportShortApiResult(settings.apiSettings, 'chat', {releaseOnly: true});
     const result = await host.shortTaskCoordinator.runExclusive('批量生成配音', async ownerToken => {
       return await runShortBatch(host.audioPlan, generateShortVoice, () => {
         renderShortAudioPlan();
@@ -1180,25 +1182,25 @@ async function shortApiSettings(kind = 'all') {
   const chatProvider = globalProviderForKind('chat');
   const imageProvider = globalProviderForKind('image');
   const videoProvider = globalProviderForKind('video');
-  const chatModel = chatProvider.chatModel || FutureAIApiDefaults.get('chatModel').trim();
-  const imageModel = imageProvider.imageModel || FutureAIApiDefaults.get('imageModel').trim();
-  const videoModel = videoProvider.videoModel || FutureAIApiDefaults.get('videoModel').trim();
-  const chatApiKey = kind === 'all' || kind === 'chat' ? await providerApiKey(chatProvider) : '';
-  const imageApiKey = kind === 'all' || kind === 'image' ? await providerApiKey(imageProvider) : '';
-  const videoApiKey = kind === 'all' || kind === 'video' ? await providerApiKey(videoProvider) : '';
+  const chatModel = chatProvider.chatModel || $('chatModel').value.trim();
+  const imageModel = imageProvider.imageModel || $('imageModel').value.trim();
+  const videoModel = videoProvider.videoModel || $('videoModel').value.trim();
+  const chatApiKey = kind === 'all' || kind === 'chat' ? await providerApiKey(chatProvider, 'chat', chatModel) : '';
+  const imageApiKey = kind === 'all' || kind === 'image' ? await providerApiKey(imageProvider, 'image', imageModel) : '';
+  const videoApiKey = kind === 'all' || kind === 'video' ? await providerApiKey(videoProvider, 'video', videoModel) : '';
   return {
     chatProvider,
     imageProvider,
     videoProvider,
-    apiUrl: chatProvider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, ''),
+    apiUrl: chatProvider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, ''),
     apiKey: chatApiKey,
-    chatApiUrl: chatProvider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, ''),
+    chatApiUrl: chatProvider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, ''),
     chatApiKey,
     chatModel,
-    imageApiUrl: imageProvider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, ''),
+    imageApiUrl: imageProvider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, ''),
     imageApiKey,
     imageModel,
-    videoApiUrl: videoProvider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, ''),
+    videoApiUrl: videoProvider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, ''),
     videoApiKey,
     videoModel
   };
@@ -1212,12 +1214,21 @@ async function requireShortApi(kind = 'chat') {
   };
   const check = checks[kind] || checks.chat;
   if (!check.apiUrl || (!check.apiKey && check.provider?.type !== 'custom-sync')) {
+    reportShortApiResult(s, kind, {releaseOnly: true});
     throw new Error(`请先在设置里完善全局${check.label}供应商和密钥`);
   }
   if (!check.model) {
+    reportShortApiResult(s, kind, {releaseOnly: true});
     throw new Error(`请先选择或填写全局${check.label}模型`);
   }
   return s;
+}
+function reportShortApiResult(settings, kind, error = null) {
+  if (!settings) return false;
+  const provider = kind === 'image' ? settings.imageProvider : kind === 'video' ? settings.videoProvider : settings.chatProvider;
+  const apiKey = kind === 'image' ? settings.imageApiKey : kind === 'video' ? settings.videoApiKey : settings.chatApiKey;
+  if (!apiKey) return false;
+  return reportProviderKeyResult?.(provider, kind, error, apiKey) || false;
 }
 function updateShortTaskApi(settings, kind) {
   const provider = kind === 'image' ? settings?.imageProvider : kind === 'video' ? settings?.videoProvider : settings?.chatProvider;
@@ -1241,8 +1252,10 @@ async function shortChatText(system, user, temperature = .55, maxTokens = 1600, 
       endpoint: s.chatProvider?.chatEndpoint,
       messages: [{role: 'system', content: systemPrompt}, {role: 'user', content: user}]
     });
+    reportShortApiResult(s, 'chat');
     return result;
   } catch (error) {
+    reportShortApiResult(s, 'chat', error);
     throw error;
   }
 }
@@ -2044,6 +2057,7 @@ async function generateShortAssetImage(index, rerender = true, ownerToken = null
       saveProject();
       throw err;
     } finally {
+      reportShortApiResult(s, 'image', requestError);
       if (rerender) renderShortAssets();
     }
   }, ownerToken);
@@ -2122,6 +2136,7 @@ async function generateShortFirstFrame(index, rerender = true, ownerToken = null
       saveProject();
       throw err;
     } finally {
+      reportShortApiResult(s, 'image', requestError);
       if (rerender) {
         renderShortFrames();
         renderShortVideos();
@@ -2215,6 +2230,7 @@ async function generateShortVideo(index, rerender = true, ownerToken = null) {
       saveProject();
       throw err;
     } finally {
+      reportShortApiResult(s, 'video', requestError);
       if (rerender) renderShortVideos();
     }
   }, ownerToken);
@@ -2344,8 +2360,8 @@ function createShortShotNodes(index) {
   closeShortWorkbench();
   const c = viewCenter();
   const p = addNode('prompt', c.x - 520, c.y - 80, {prompt: `${item.title}\n${item.scene}\n${item.action}`}, null, false);
-  const img = addNode('image', c.x - 140, c.y - 170, {prompt: item.imagePrompt, model: FutureAIApiDefaults.get('imageModel'), size: shortImageSize(), resolution: '1K', url: item.firstFrameUrl || '', urls: item.firstFrameUrl ? [item.firstFrameUrl] : []}, null, false);
-  const video = addNode('video', c.x + 440, c.y - 150, {prompt: item.videoPrompt, model: FutureAIApiDefaults.get('videoModel'), size: shortVideoSize(), duration: item.duration || '5', refUrl: item.firstFrameUrl || '', manualRefUrl: item.firstFrameUrl || '', url: item.videoUrl || ''}, null, false);
+  const img = addNode('image', c.x - 140, c.y - 170, {prompt: item.imagePrompt, model: $('imageModel').value, size: shortImageSize(), resolution: '1K', url: item.firstFrameUrl || '', urls: item.firstFrameUrl ? [item.firstFrameUrl] : []}, null, false);
+  const video = addNode('video', c.x + 440, c.y - 150, {prompt: item.videoPrompt, model: $('videoModel').value, size: shortVideoSize(), duration: item.duration || '5', refUrl: item.firstFrameUrl || '', manualRefUrl: item.firstFrameUrl || '', url: item.videoUrl || ''}, null, false);
   connect(p.id, 'text', img.id, 'prompt');
   connect(img.id, 'image', video.id, 'ref');
   saveProject();
@@ -2357,7 +2373,7 @@ function createShortAssetNode(index) {
   if (!item) return;
   closeShortWorkbench();
   const c = viewCenter();
-  addNode('image', c.x - 260, c.y - 180, {prompt: item.prompt, model: FutureAIApiDefaults.get('imageModel'), size: '1024x1024', resolution: '1K', url: item.url || '', urls: item.url ? [item.url] : []});
+  addNode('image', c.x - 260, c.y - 180, {prompt: item.prompt, model: $('imageModel').value, size: '1024x1024', resolution: '1K', url: item.url || '', urls: item.url ? [item.url] : []});
   toast('资产节点已放入画布', 'success');
 }
 function createShortFrameNode(index) {
@@ -2365,7 +2381,7 @@ function createShortFrameNode(index) {
   if (!item) return;
   closeShortWorkbench();
   const c = viewCenter();
-  addNode('image', c.x - 260, c.y - 180, {prompt: item.imagePrompt, model: FutureAIApiDefaults.get('imageModel'), size: shortImageSize(), resolution: '1K', url: item.firstFrameUrl || '', urls: item.firstFrameUrl ? [item.firstFrameUrl] : []});
+  addNode('image', c.x - 260, c.y - 180, {prompt: item.imagePrompt, model: $('imageModel').value, size: shortImageSize(), resolution: '1K', url: item.firstFrameUrl || '', urls: item.firstFrameUrl ? [item.firstFrameUrl] : []});
   toast('首帧节点已放入画布', 'success');
 }
 function createShortVideoNode(index) {
@@ -2373,7 +2389,7 @@ function createShortVideoNode(index) {
   if (!item) return;
   closeShortWorkbench();
   const c = viewCenter();
-  addNode('video', c.x - 260, c.y - 180, {prompt: item.videoPrompt, model: FutureAIApiDefaults.get('videoModel'), size: shortVideoSize(), duration: item.duration || '5', refUrl: item.firstFrameUrl || '', manualRefUrl: item.firstFrameUrl || '', url: item.videoUrl || ''});
+  addNode('video', c.x - 260, c.y - 180, {prompt: item.videoPrompt, model: $('videoModel').value, size: shortVideoSize(), duration: item.duration || '5', refUrl: item.firstFrameUrl || '', manualRefUrl: item.firstFrameUrl || '', url: item.videoUrl || ''});
   toast('视频节点已放入画布', 'success');
 }
     return {

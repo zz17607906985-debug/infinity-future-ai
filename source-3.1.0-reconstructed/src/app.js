@@ -4,17 +4,19 @@
   const {STORE, FILE_STORE_BY_KEY, compactHistoryItem, compactBrowserStoreValue, shouldUseCompactBrowserStore, isQuotaError} = window.FutureAICanvasStorage;
   const {scopedHistoryItems, historyRestoreUrls, historyCardsHtml} = window.FutureAICanvasHistory;
   const RendererDiagnostics = window.FutureAIRendererDiagnostics;
+  const ProviderConformance = window.FutureAIProviderConformance;
   const CleanupRendering = window.FutureAICleanupRendering;
+  const UpdateRendering = window.FutureAIUpdateRendering;
   const BatchExportPayload = window.FutureAIBatchExportPayload;
   const ReviewPackage = window.FutureAIReviewPackage;
   const {clampScale, screenToWorldPoint, viewportCenter, zoomAroundPoint, visibleWorldRect} = window.FutureAICanvasCore;
   const {portCenterFromRects, fallbackPortCenter, edgePathD, segmentIntersectsView, edgeClassName} = window.FutureAICanvasEdges;
   const CanvasNodes = window.FutureAICanvasNodes;
-  const CanvasArrange = window.FutureAICanvasArrange;
   const CanvasCamera = window.FutureAICanvasCamera;
   const UIRenderHelpers = window.FutureAIUIRenderHelpers;
   const MediaUtils = window.FutureAIMediaUtils;
   const MediaLibraryRendering = window.FutureAIMediaLibraryRendering;
+  const ModelPresets = window.FutureAIModelPresets;
   const ModelRendering = window.FutureAIModelRendering;
   const ModelCapabilities = window.FutureAIModelCapabilities;
   const BudgetGuard = window.FutureAIBudgetGuard;
@@ -23,7 +25,6 @@
   const Provenance = window.FutureAIProvenance;
   const VariantWorkbench = window.FutureAIVariantWorkbench;
   const CanvasExecutor = window.FutureAICanvasExecutor;
-  const AgentUI = window.FutureAIAgentUI;
   const ProjectTemplates = window.FutureAIProjectTemplates;
   const ShortBatch = window.FutureAIShortBatch;
   const {buildPromptContext, getFullCanvasSummary} = window.FutureAICanvasContext;
@@ -89,7 +90,6 @@
   let apiKeySaveTimer = null;
   let importedModels = [];
   let history = [];
-  let dialogAgentRun = null;
   let assetLibrary = [];
   let assetLibraryFolders = [];
   let comfyWorkflowCache = null;
@@ -128,6 +128,7 @@
   let mascotDrag = null;
   let mascotWasDragged = false;
   let linkMode = false;
+  let spacePanning = false;
   let nodeTypeMenuCloser = null;
   let nodeContextMenuCloser = null;
   let selectedProjectTemplate = 'default';
@@ -135,6 +136,7 @@
   let canvasTypeFilter = 'all';
   let canvasFavoritesOnly = false;
   let fastCanvasMode = localStorage.getItem('futureai.fastCanvasMode') !== 'off';
+  let uiPreferencesSaveTimer = null;
   let canvasMinimapEnabled = localStorage.getItem('futureai.canvasMinimap') !== 'off';
   let canvasMinimap = null;
   // Default off; OS reduce-motion still soft-hints. Explicit setting wins.
@@ -156,7 +158,6 @@
   let musicShuffleEnabled = localStorage.getItem('futureai.musicShuffle') === 'on';
   let musicRepeatMode = localStorage.getItem('futureai.musicRepeat') || 'off';
   let uiSoundEnabled = true;
-  let autoOpenLastProject = false;
   let uiSoundVolume = .35;
   let uiSoundController = null;
   let canvasWallpaper = null;
@@ -186,27 +187,21 @@
   let mediaVideoResults = [];
   let mediaVideoStatus = '未搜索';
   let storageDir = '';
-  let defaultStorageDir = '';
-  let storageDefaultNoticeDismissed = false;
   let apiProviders = [];
   let globalModelProviders = {chat: '', image: '', video: ''};
-  let imageFallback = {enabled: true, version: 2, customized: false, chain: []};
   const providerKeyCache = new Map();
   let providerKeySaveTimers = new Map();
+  let providerConformanceProviderId = '';
+  let providerConformanceRunning = false;
+  let providerConformanceLiveResults = [];
   let variantWorkbenchInstance = null;
   let canvasExecutorInstance = null;
-  let agentUiInstance = null;
-  let agentSessionId = '';
-  let agentRunning = false;
-  let agentStatus = '空闲';
-  let agentOutput = '';
-
   let generationQueue = [];
   let queueSeq = 0;
   let queuePaused = false;
   const providerRunningCounts = new Map();
   const providerConcurrency = new Map();
-  const shortTaskCoordinator = ShortBatch.createCoordinator();
+  const shortTaskCoordinator = ShortBatch?.createCoordinator?.() || {isBusy: () => false, activeLabel: () => '', subscribe: () => {}};
 
   const MEDIA_TV_CHANNELS = [
     {id: 'cgtndoc', name: 'CGTN 纪录', group: '公开直播', url: 'https://news.cgtn.com/resource/live/document/cgtn-doc.m3u8'}, 
@@ -254,10 +249,10 @@
   let domains = null;
   let codexSessionId = '';
   let codexRunning = false;
-  // The one Codex detection state shared by settings, the agent backend and the console.
-  const codexState = window.FutureAICodexState?.create({ bridge: window.codexBridge }) || null;
+  let codexUpdating = false;
   let codexOutput = '等待检测本地 Codex。';
   let codexStatus = '未检测';
+  let codexCommand = '';
   let codexPermission = 'project';
   let appReleaseChannel = 'internal';
   let codexPromptDraft = ''; 
@@ -291,122 +286,10 @@
         getNode: id => nodes.get(id),
         nodeDisplayTitle,
         persistMediaUrl,
-        addResultNode: (node, url, suffix) => batchVariants()?.addResultNode?.(node, url, suffix)
-      },
-      localEdit: {
-        $,
-        toast,
-        getNode: id => nodes.get(id),
-        nodeDisplayTitle,
-        persistMediaUrl,
         hydrateNode,
         saveProject,
-        refreshDownstreamLinkedInputs,
-        addNode,
-        connectSilently,
-        selectSingleNode,
-        deleteNode,
-        nodeSize,
-        drawEdges,
-        scheduleDrawEdges,
-        getStorageDir: () => storageDir,
-        Core: window.FutureAILocalEditCore,
-        Variants: window.FutureAIVariantManager,
-        resolveImageCapability: node => {
-          const provider = currentProviderForNode(node, 'image');
-          const modelId = String(node?.data?.model || provider?.imageModel || '');
-          const profile = ModelCapabilities?.resolveProfile?.({provider, modelId, kind: 'image'});
-          return {
-            provider,
-            modelId,
-            providerType: provider?.type || profile?.providerType || '',
-            operations: Array.isArray(profile?.operations) ? profile.operations : []
-          };
-        },
-        runImageEdit: async ({node, prompt, refUrls, maskUrl, size, tool, label}) => {
-          const provider = currentProviderForNode(node, 'image');
-          if (!provider) throw new Error('请先在设置里配置图片供应商');
-          const apiKey = await providerApiKey(provider);
-          if (!apiKey) throw new Error('缺少 API Key');
-          const model = String(node?.data?.model || provider.imageModel || '').trim();
-          const profile = ModelCapabilities?.resolveProfile?.({provider, modelId: model, kind: 'image'});
-          const budgetRequest = {count: 1, operation: 'edit', hasMask: Boolean(maskUrl)};
-          const budgetEntryId = await authorizeGenerationBudget({
-            node,
-            provider,
-            model,
-            kind: 'image',
-            request: budgetRequest,
-            profile
-          }) || '';
-          try {
-            const result = await imageEditRequest({
-              provider,
-              apiUrl: provider.apiUrl || provider.baseUrl || '',
-              apiKey,
-              model,
-              prompt,
-              refUrls: Array.isArray(refUrls) ? refUrls.filter(Boolean) : [refUrls].filter(Boolean),
-              maskUrl: maskUrl || '',
-              size: size || node?.data?.size || '1024x1024',
-              quality: node?.data?.quality || 'auto',
-              seed: node?.data?.seed,
-              allowModelFallback: false
-            });
-            completeGenerationBudget(budgetEntryId, {actualRequests: 1, status: 'completed'});
-            balanceChip?.refresh?.();
-            return {url: result?.url || result, model: result?.model || model, tool, label};
-          } catch (err) {
-            completeGenerationBudget(budgetEntryId, {actualRequests: 0, status: 'failed', differenceReason: err?.message || '局部编辑失败'});
-            throw err;
-          }
-        }
-      },
-      batchVariants: {
-        $,
-        toast,
-        getNode: id => nodes.get(id),
-        getNodes: () => [...nodes.values()],
-        getEdges: () => edges.slice(),
-        nodeDisplayTitle,
-        hydrateNode,
-        saveProject,
-        addNode,
-        connectSilently,
-        selectSingleNode,
-        deleteNode,
-        nodeSize,
-        drawEdges,
-        scheduleDrawEdges,
-        enqueueImageGeneration,
-        diagnoseGenerationError,
-        Core: window.FutureAIBatchVariantsCore,
-        resolveImageCapability: node => {
-          const provider = currentProviderForNode(node, 'image');
-          const modelId = String(node?.data?.model || provider?.imageModel || '');
-          const profile = ModelCapabilities?.resolveProfile?.({provider, modelId, kind: 'image'});
-          return {
-            provider,
-            modelId,
-            providerType: provider?.type || profile?.providerType || '',
-            operations: Array.isArray(profile?.operations) ? profile.operations : [],
-            hasUsableKey: Boolean(provider) && (window.FutureAIModelAvailability?.providerHasUsableKey
-              ? window.FutureAIModelAvailability.providerHasUsableKey(provider, FutureAIApiDefaults.get('apiKey'))
-              : true)
-          };
-        }
-      },
-      promptAssist: {
-        $,
-        toast,
-        esc,
-        getStore,
-        setStore,
-        getNode: id => nodes.get(id),
-        hydrateNode,
-        saveProject,
-        optimizePrompt,
-        Core: window.FutureAIPromptAssistCore
+        rememberImageNodeVersion,
+        applyImageNodeUrl
       },
       supportUI: {
         $,
@@ -420,7 +303,14 @@
         getAppReleaseChannel: () => appReleaseChannel,
         setAppReleaseChannel: value => { appReleaseChannel = value; },
         getCodexPermission: () => codexPermission,
-        setCodexPermission: value => { codexPermission = value; }
+        setCodexPermission: value => { codexPermission = value; },
+        setCodexCommand: value => { codexCommand = value; }
+      },
+      licenseUI: {
+        $,
+        esc,
+        toast,
+        openModal
       },
       performanceMode: {
         $,
@@ -438,9 +328,7 @@
           get storageDir() { return storageDir; },
           get providerConcurrency() { return providerConcurrency; },
           get providerRunningCounts() { return providerRunningCounts; },
-          get generationQueue() { return generationQueue; },
-          get imageFallback() { return imageFallback; },
-          get globalModelProviders() { return globalModelProviders; }
+          get generationQueue() { return generationQueue; }
         },
         $,
         toast,
@@ -469,6 +357,7 @@
         ensureInputImageRefs,
         currentProviderForNode,
         providerApiKey,
+        reportProviderKeyResult,
         globalProviderForKind,
         setGlobalModelValue,
         classifyModelKind,
@@ -488,6 +377,7 @@
         normalizeShortVideoTask,
         formatError,
         isSafetyError,
+        softenPrompt,
         authorizeGenerationBudget,
         completeGenerationBudget
       },
@@ -497,10 +387,10 @@
           set apiProviders(v) { apiProviders = v; },
           get importedModels() { return importedModels; },
           set importedModels(v) { importedModels = v; },
+          get providerConformanceLiveResults() { return providerConformanceLiveResults; },
+          set providerConformanceLiveResults(v) { providerConformanceLiveResults = v; },
           get globalModelProviders() { return globalModelProviders; },
           set globalModelProviders(v) { globalModelProviders = v; },
-          get imageFallback() { return imageFallback; },
-          set imageFallback(v) { imageFallback = v; },
           get providerRunningCounts() { return providerRunningCounts; },
           get projects() { return projects; },
           set projects(v) { projects = Array.isArray(v) ? v : []; },
@@ -520,9 +410,11 @@
         saveSettings,
         onBalanceDisplayChange: () => balanceChip?.render(),
         renderModels,
+        refreshNodeProviderSelects,
         refreshNodeModelSelects,
         refreshNodeCapabilityControls,
         unique,
+        ProviderConformance,
         applyImportedModelsToProvider,
         applyImportedModelRecordsToProvider,
         extractModelIds,
@@ -553,6 +445,7 @@
         loadProject,
         classifyModelKind,
         modelFieldForKind,
+        inputIdForModelKind,
         isZexImageGateway,
         normalizeKnownImageModelAlias,
         globalProviderForKind,
@@ -584,7 +477,6 @@
         esc,
         toast,
         getNode: id => nodes.get(id),
-        generateImageKeepingOriginal,
         setActiveWorkspace,
         focusQueueNode: id => {
           if (!nodes.has(id)) return false;
@@ -599,9 +491,12 @@
         currentProviderForNode,
         providerTypeLabel,
         providerApiKey,
+        reportProviderKeyResult,
         nodeDisplayTitle,
         getInputPrompt,
         withCameraPrompt,
+        promptWithCanvasContext,
+        applyModelAgnosticGenerationRules,
         ensureInputImageRefs,
         effectiveImageModel,
         setImageStatus,
@@ -611,12 +506,13 @@
         imageRequestSeedFields: (...args) => providerApi()?.imageRequestSeedFields(...args),
         imageEditWithFallback,
         imageGenerateRequest,
+        imageGenerateBatchRequest: (...args) => providerApi()?.imageGenerateBatchRequest(...args),
         persistGeneratedImageResult,
         isApiGatewayTimeoutError,
         referenceGuidedImageFallback,
         refreshDownstreamLinkedInputs,
-        refreshNodeModelSelects,
         isSafetyError,
+        softenPrompt,
         formatImageGenerationError,
         imageErrorTitle,
         diagnoseGenerationError,
@@ -626,9 +522,7 @@
         VariantManager,
         Provenance,
         authorizeGenerationBudget,
-        completeGenerationBudget,
-        AutoRetry: window.FutureAIAutoRetry,
-        getAutoRetryLimit: () => Number($('generationAutoRetry')?.value ?? 1)
+        completeGenerationBudget
       },
       canvasRuntime: {
         host: {
@@ -646,6 +540,7 @@
           get dragging() { return dragging; },
           set dragging(v) { dragging = v; },
           get selectedNodes() { return selectedNodes; },
+          get spacePanning() { return spacePanning; },
           get selectedPort() { return selectedPort; },
           set selectedPort(v) { selectedPort = v; },
           get suppressPortClickUntil() { return suppressPortClickUntil; },
@@ -691,22 +586,23 @@
         enhanceTextareas,
         globalProviderForKind,
         normalizeKnownImageModelAlias,
-        generateImageKeepingOriginal,
-        runVideoKeepingOriginal,
-        runMediaToolKeepingOriginal,
-        spawnRight: (source, type, seed) => batchVariants().spawnRight(source, type, seed),
+        previewImageRequest: (...args) => generationQueueApi()?.previewImageRequest(...args),
+        runImage,
+        runVideo,
         runComfyUI,
         runPrompt,
+        runMediaTool,
         openFabricEditor,
-        openLocalEdit,
         openCropperEditor,
         openCameraModal,
         openMediaViewer,
         downloadMedia,
+        restorePreviousImageVersion,
         openDirectorDesk,
         openDialogEditWorkbench,
         persistMediaUrl,
-        modelPickerGroups,
+        providerOptionsHtml,
+        providerModelsForKind,
         modelsForKind,
         effectiveImageModel,
         ModelCapabilities,
@@ -726,12 +622,12 @@
         importComfyWorkflowIntoNode,
         closeNodeContextMenu,
         runNodeContextAction,
-        openCanvasMenu,
         testComfyUI,
         saveComfyNodeWorkflowGlobal,
         exportComfyWorkflowText,
         optimizePrompt,
         softenPrompt,
+        downloadImage,
         openMediaUrl,
         showNodeContextMenu,
         expandNodeIdsForGroups,
@@ -789,6 +685,7 @@
         nodeDisplayTitle,
         nodeSize,
         hydrateNode,
+        hydrateCanvasPreviews,
         selectSingleNode,
         clearSelection,
         releaseDrags,
@@ -801,13 +698,15 @@
         renderSelection,
         queueSave,
         runWorkflowGroup,
-        beginNodeDrag,
-        openModal
+        scheduleMinimap: () => canvasMinimap?.schedule()
       },
       canvasEvents: {
         $,
         state: {
           get activeWorkspace() { return activeWorkspace; },
+          get fastCanvasMode() { return fastCanvasMode; },
+          get spacePanning() { return spacePanning; },
+          set spacePanning(v) { spacePanning = v; },
           get scale() { return scale; },
           set scale(v) { scale = v; },
           get offsetX() { return offsetX; },
@@ -844,6 +743,7 @@
         zoomAroundPoint,
         setCanvasProxyActive,
         scheduleTransform,
+        applyTransform,
         scheduleViewportInteractionEnd,
         updateLinkDrag,
         updateReferenceSort,
@@ -860,7 +760,6 @@
           set projects(v) { projects = v; },
           get currentProjectId() { return currentProjectId; },
           set currentProjectId(v) { currentProjectId = v; },
-          get autoOpenLastProject() { return autoOpenLastProject; },
           get projectUndoStack() { return projectUndoStack; },
           set projectUndoStack(v) { projectUndoStack = Array.isArray(v) ? v : []; },
           get projectRedoStack() { return projectRedoStack; },
@@ -869,7 +768,6 @@
           set projectHistoryBusy(v) { projectHistoryBusy = Boolean(v); },
           get storageDir() { return storageDir; },
           set storageDir(v) { storageDir = v; },
-          get usingDefaultStorageDir() { return usingDefaultStorageDir(); },
           get fileStoreCache() { return fileStoreCache; },
           set fileStoreCache(v) { fileStoreCache = v; },
           get storageQuotaWarned() { return storageQuotaWarned; },
@@ -1015,7 +913,6 @@
         renderGroups,
         persistMediaUrl,
         mediaExtFromDataUrl,
-        syncStoragePathField,
         getActiveProjectWork,
         CanvasNodes: window.FutureAICanvasNodes,
         ProjectTemplates: window.FutureAIProjectTemplates
@@ -1158,7 +1055,6 @@
       },
       assistantChrome: {
         host: {
-          get globalModelProviders() { return globalModelProviders; },
           get promptTopics() { return promptTopics; },
           set promptTopics(v) { promptTopics = v; },
           get promptWorkbenchActiveId() { return promptWorkbenchActiveId; },
@@ -1195,13 +1091,14 @@
           set codexSessionId(v) { codexSessionId = v; },
           get codexRunning() { return codexRunning; },
           set codexRunning(v) { codexRunning = v; },
-          get codexCli() { return codexState?.cli || null; },
-          set codexCli(v) { codexState?.set(v); },
-          get codexState() { return codexState; },
+          get codexUpdating() { return codexUpdating; },
+          set codexUpdating(v) { codexUpdating = v; },
           get codexOutput() { return codexOutput; },
           set codexOutput(v) { codexOutput = v; },
           get codexStatus() { return codexStatus; },
           set codexStatus(v) { codexStatus = v; },
+          get codexCommand() { return codexCommand; },
+          set codexCommand(v) { codexCommand = v; },
           get codexPermission() { return codexPermission; },
           set codexPermission(v) { codexPermission = v; },
           get codexPromptDraft() { return codexPromptDraft; },
@@ -1248,6 +1145,7 @@
         resetDialogRun,
         globalProviderForKind,
         providerApiKey,
+        reportProviderKeyResult,
         unique,
         openModal,
         serialize,
@@ -1323,16 +1221,15 @@
           set codexRunning(v) { codexRunning = v; },
           get codexOutput() { return codexOutput; },
           set codexOutput(v) { codexOutput = v; },
-          get codexStatus() { return codexStatus; },
-          set codexStatus(v) { codexStatus = v; },
-          get codexPermission() { return codexPermission; },
-          get codexCli() { return codexState?.cli || null; },
-          get codexState() { return codexState; },
           get codexExpanded() { return codexExpanded; },
           set codexExpanded(v) { codexExpanded = v; },
           get codexPromptDraft() { return codexPromptDraft; },
           set codexPromptDraft(v) { codexPromptDraft = v; },
+          get codexStatus() { return codexStatus; },
+          set codexStatus(v) { codexStatus = v; },
           get storageDir() { return storageDir; },
+          get codexPermission() { return codexPermission; },
+          get codexCommand() { return codexCommand; },
           get selectedNodes() { return selectedNodes; },
           get nodes() { return nodes; }
         },
@@ -1353,6 +1250,19 @@
         loadActiveTopicDialogState,
         globalProviderForKind,
         providerApiKey,
+        reportProviderKeyResult,
+        createProviderApiError,
+        clearCurrentDialogConversation,
+        downloadImage,
+        fileToDataUrl,
+        connectSilently,
+        drawEdges,
+        agentProjectSummary,
+        renderAgentConsole,
+        codexApiConfig,
+        multimodalVideoUnderstand,
+        multimodalImageUnderstand,
+        optimizeDialogImagePrompt,
         imageGenerateRequest,
         imageEditWithFallback,
         chatCompletionTextRequest,
@@ -1386,19 +1296,6 @@
         localizeAssistantText,
         ensureAssistantProfiles,
         createAssistantProject,
-        createProviderApiError,
-        clearCurrentDialogConversation,
-        downloadImage,
-        connectSilently,
-        drawEdges,
-        fileToDataUrl,
-        agentProjectSummary,
-        renderAgentConsole,
-        codexApiConfig,
-        multimodalVideoUnderstand,
-        multimodalImageUnderstand,
-        optimizeDialogImagePrompt,
-        runLocalTask: runDialogCodexAssistant,
         AssistantTopics: window.FutureAIAssistantTopics,
         AssistantAttachments: window.FutureAIAssistantAttachments
       },
@@ -1467,9 +1364,15 @@
         canvasContextSnapshot,
         promptWithCanvasContext,
         buildBatchExportPayload,
+        applyModelPreset,
+        currentModelPreset,
         exportDiagnosticsPackage,
         scanMediaLibrary,
         runOneClickCleanup,
+        checkUpdates,
+        installOnlineUpdate,
+        applyUpdatePackage,
+        rollbackUpdate,
         normalizeApiProvider,
         fetchJsonWithRetry,
         API_TIMEOUTS,
@@ -1496,7 +1399,6 @@
       },
       shortWorkbench: {
         host: {
-          get history() { return history; },
           get storyboardItems() { return shortStoryboardItems; },
           set storyboardItems(v) { shortStoryboardItems = v; },
           get assetItems() { return shortAssetItems; },
@@ -1533,7 +1435,6 @@
         ShortBatch,
         addNode,
         drawEdges,
-        connect,
         viewCenter,
         getSelectedImageNode,
         joinApiPath,
@@ -1557,6 +1458,7 @@
         applyModelAgnosticTextRules,
         globalProviderForKind,
         providerApiKey,
+        reportProviderKeyResult,
         persistGeneratedImageResult,
         persistMediaUrl,
         blobToDataUrl,
@@ -1568,77 +1470,8 @@
   }
 
   function imageEditors() { return ensureDomains().imageEditors; }
-  function localEdit() { return ensureDomains().localEdit; }
-  function batchVariants() { return ensureDomains().batchVariants; }
-  function promptAssist() { return ensureDomains().promptAssist; }
-  let shareExportUi = null;
-  function shareExport() {
-    if (shareExportUi) return shareExportUi;
-    if (!window.FutureAIShareExportUi?.create) return null;
-    shareExportUi = window.FutureAIShareExportUi.create({
-      $,
-      toast,
-      getNodes: () => nodes,
-      getSelectedIds: () => [...selectedNodes],
-      getProjectName: () => (projects.find(item => item.id === currentProjectId)?.name || $('projectTitle')?.textContent || '未命名项目'),
-      getStorageDir: () => storageDir,
-      exportSnapshot: (opts) => exportCanvasSnapshot(opts || {}),
-      Core: window.FutureAISharePackage
-    });
-    shareExportUi.bind();
-    return shareExportUi;
-  }
-  function openExportShare(opts) { return shareExport()?.open?.(opts || {}); }
-  let spendPanelUi = null;
-  function spendSettings() {
-    const value = getStore('futureai.spendSettings', {});
-    return value && typeof value === 'object' ? value : {};
-  }
-  function spendHistory() {
-    const value = getStore('futureai.spendHistory', []);
-    return Array.isArray(value) ? value : [];
-  }
-  function currentProjectInfo() {
-    const project = projects.find(item => item.id === currentProjectId);
-    return {id: currentProjectId || '', name: project?.name || $('projectTitle')?.textContent || '未命名项目'};
-  }
-  // balance-spend 量到一次真实扣费（可能合并了同一账户并发的几次生成）就记一条。
-  function recordSpend({amount, unit, provider, tasks} = {}) {
-    const core = window.FutureAISpendHistory;
-    if (!core) return;
-    const project = currentProjectInfo();
-    setStore('futureai.spendHistory', core.addEvent(spendHistory(), {
-      amount, unit, tasks,
-      providerId: provider?.id || '',
-      providerName: provider?.name || '',
-      projectId: project.id,
-      projectName: project.name
-    }));
-    if (spendPanelUi?.isOpen()) spendPanelUi.render();
-  }
-  function spendPanel() {
-    if (spendPanelUi) return spendPanelUi;
-    if (!window.FutureAISpendPanelUi?.create) return null;
-    spendPanelUi = window.FutureAISpendPanelUi.create({
-      $,
-      esc,
-      toast,
-      Core: window.FutureAISpendHistory,
-      getHistory: spendHistory,
-      setHistory: value => setStore('futureai.spendHistory', Array.isArray(value) ? value : []),
-      getSettings: spendSettings,
-      setSettings: value => setStore('futureai.spendSettings', value || {}),
-      getProject: currentProjectInfo,
-      getEstimates: currency => (BudgetGuard ? BudgetGuard.usageFor(generationBudgetLedger(), {projectId: currentProjectId || '', currency}) : null),
-      confirm: () => openModal({title: '清空扣费记录', text: '清空后这台电脑上的扣费记录和图表都会归零，预算设置不受影响。确定吗？', okText: '清空', cancelText: '取消', confirm: true}),
-      saveCsv: payload => window.exportBridge?.exportSpendCsv?.(payload),
-      onLowBalanceChange: () => balanceChip?.resetLowBalanceWarnings?.()
-    });
-    spendPanelUi.bind();
-    return spendPanelUi;
-  }
-  function openSpendPanel() { return spendPanel()?.open?.(); }
   function supportUI() { return ensureDomains().supportUI; }
+  function licenseUI() { return ensureDomains().licenseUI; }
   function performanceMode() { return ensureDomains().performanceMode; }
   function shortWorkbench() { return ensureDomains().shortWorkbench; }
   function providerApi() { return ensureDomains().providerApi; }
@@ -1668,19 +1501,19 @@
     installDiagnosticsHandlers();
     installStorageRecoveryHandler();
     installCodexOutputHandler();
-    installManjuExportProgressHandler();
     movePanelsIntoSettings();
-    ensureShortWorkbenchProductionSections();
     bindEvents();
-    shareExport();
+    $('shortWorkbench')?.remove();
+    $('musicWorkbench')?.remove();
     applyFastCanvasMode();
     installCanvasMinimap();
     applyReduceMotionMode();
-    canvasWallpaper = window.FutureAICanvasWallpaper?.createCanvasWallpaper({document, bridge: window.wallpaperBridge, onChange: saveSettings, toast});
+    canvasWallpaper = window.FutureAICanvasWallpaper?.createCanvasWallpaper({
+      document, bridge: window.wallpaperBridge, onChange: saveSettings, toast
+    });
     canvasWallpaper?.bind();
     balanceChip = window.FutureAIBalanceChip?.createBalanceChip({
-      document,
-      esc,
+      document, esc,
       getProviders: () => apiProviders,
       getDefaultProviderId: () => globalProviderForKind('image')?.id,
       balance: {
@@ -1690,59 +1523,37 @@
         format: (value, unit) => providerUI()?.formatBalanceAmount?.(value, unit) ?? String(value),
         refresh: (provider, options) => providerUI()?.refreshProviderBalance?.(provider, options)
       },
-      onChange: saveSettings,
-      onSpend: recordSpend,
-      onOpenSpend: openSpendPanel,
-      isLowBalance: state => Boolean(window.FutureAISpendHistory?.isLowBalance(state, spendSettings().lowBalance)),
-      onLowBalance: (provider, view) => toast(`${provider?.name || 'API 服务'}余额不多了（${view?.text || ''}），记得充值`, 'warn')
+      onChange: saveSettings
     });
     balanceChip?.bind();
     loadSettings();
-    // Before anything (agent memory, wallpaper, stores) touches the storage folder: follow a moved/copied folder.
-    await followMovedStorageDir();
-    balanceChip?.refresh();
-    // Color wheel stays visible in 外观 so a fresh PC can edit without hunting.
-    void ensureColorThemePicker();
+    await loadPersistentUiPreferences();
+    // Color wheel (iro) loads on demand when custom theme is active or opened.
+    if (colorTheme === 'custom') void ensureColorThemePicker();
     initUISoundFeedback();
     scheduleHomeBackgroundVideo();
-    // Every Codex detection change (startup, 重新检测, 浏览) re-renders the agent settings and console.
-    codexState?.subscribe(() => { agentUi()?.renderSettings(); renderAgentConsole(); });
-    void refreshCodexCli();
-    agentUi()?.install();
-    agentUi()?.renderSettings();
-    agentUi()?.renderPanel();
+    scheduleCodexAutoUpdate();
     await loadApiKeySecret();
+    balanceChip?.render();
+    void balanceChip?.refresh();
     await recoverStorageDir();
-    await useDefaultStorageDirIfUnset();
     await loadLocalStores();
     await loadSupportCenter();
-    supportUI()?.showRecoveryNotice?.();
-    supportUI()?.initUpdateCheck?.();
     syncInstalledSkillCatalog();
     await loadSharedCodexExtensions();
     importedModels = getStore(STORE.models, []);
     history = getStore(STORE.history, []);
     assetLibrary = getStore(STORE.assets, []);
     assetLibraryFolders = normalizeAssetFolders(getStore(STORE.assetFolders, []));
-    musicFavorites = getStore('musicFavorites', []).filter(track => track?.local || track?.url);
-    setStore('musicFavorites', musicFavorites);
-    await loadMusicPluginRegistry();
-    initLXMusicCore();
     loadProjects();
     startCodexScheduleTimer();
     renderAll();
-    showStartupScreen();
-    if (FutureAIApiDefaults.get('apiUrl').trim() && FutureAIApiDefaults.get('apiKey').trim()) scheduleGlobalApiAutoImport();
+    resumeLastProjectOrShowHome();
+    if ($('apiUrl')?.value.trim() && $('apiKey')?.value.trim()) scheduleGlobalApiAutoImport();
+    const updateHealth = await window.updateBridge?.reportHealthy?.();
+    const updateOutcomeShown = await showInstallerUpdateOutcome(Boolean(updateHealth?.reported));
+    if (!updateOutcomeShown) toast('无限画布已启动，自定义 API 功能已保留。', 'success');
     startE2ESmokeTest();
-    startAgentEvalIfRequested();
-  }
-
-  // Benchmark mode: pass the configured chat provider to the main-process eval runner.
-  async function startAgentEvalIfRequested() {
-    const config = await window.agentEvalBridge?.config?.().catch(() => null);
-    if (!config?.enabled) return;
-    const api = await agentApiConfig();
-    await window.agentEvalBridge.run({ ...api, fastModel: agentUi()?.settings?.().fastModel || '' });
   }
 
   function applyReduceMotionMode() {
@@ -1770,19 +1581,16 @@
 
   function bindEvents() {
     $('homeCreateProject').addEventListener('click', () => createProject(true));
-    $('homeCreateFromTemplate')?.addEventListener('click', () => openTemplateGallery({mode: 'new-project'}));
     $('homeChooseStorageDir')?.addEventListener('click', chooseStorageDir);
     $('homeOpenSettings')?.addEventListener('click', openSettings);
     $('homeQuickCreate')?.addEventListener('click', () => $('homeCreateProject')?.click());
     $('homeQuickStorage')?.addEventListener('click', () => $('homeChooseStorageDir')?.click());
+    $('homeQuickOpen')?.addEventListener('click', () => $('homeOpenCurrent')?.click());
     $('homeQuickSettings')?.addEventListener('click', openSettings);
-    $('homeResumeLast')?.addEventListener('click', () => {
+    $('homeOpenCurrent').addEventListener('click', () => {
       if (!hasStorageDir()) return toast('请先选择本地存储路径', 'warn');
-      if (!openLastProject()) toast('上次的项目不存在或已损坏，请从最近项目中选择', 'warn');
-    });
-    $('autoOpenLastProject')?.addEventListener('change', e => {
-      autoOpenLastProject = Boolean(e.target.checked);
-      saveSettings();
+      if (!currentProjectId || !projects.length) return toast('当前还没有项目，请先点击“新建项目”', 'warn');
+      enterProject(currentProjectId);
     });
     $('workspaceMenuToggle')?.addEventListener('click', () => {
       const menu = $('workspaceMenu');
@@ -1808,16 +1616,15 @@
       const action = button.dataset.canvasEmpty;
       if (action === 'prompt') addPromptAtCenter();
       if (action === 'upload') addUploadAtCenter();
-      if (action === 'template') openTemplateGallery({mode: 'insert'});
+      if (action === 'template') openWorkflowLibrary();
     }));
     const canvasRoot = $('canvas');
     if (canvasRoot && !canvasRoot.dataset.emptyObserver) {
       canvasRoot.dataset.emptyObserver = '1';
       new MutationObserver(syncCanvasEmptyState).observe(canvasRoot, {childList: true});
-      const viewportRoot = $('viewport');
-      if (viewportRoot) new MutationObserver(syncCanvasEmptyState).observe(viewportRoot, {childList: true});
     }
     $('homeLogo').addEventListener('click', showHome);
+    bindModelPresetControls();
     document.querySelector('.topbar')?.addEventListener('pointerdown', e => {
       if (e.target.closest('button, input, select, textarea, a, .nav-pills, .top-actions, .top-left')) {
         e.stopPropagation();
@@ -1917,7 +1724,7 @@
       const profile = activeAssistantProfile();
       if (!profile) return;
       profile.model = e.target.value;
-      FutureAIApiDefaults.set('chatModel', e.target.value);
+      $('chatModel').value = e.target.value;
       const provider = globalProviderForKind('chat');
       if (provider) provider.chatModel = e.target.value;
       saveSettings();
@@ -2103,21 +1910,13 @@
     document.addEventListener('pointerdown', e => {
       if (isCanvasSearchOpen() && !e.target.closest?.('.canvas-search-tool')) closeCanvasSearch(false);
     }, true);
-    $('toggleMinimapBtn')?.addEventListener('click', toggleCanvasMinimap);
     $('focusCanvasSearchResult')?.addEventListener('click', () => focusCanvasSearchResult());
     $('zoomFitBtn')?.addEventListener('click', () => fitView(true));
+    $('toggleMinimapBtn')?.addEventListener('click', toggleCanvasMinimap);
     $('zoomMinusBtn')?.addEventListener('click', () => zoomCanvas(.87));
     $('zoomPlusBtn')?.addEventListener('click', () => zoomCanvas(1.15));
     $('zoomSlider')?.addEventListener('input', e => setCanvasZoom(Number(e.target.value) / 100));
     $('tidyCanvasBtn')?.addEventListener('click', () => tidyCanvasGrid(true));
-    $('exportCanvasSnapshotBtn')?.addEventListener('click', async () => {
-      try {
-        const result = await exportCanvasSnapshot({});
-        if (result) toast(`画布快照已保存（${result.nodeCount} 个节点）`, 'success');
-      } catch (err) {
-        toast(err?.message || String(err), 'error');
-      }
-    });
     $('fastCanvasBtn')?.addEventListener('click', toggleFastCanvasMode);
     $('projectDetailBtn')?.addEventListener('click', openSettings);
     $('disconnectBtn')?.addEventListener('click', goProjectCenter);
@@ -2133,45 +1932,34 @@
     });
     $('deleteSelection').addEventListener('click', deleteSelectedNodes);
     $('groupSelection')?.addEventListener('click', groupSelectedNodes);
-    $('saveSelectionWorkflow')?.addEventListener('click', () => openTemplateGallery({mode: 'insert', focusSave: true}));
+    $('saveSelectionWorkflow')?.addEventListener('click', openWorkflowLibraryForSelection);
     $('ungroupSelection')?.addEventListener('click', ungroupSelectedNodes);
-    $('downloadSelection')?.addEventListener('click', () => downloadNodes([...selectedNodes]));
-    $('selectionToolbar')?.addEventListener('click', e => {
-      const align = e.target.closest('[data-align]');
-      const distribute = e.target.closest('[data-distribute]');
-      if (align) arrangeSelection('align', align.dataset.align);
-      else if (distribute) arrangeSelection('distribute', distribute.dataset.distribute);
-    });
-    $('shortcutHelpBtn')?.addEventListener('click', () => toggleShortcutHelp());
-    $('openWorkflowLibrary')?.addEventListener('click', () => openTemplateGallery({mode: 'insert'}));
+    $('openWorkflowLibrary')?.addEventListener('click', openWorkflowLibrary);
     $('closeWorkflowLibrary')?.addEventListener('click', closeWorkflowLibrary);
     $('saveWorkflowSelection')?.addEventListener('click', saveSelectedWorkflow);
     $('importWorkflowDefinition')?.addEventListener('click', () => $('workflowImportFile')?.click());
     $('workflowImportFile')?.addEventListener('change', importWorkflowDefinitions);
     $('workflowLibraryList')?.addEventListener('click', handleWorkflowLibraryClick);
-    $('closeTemplateGallery')?.addEventListener('click', closeTemplateGallery);
-    $('templateGalleryModal')?.addEventListener('click', e => { if (e.target === $('templateGalleryModal')) closeTemplateGallery(); });
-    $('templateGalleryTabs')?.addEventListener('click', handleTemplateGalleryTabClick);
-    $('templateGalleryGrid')?.addEventListener('click', handleTemplateGalleryGridClick);
-    $('templateGallerySaveBtn')?.addEventListener('click', saveSelectedAsUserTemplate);
     $('testApi')?.addEventListener('click', testApi);
     $('importModels')?.addEventListener('click', importModels);
+    $('clearApiKey')?.addEventListener('click', clearApiKeySecret);
     $('addApiProvider')?.addEventListener('click', addApiProvider);
     $('apiProviderList')?.addEventListener('input', handleApiProviderInput);
     $('apiProviderList')?.addEventListener('change', handleApiProviderInput);
     $('apiProviderList')?.addEventListener('click', handleApiProviderClick);
+    $('providerConformanceClose')?.addEventListener('click', closeProviderConformance);
+    $('providerConformanceRun')?.addEventListener('click', runProviderConformanceFromModal);
+    $('providerConformanceRerun')?.addEventListener('click', resetProviderConformanceModal);
+    $('providerConformanceExport')?.addEventListener('click', exportProviderConformanceEvidence);
+    $('providerConformanceModal')?.addEventListener('click', event => {
+      if (event.target === $('providerConformanceModal') && !providerConformanceRunning) closeProviderConformance();
+    });
     $('testComfyUI')?.addEventListener('click', testComfyUI);
     $('importComfyWorkflow')?.addEventListener('click', () => $('comfyWorkflowFile')?.click());
     $('comfyWorkflowFile')?.addEventListener('change', importComfyWorkflowFile);
     $('exportComfyWorkflow')?.addEventListener('click', exportComfyWorkflow);
     $('clearComfyWorkflow')?.addEventListener('click', clearComfyWorkflow);
     $('chooseStorageDir')?.addEventListener('click', chooseStorageDir);
-    $('storageDirDefaultChoose')?.addEventListener('click', chooseStorageDir);
-    $('storageDefaultBannerChoose')?.addEventListener('click', chooseStorageDir);
-    $('storageDefaultBannerDismiss')?.addEventListener('click', () => {
-      storageDefaultNoticeDismissed = true;
-      syncStoragePathField();
-    });
     $('openStorageDir')?.addEventListener('click', openStorageDir);
     $('exportWorkspaceBackup')?.addEventListener('click', exportWorkspaceBackup);
     $('restoreWorkspaceBackup')?.addEventListener('click', restoreWorkspaceBackup);
@@ -2184,13 +1972,24 @@
     $('exportDiagnostics')?.addEventListener('click', exportDiagnosticsPackage);
     $('runCleanup')?.addEventListener('click', runOneClickCleanup);
     $('previewBudgetRoutes')?.addEventListener('click', previewBudgetRoutes);
-    $('openSpendFromSettings')?.addEventListener('click', openSpendPanel);
-    ['generationMaxTasks', 'generationFailureStop', 'generationAutoRetry', 'generationDailyReminder', 'generationRequireStorage', 'generationBudgetCurrency', 'generationSingleBudget', 'generationDailyBudget', 'generationProjectBudget'].forEach(id => $(id)?.addEventListener('change', saveSettings));
+    ['generationMaxTasks', 'generationFailureStop', 'generationDailyReminder', 'generationRequireStorage', 'generationBudgetCurrency', 'generationSingleBudget', 'generationDailyBudget', 'generationProjectBudget'].forEach(id => $(id)?.addEventListener('change', saveSettings));
+    $('checkUpdates')?.addEventListener('click', checkUpdates);
+    $('installOnlineUpdate')?.addEventListener('click', installOnlineUpdate);
+    $('applyUpdatePackage')?.addEventListener('click', applyUpdatePackage);
+    $('rollbackUpdate')?.addEventListener('click', rollbackUpdate);
     document.querySelectorAll('[data-support-document]').forEach(button => button.addEventListener('click', () => openSupportDocument(button.dataset.supportDocument)));
     $('supportDocumentClose')?.addEventListener('click', closeSupportDocument);
     $('supportDocumentModal')?.addEventListener('click', event => {
       if (event.target === $('supportDocumentModal')) closeSupportDocument();
     });
+    $('createActivationRequest')?.addEventListener('click', createLicenseActivationRequest);
+    $('copyActivationRequest')?.addEventListener('click', copyLicenseActivationRequest);
+    $('importActivation')?.addEventListener('click', importLicenseActivation);
+    $('redeemLicense')?.addEventListener('click', redeemLicense);
+    $('licenseRedemptionCode')?.addEventListener('keydown', event => {
+      if (event.key === 'Enter') redeemLicense();
+    });
+    $('deactivateLicense')?.addEventListener('click', deactivateLicense);
     $('imageModelSelect')?.addEventListener('change', e => setGlobalModelValue('image', e.target.value));
     $('videoModelSelect')?.addEventListener('change', e => setGlobalModelValue('video', e.target.value));
     $('chatModelSelect')?.addEventListener('change', e => setGlobalModelValue('chat', e.target.value));
@@ -2206,18 +2005,12 @@
     document.querySelectorAll('input[name="colorTheme"]').forEach(input => input.addEventListener('change', e => {
       if (!e.target.checked) return;
       colorTheme = normalizeColorTheme(e.target.value);
-      if (colorTheme !== 'custom') {
-        activeSavedColorThemeId = '';
-        const resolved = window.FutureAIColorThemes?.resolveTheme?.(colorTheme);
-        if (resolved?.palette) {
-          customThemePalette = window.FutureAIColorThemes.normalizePalette(resolved.palette);
-          customThemeColor = customThemePalette.accent;
-        }
-      } else if (!activeSavedColorThemeId && $('customThemeName')) {
-        $('customThemeName').value = nextSavedColorThemeName();
+      if (colorTheme !== 'custom') activeSavedColorThemeId = '';
+      applyColorTheme(colorTheme, customThemeColor);
+      if (colorTheme === 'custom') {
+        if (!activeSavedColorThemeId && $('customThemeName')) $('customThemeName').value = nextSavedColorThemeName();
+        void ensureColorThemePicker();
       }
-      applyColorTheme(colorTheme, customThemeColor, customThemePalette);
-      void ensureColorThemePicker().then(() => setActiveThemeZone(activeThemeZone, true));
       saveSettings();
     }));
     $('customThemeRow')?.addEventListener('click', e => {
@@ -2242,8 +2035,7 @@
       customThemePalette = window.FutureAIColorThemes?.normalizePalette(window.FutureAIColorThemes.DEFAULT_PALETTE) || customThemePalette;
       activeThemeZone = 'accent';
       activeSavedColorThemeId = '';
-      applyColorTheme(colorTheme, customThemeColor, customThemePalette);
-      void ensureColorThemePicker().then(() => setActiveThemeZone(activeThemeZone, true));
+      applyColorTheme(colorTheme, customThemeColor);
       if ($('customThemeName')) $('customThemeName').value = nextSavedColorThemeName();
       saveSettings();
     });
@@ -2266,14 +2058,17 @@
       uiSoundController?.play('confirm');
     });
     $('uiSoundPreview')?.addEventListener('click', () => uiSoundController?.play('preview'));
-    ['assistantContextModeInline','comfyUrl','comfyWorkflowName','comfyWorkflowJson'].forEach(id => $(id)?.addEventListener('input', () => {
-      syncAssistantContextModeControls();
+    $('apiKey')?.addEventListener('input', () => { saveApiKeySecret(); renderModels(); });
+    $('apiKey')?.addEventListener('change', () => { saveApiKeySecret(); scheduleGlobalApiAutoImport(); });
+    ['apiUrl','imageModel','videoModel','chatModel','assistantContextMode','assistantContextModeInline','comfyUrl','comfyWorkflowName','comfyWorkflowJson'].forEach(id => $(id)?.addEventListener('input', () => {
+      syncAssistantContextModeControls(id);
       syncLegacyApiProvider();
       saveSettings();
       syncGlobalModelInputs();
       renderModels();
-      refreshNodeModelSelects();
+      refreshNodeProviderSelects();
     }));
+    $('apiUrl')?.addEventListener('change', scheduleGlobalApiAutoImport);
     $('commandPalette')?.addEventListener('click', onCommandPaletteClick);
     $('commandPaletteInput')?.addEventListener('input', renderCommandPalette);
     $('commandPaletteInput')?.addEventListener('keydown', onCommandPaletteKeydown);
@@ -2368,14 +2163,14 @@
     window.addEventListener('message', onDirectorDeskMessage);
     document.addEventListener('pointerdown', interactionRescueOnPointerDown, true);
     installAssetDropTargets();
-    window.addEventListener('beforeunload', () => { projectStore()?.flushPendingSave?.(); saveProject(); saveSettings(); });
-    // Closing the window waits for this (see installCloseFlush in main.js).
-    window.lifecycleBridge?.onFlushRequest?.(() => projectStore()?.flushBeforeClose?.());
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') projectStore()?.flushPendingSave?.(); });
-    document.addEventListener('futureai:media-relocate', onMediaRelocateRequest);
+    window.addEventListener('beforeunload', () => {
+      saveProject();
+      saveSettings();
+      void persistUiPreferences();
+    });
   }
 
-  function normalizeWorkspace(name = 'short') {
+  function normalizeWorkspace(name = 'canvas') {
     if (name === 'prompt') {
       assistantActiveTab = 'dialog';
       return 'assistant';
@@ -2384,10 +2179,10 @@
       assistantActiveTab = 'dialog';
       return 'assistant';
     }
-    return ['short', 'assistant', 'canvas', 'music'].includes(name) ? name : 'short';
+    return ['assistant', 'canvas'].includes(name) ? name : 'canvas';
   }
 
-  function setActiveWorkspace(name = 'short') {
+  function setActiveWorkspace(name = 'canvas') {
     activeWorkspace = normalizeWorkspace(name);
     document.body.classList.toggle('workspace-short', activeWorkspace === 'short');
     document.body.classList.toggle('workspace-assistant', activeWorkspace === 'assistant');
@@ -2399,7 +2194,7 @@
     const workspaceLabels = {short: 'AI 漫剧工作台', assistant: '∞ 灵枢万象', canvas: '无限画布', music: '媒体中心'};
     if ($('workspaceMenuLabel')) $('workspaceMenuLabel').textContent = workspaceLabels[activeWorkspace] || '当前工作区';
     syncCanvasEmptyState();
-    if (activeWorkspace === 'canvas') balanceChip?.refresh();
+    if (activeWorkspace === 'canvas') void balanceChip?.refresh();
     $('railMedia')?.classList.toggle('active', activeWorkspace === 'music');
     $('shortWorkbench')?.classList.toggle('hidden', activeWorkspace !== 'short');
     $('assistantWorkbench')?.classList.toggle('hidden', activeWorkspace !== 'assistant');
@@ -2424,26 +2219,28 @@
       requestAnimationFrame(drawEdges);
     }
   }
+  function openWorkspace(name) {
+    setActiveWorkspace(name);
+  }
+
+
   function commandPaletteActions() {
-    return window.FutureAICommandPalette.buildActions({
-      setActiveWorkspace,
-      openShortWorkbench,
-      createAssistantTopic,
-      addPromptAtCenter,
-      addImageAtCenter,
-      addUploadAtCenter,
-      addVideoAtCenter,
-      addComfyUIAtCenter,
-      openSettings,
-      pauseQueue,
-      retryFailedQueue,
-      fitView,
-      openCanvasSearch,
-      selectedNodes,
-      duplicateNodes,
-      toggleShortcutHelp,
-      toast
-    });
+    return [
+      {id: 'workspace-assistant', icon: 'fa-comments', title: '打开∞ 灵枢万象', hint: '项目对话 / 自主执行 / 图片理解', run: () => setActiveWorkspace('assistant')},
+      {id: 'workspace-canvas', icon: 'fa-infinity', title: '打开无限画布', hint: '节点编排与素材生产', run: () => setActiveWorkspace('canvas')},
+      {id: 'new-topic', icon: 'fa-plus', title: '新建灵枢任务', hint: '在∞ 灵枢万象里开始一轮新对话', run: () => { setActiveWorkspace('assistant'); createAssistantTopic(); }},
+      {id: 'add-prompt', icon: 'fa-note-sticky', title: '创建提示词节点', hint: '在画布中心添加文本节点', run: () => { setActiveWorkspace('canvas'); addPromptAtCenter(); }},
+      {id: 'add-image', icon: 'fa-image', title: '创建图片节点', hint: '生成图像 / 图生图', run: () => { setActiveWorkspace('canvas'); addImageAtCenter(); }},
+      {id: 'add-upload', icon: 'fa-upload', title: '上传素材节点', hint: '导入图片或视频作为素材', run: () => { setActiveWorkspace('canvas'); addUploadAtCenter(); }},
+      {id: 'add-video', icon: 'fa-video', title: '创建视频节点', hint: '文生视频 / 图生视频', run: () => { setActiveWorkspace('canvas'); addVideoAtCenter(); }},
+      {id: 'add-comfyui', icon: 'fa-diagram-project', title: '创建 ComfyUI 节点', hint: '导入 workflow 后在画布运行', run: () => { setActiveWorkspace('canvas'); addComfyUIAtCenter(); }},
+      {id: 'settings', icon: 'fa-gear', title: '打开设置', hint: 'API、模型、本地存储', run: openSettings},
+      {id: 'search-canvas', icon: 'fa-magnifying-glass', title: '搜索画布节点', hint: '按名称、提示词、模型或标签搜索', run: () => { setActiveWorkspace('canvas'); openCanvasSearch(); }},
+      {id: 'pause-queue', icon: 'fa-pause', title: '暂停生成队列', hint: '保留当前排队任务，可随时继续', run: pauseQueue},
+      {id: 'retry-failed-queue', icon: 'fa-rotate-right', title: '重试失败任务', hint: '只重试已经失败的排队任务', run: retryFailedQueue},
+      {id: 'fit-view', icon: 'fa-maximize', title: '适配画布视图', hint: '把画布内容放回视野', run: () => fitView(true)},
+      {id: 'duplicate-selected', icon: 'fa-copy', title: '复制选中节点', hint: '复制当前选中的画布节点（Ctrl/Cmd+D）', run: () => { if (!selectedNodes.size) return toast('请先选中要复制的节点', 'warn'); [...selectedNodes].forEach(id => duplicateNode(id)); }}
+    ];
   }
 
   function openCommandPalette() {
@@ -2523,7 +2320,7 @@
   }
 
   function imageNodeDirectorUrl(node) {
-    return window.FutureAIDirectorDesk.imageNodeDirectorUrl(node);
+    return String(node?.data?.url || (Array.isArray(node?.data?.urls) ? node.data.urls[0] : '') || node?.data?.refUrl || '').trim();
   }
 
   function sendImageNodeToDirectorDesk(node) {
@@ -2566,31 +2363,80 @@
   }
 
   function normalizeDirectorDeskDestination(value) {
-    return window.FutureAIDirectorDesk.normalizeDirectorDeskDestination(value);
+    return ['assistant', 'canvas'].includes(value) ? value : 'canvas';
   }
 
   function normalizeDirectorShotPack(value) {
-    return window.FutureAIDirectorDesk.normalizeDirectorShotPack(value);
+    if (!value || typeof value !== 'object') return null;
+    const characters = Array.isArray(value.characters) ? value.characters.map(item => ({
+      name: String(item?.name || '').trim(),
+      color: String(item?.color || '').trim(),
+      colorName: String(item?.colorName || '').trim(),
+      pose: String(item?.pose || '').trim()
+    })).filter(item => item.name) : [];
+    const camera = value.camera && typeof value.camera === 'object' ? {
+      name: String(value.camera.name || '').trim(),
+      fov: Number(value.camera.fov) || 0,
+      distance: Number(value.camera.distance) || 0,
+      shotSize: String(value.camera.shotSize || '').trim(),
+      angle: String(value.camera.angle || '').trim(),
+      lens: String(value.camera.lens || '').trim(),
+      motionLabel: String(value.camera.motionLabel || '').trim(),
+      motionNote: String(value.camera.motionNote || '').trim()
+    } : null;
+    const prompt = String(value.prompt || '').trim();
+    const legend = String(value.legend || '').trim();
+    const shotIndex = Number(value.shotIndex) || 0;
+    const shotTotal = Number(value.shotTotal) || 0;
+    const shotName = String(value.shotName || '').trim();
+    if (!prompt && !characters.length && !camera) return null;
+    return {version: 1, legend, characters, camera, prompt, shotIndex, shotTotal, shotName};
   }
 
   function directorShotPackPrompt(pack, fallback) {
-    return window.FutureAIDirectorDesk.directorShotPackPrompt(pack, fallback);
+    return String(pack?.prompt || '').trim() || fallback;
   }
 
   function directorShotPackTitle(pack, fallback, index) {
-    return window.FutureAIDirectorDesk.directorShotPackTitle(pack, fallback, index);
+    const shotNo = Number(pack?.shotIndex) || (index + 1);
+    const shot = pack?.camera?.shotSize;
+    const motion = pack?.camera?.motionLabel;
+    const name = pack?.shotName || pack?.camera?.name;
+    const parts = [`镜头${String(shotNo).padStart(2, '0')}`, name, shot, motion].filter(Boolean);
+    if (parts.length > 1) return [...new Set(parts)].join(' · ');
+    return fallback || `导演台镜头包 ${index + 1}`;
   }
 
   function directorShotPackVideoPrompt(pack, imagePrompt) {
-    return window.FutureAIDirectorDesk.directorShotPackVideoPrompt(pack, imagePrompt);
+    const shot = pack?.camera?.shotSize || '中景';
+    const angle = pack?.camera?.angle || '平视';
+    const motion = pack?.camera?.motionLabel || '固定机位';
+    const legend = pack?.legend || '';
+    return [
+      `以这张3D预演关键帧为第一帧生成视频。`,
+      legend ? `角色色标：${legend}。` : '',
+      `保持${shot}、${angle}，运镜：${motion}。`,
+      `不要换人、不要改变站位和服装身份；按色标对应角色连续表演。`,
+      imagePrompt ? `画面依据：${imagePrompt.split('\n').slice(0, 4).join(' ')}` : ''
+    ].filter(Boolean).join('');
   }
 
   function normalizeDirectorDeskCaptures(payload) {
-    return window.FutureAIDirectorDesk.normalizeDirectorDeskCaptures(payload);
+    const sharedPack = normalizeDirectorShotPack(payload?.shotPack);
+    return (Array.isArray(payload?.captures) ? payload.captures : [])
+      .map((item, index) => ({
+        dataUrl: typeof item?.dataUrl === 'string' ? item.dataUrl.trim() : '',
+        fileName: typeof item?.fileName === 'string' && item.fileName.trim()
+          ? item.fileName.trim()
+          : `director-desk-capture-${index + 1}.png`,
+        shotPack: normalizeDirectorShotPack(item?.shotPack) || sharedPack
+      }))
+      .filter(item => item.dataUrl);
   }
 
   function directorDeskCaptureBaseName(fileName, index) {
-    return window.FutureAIDirectorDesk.directorDeskCaptureBaseName(fileName, index);
+    const raw = String(fileName || '').replace(/\.[a-z0-9]+$/i, '').trim();
+    return raw || `导演台截图 ${index + 1}`;
   }
 
   async function persistDirectorDeskCaptures(captures) {
@@ -2612,17 +2458,6 @@
     const persisted = await persistDirectorDeskCaptures(captures);
     if (destination === 'assistant') {
       sendDirectorDeskCapturesToAssistant(persisted);
-      return;
-    }
-    if (destination === 'short') {
-      sendDirectorDeskCapturesToShortWorkbench(persisted);
-      return;
-    }
-    if (destination === 'shot-pack') {
-      sendDirectorDeskCapturesToCanvas(persisted, {close: false, toast: false});
-      sendDirectorDeskCapturesToShortWorkbench(persisted, {close: false, toast: false, jump: 'storyboard'});
-      closeDirectorDesk();
-      toast(`已发送 ${persisted.length} 个导演台${persisted.length > 1 ? '镜头清单' : '镜头包'}到无限画布和漫剧分镜`, 'success');
       return;
     }
     sendDirectorDeskCapturesToCanvas(persisted);
@@ -2650,7 +2485,7 @@
       const imageNode = addNode('image', x, y, {
         title,
         prompt,
-        model: FutureAIApiDefaults.get('imageModel') || '',
+        model: $('imageModel')?.value || '',
         size: '1280x720',
         resolution: '1K',
         url: capture.url,
@@ -2736,7 +2571,11 @@
   }
 
   function filteredCommandPaletteActions() {
-    return window.FutureAICommandPalette.filterActions(commandPaletteActions(), $('commandPaletteInput')?.value || '');
+    const q = String($('commandPaletteInput')?.value || '').trim().toLowerCase();
+    return commandPaletteActions().filter(item => {
+      const haystack = `${item.title} ${item.hint} ${item.id}`.toLowerCase();
+      return !q || haystack.includes(q);
+    });
   }
 
   function renderCommandPalette() {
@@ -2803,8 +2642,7 @@
   function codexFailureMessage(...args) { return assistantChrome()?.codexFailureMessage?.(...args); }
   function installCodexOutputHandler(...args) { return assistantChrome()?.installCodexOutputHandler?.(...args); }
   async function runCodexConsoleAction(...args) { return assistantChrome()?.runCodexConsoleAction?.(...args); }
-  async function refreshCodexCli(...args) { return assistantChrome()?.refreshCodexCli?.(...args); }
-  async function chooseCodexCommand(...args) { return assistantChrome()?.chooseCodexCommand?.(...args); }
+  function scheduleCodexAutoUpdate(...args) { return assistantChrome()?.scheduleCodexAutoUpdate?.(...args); }
   async function codexApiConfig(...args) { return assistantChrome()?.codexApiConfig?.(...args); }
   function agentProjectDiagnosisText(...args) { return assistantChrome()?.agentProjectDiagnosisText?.(...args); }
   function agentNextPlanText(...args) { return assistantChrome()?.agentNextPlanText?.(...args); }
@@ -2869,51 +2707,20 @@
     card.dataset.movedPanels = '1';
   }
 
-  function applyFastCanvasMode() {
-    document.body.classList.toggle('fast-canvas-mode', fastCanvasMode);
-    const btn = $('fastCanvasBtn');
-    if (!btn) return;
-    btn.classList.toggle('active', fastCanvasMode);
-    btn.setAttribute('aria-pressed', fastCanvasMode ? 'true' : 'false');
-    btn.title = fastCanvasMode ? '极速画布已开启：拖动和缩放更流畅' : '极速画布已关闭：始终显示完整画面';
-  }
-  function isCanvasSearchOpen() {
-    return !$('canvasSearchPopover')?.classList.contains('hidden');
-  }
-  function openCanvasSearch() {
-    const popover = $('canvasSearchPopover');
-    if (!popover) return;
-    toggleShortcutHelp(false);
-    popover.classList.remove('hidden');
-    $('canvasSearchBtn')?.setAttribute('aria-expanded', 'true');
-    requestAnimationFrame(() => {
-      const input = $('canvasSearchInput');
-      input?.focus();
-      input?.select();
-    });
-  }
-  function closeCanvasSearch(restoreFocus = true) {
-    const popover = $('canvasSearchPopover');
-    if (!popover || popover.classList.contains('hidden')) return;
-    const hadFocus = popover.contains(document.activeElement);
-    popover.classList.add('hidden');
-    $('canvasSearchBtn')?.setAttribute('aria-expanded', 'false');
-    if (restoreFocus && hadFocus) $('canvasSearchBtn')?.focus();
-  }
   function installCanvasMinimap() {
     canvasMinimap = window.FutureAICanvasMinimap?.create({
       panel: $('canvasMinimap'),
       canvas: $('canvasMinimapCanvas'),
       observeTarget: $('viewport'),
-      nodeSize,
+      nodeSize: proxyNodeSize,
       isSelected: id => selectedNodes.has(id),
       getView: () => ({nodes, scale, offsetX, offsetY, canvasRect: $('canvas').getBoundingClientRect()}),
       setViewCenter: (worldX, worldY) => {
         const rect = $('canvas').getBoundingClientRect();
         offsetX = rect.width / 2 - worldX * scale;
         offsetY = rect.height / 2 - worldY * scale;
-        setCanvasProxyActive(true);
-        scheduleTransform(false, false);
+        scheduleTransform();
+        scheduleDrawEdges();
         scheduleViewportInteractionEnd();
       }
     }) || null;
@@ -2931,18 +2738,29 @@
     localStorage.setItem('futureai.canvasMinimap', canvasMinimapEnabled ? 'on' : 'off');
     applyCanvasMinimap();
   }
+  function applyFastCanvasMode() {
+    document.body.classList.toggle('fast-canvas-mode', fastCanvasMode);
+    const btn = $('fastCanvasBtn');
+    if (!btn) return;
+    btn.classList.toggle('active', fastCanvasMode);
+    btn.setAttribute('aria-pressed', fastCanvasMode ? 'true' : 'false');
+    btn.title = fastCanvasMode ? '极速画布已开启：拖动和缩放更流畅' : '极速画布已关闭：始终显示完整画面';
+  }
   function toggleFastCanvasMode() {
     fastCanvasMode = !fastCanvasMode;
     localStorage.setItem('futureai.fastCanvasMode', fastCanvasMode ? 'on' : 'off');
     applyFastCanvasMode();
     if (!fastCanvasMode) setCanvasProxyActive(false);
+    scheduleUiPreferencesSave();
     toast(fastCanvasMode ? '极速画布已开启' : '极速画布已关闭', fastCanvasMode ? 'success' : 'warn');
   }
 
 
   function releaseDrags(commit) {
     const wasDragging = !!dragging;
+    const wasPanning = !!panning;
     if (dragging && dragPoint) flushNodeDrag();
+    dragging?.items?.forEach(item => item.node.el?.classList.remove('drag-active'));
     if (dragFrame) {
       cancelAnimationFrame(dragFrame);
       dragFrame = null;
@@ -2952,24 +2770,30 @@
       edgeThrottleTimer = null;
     }
     dragPoint = null;
-    renderSnapGuides([]);
     if (commit && (panning || dragging)) saveProject();
+    if (wasPanning && transformFrame) {
+      cancelAnimationFrame(transformFrame);
+      transformFrame = null;
+      applyTransform(false, false);
+    }
     panning = null;
     dragging = null;
+    if (wasDragging || wasPanning) canvasMinimap?.schedule();
     mascotDrag = null;
     $('canvas')?.classList.remove('is-panning', 'is-zooming', 'is-dragging-node');
     setCanvasProxyActive(false);
     if (wasDragging) drawEdges();
     document.body.style.cursor = '';
-    updateSelectionToolbar();
-    revealSelectedNode();
-    scheduleVisibilityUpdate();
+    if (wasDragging || wasPanning) {
+      updateSelectionToolbar();
+      scheduleVisibilityUpdate();
+    }
   }
 
-  function updateNodeDrag(clientX, clientY, altKey = false) {
+  function updateNodeDrag(clientX, clientY) {
     if (!dragging) return;
     $('canvas')?.classList.add('is-dragging-node');
-    dragPoint = {clientX, clientY, altKey};
+    dragPoint = {clientX, clientY};
     if (dragFrame) return;
     dragFrame = requestAnimationFrame(flushNodeDrag);
   }
@@ -2977,69 +2801,13 @@
   function flushNodeDrag() {
     dragFrame = null;
     if (!dragging || !dragPoint) return;
-    const {clientX, clientY, altKey} = dragPoint;
+    const {clientX, clientY} = dragPoint;
     dragPoint = null;
-    let dx = (clientX - dragging.x) / scale;
-    let dy = (clientY - dragging.y) / scale;
-    const snap = altKey ? null : nodeDragSnap(dx, dy);
-    if (snap) {
-      dx += snap.dx;
-      dy += snap.dy;
-    }
-    renderSnapGuides(snap?.guides || []);
+    const dx = (clientX - dragging.x) / scale;
+    const dy = (clientY - dragging.y) / scale;
     dragging.items.forEach(item => moveNode(item.node, item.startX + dx, item.startY + dy));
     scheduleDrawEdges();
     scheduleGroupRender();
-  }
-
-  function nodeWorldRect(node, x = node.x, y = node.y) {
-    const size = nodeSize(node);
-    return {id: node.id, x, y, w: size.width, h: size.height};
-  }
-  // Edge/centre snapping of the dragged selection to visible nodes; targets are measured once per drag.
-  function nodeDragSnap(dx, dy) {
-    if (!CanvasArrange || !dragging.items.length) return null;
-    if (!dragging.snap) {
-      const moving = new Set(dragging.items.map(item => item.node.id));
-      dragging.snap = {
-        start: CanvasArrange.bounds(dragging.items.map(item => nodeWorldRect(item.node, item.startX, item.startY))),
-        targets: [...nodes.values()].filter(node => !moving.has(node.id) && node.el.offsetParent).map(node => nodeWorldRect(node))
-      };
-    }
-    const {start, targets} = dragging.snap;
-    if (!targets.length) return null;
-    return CanvasArrange.snapMove({x: start.x + dx, y: start.y + dy, w: start.w, h: start.h}, targets, 6 / scale);
-  }
-  function renderSnapGuides(guides) {
-    let layer = $('snapGuides');
-    if (!guides.length) {
-      if (layer) layer.innerHTML = '';
-      return;
-    }
-    if (!layer) {
-      layer = document.createElement('div');
-      layer.id = 'snapGuides';
-      layer.className = 'snap-guides';
-      $('viewport').appendChild(layer);
-    }
-    layer.innerHTML = guides.map(guide => guide.axis === 'x'
-      ? `<i class="snap-guide x" style="left:${guide.pos}px;top:${guide.from}px;height:${guide.to - guide.from}px"></i>`
-      : `<i class="snap-guide y" style="top:${guide.pos}px;left:${guide.from}px;width:${guide.to - guide.from}px"></i>`).join('');
-  }
-  // Align / distribute the selected nodes; locked nodes keep their place.
-  function arrangeSelection(kind, mode) {
-    const rects = [...selectedNodes].map(id => nodes.get(id)).filter(node => node && !node.data.locked).map(node => nodeWorldRect(node));
-    if (kind === 'distribute' && rects.length < 3) return toast('等距分布需要至少 3 个未锁定的节点', 'warn');
-    if (rects.length < 2) return toast('请先选中至少 2 个未锁定的节点', 'warn');
-    const placed = kind === 'distribute' ? CanvasArrange.distributeRects(rects, mode) : CanvasArrange.alignRects(rects, mode);
-    placed.forEach(item => {
-      const node = nodes.get(item.id);
-      if (node) moveNode(node, item.x, item.y);
-    });
-    drawEdges();
-    scheduleGroupRender();
-    updateSelectionToolbar();
-    saveProject();
   }
 
   function safeReleasePointerCapture(el, pointerId) {
@@ -3074,12 +2842,11 @@
   function closeFloatingCanvasUi() {
     closeNodeContextMenu();
     closeNodeTypeMenu();
-    toggleShortcutHelp(false);
     closeFabricEditor();
     closeCropperEditor();
   }
   function isCanvasOverlayTarget(target) {
-    return !!target.closest('.balance-popover,.history-drawer,.queue-drawer,.canvas-rail,.bottom-canvas-tools,.zoom-control,.canvas-tidy-btn,.selection-toolbar,.topbar,.workflow-bar,.mascot-button,.mascot-switch,.chat-preview,.chat-panel,.settings-drawer,.command-palette,.modal,.image-modal,.fabric-editor-modal,.cropper-modal,.local-edit-modal,.batch-variants-modal,.camera-modal');
+    return !!target.closest('.history-drawer,.queue-drawer,.canvas-rail,.bottom-canvas-tools,.zoom-control,.canvas-tidy-btn,.selection-toolbar,.topbar,.workflow-bar,.canvas-search-bar,.mascot-button,.mascot-switch,.chat-preview,.chat-panel,.settings-drawer,.command-palette,.modal,.image-modal,.fabric-editor-modal,.cropper-modal,.camera-modal');
   }
   function trapVisibleDialogFocus(e) {
     if (e.key !== 'Tab') return false;
@@ -3099,28 +2866,27 @@
   }
   function handleGlobalKeydown(e) {
     if (trapVisibleDialogFocus(e)) return;
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'f' && activeWorkspace === 'canvas' && !$('appShell')?.classList.contains('hidden')) {
+      e.preventDefault();
+      openCanvasSearch();
+      return;
+    }
+    if (activeWorkspace === 'canvas' && !$('appShell')?.classList.contains('hidden') && !isEditableTarget(e.target) && !e.target.closest?.('[role="dialog"],.command-palette') && $('modal')?.classList.contains('hidden') && e.key === 'Delete' && selectedNodes.size) {
+      e.preventDefault();
+      deleteSelectedNodes();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       openCommandPalette();
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && String(e.key || '').toLowerCase() === 'f'
-      && activeWorkspace === 'canvas' && !$('appShell')?.classList.contains('hidden')
-      && !e.target.closest?.('[role="dialog"],.command-palette')) {
-      e.preventDefault();
-      openCanvasSearch();
-      return;
-    }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !isEditableTarget(e.target) && !e.target.closest?.('[role="dialog"],.command-palette')) {
       const key = String(e.key || '').toLowerCase();
-      if (key === 'd' && selectedNodes.size && canvasShortcutTarget(e)) {
+      if (key === 'd' && selectedNodes.size) {
         e.preventDefault();
-        duplicateNodes([...selectedNodes]);
+        [...selectedNodes].forEach(id => duplicateNode(id));
         return;
-      }
-      if (key === 'g' && canvasShortcutTarget(e)) {
-        e.preventDefault();
-        return e.shiftKey ? ungroupSelectedNodes() : groupSelectedNodes();
       }
       if (key === 'z') {
         e.preventDefault();
@@ -3131,25 +2897,7 @@
         return redoProject();
       }
     }
-    if (!e.ctrlKey && !e.metaKey && !e.altKey && canvasShortcutTarget(e)) {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodes.size) {
-        e.preventDefault();
-        return deleteSelectedNodes();
-      }
-      if (e.shiftKey && e.code === 'Digit1') {
-        e.preventDefault();
-        return fitView(true);
-      }
-      if (e.key === '?') {
-        e.preventDefault();
-        return toggleShortcutHelp();
-      }
-    }
     if (e.key === 'Escape') {
-      if (!$('shortcutHelp')?.classList.contains('hidden')) {
-        toggleShortcutHelp(false);
-        return;
-      }
       if (isCanvasSearchOpen()) {
         closeCanvasSearch();
         return;
@@ -3166,7 +2914,6 @@
       closeCropperEditor();
       closeCameraModal();
       closeNodeContextMenu();
-      closeNodeTypeMenu();
       closeTextEditor();
       closeSettings();
       closeHistory();
@@ -3187,21 +2934,6 @@
   }
   function isEditableTarget(target) {
     return !!target?.closest?.('input,textarea,select,[contenteditable="true"]');
-  }
-  // Single-key canvas shortcuts: only on the visible canvas, never while typing or inside a dialog.
-  function canvasShortcutTarget(e) {
-    return activeWorkspace === 'canvas' && !$('appShell')?.classList.contains('hidden')
-      && !isEditableTarget(e.target) && !e.target.closest?.('[role="dialog"]:not(.shortcut-help),.command-palette')
-      && $('modal')?.classList.contains('hidden') !== false;
-  }
-  function toggleShortcutHelp(show) {
-    const help = $('shortcutHelp');
-    if (!help) return;
-    const open = show ?? help.classList.contains('hidden');
-    if (open === !help.classList.contains('hidden')) return;
-    if (open) closeCanvasSearch(false);
-    help.classList.toggle('hidden', !open);
-    $('shortcutHelpBtn')?.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
   function selectionIsDialogContent(selection) {
     const elementForNode = node => node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
@@ -3257,10 +2989,9 @@
   }
 
   function isCanvasMenuBlockedTarget(target) {
-    return !!target?.closest?.('.balance-popover,.canvas-rail,.bottom-canvas-tools,.canvas-tidy-btn,.history-drawer,.asset-library,.queue-drawer,.music-workbench,.assistant-workbench,.short-workbench,.topbar,.workflow-bar,.zoom-control,.selection-toolbar,.settings-drawer,.command-palette,.modal,.image-modal,.fabric-editor-modal,.cropper-modal,.local-edit-modal,.batch-variants-modal,.camera-modal,.chat-panel,.chat-preview,.mascot-button,.mascot-switch');
+    return !!target?.closest?.('.canvas-rail,.bottom-canvas-tools,.canvas-tidy-btn,.history-drawer,.asset-library,.queue-drawer,.music-workbench,.assistant-workbench,.short-workbench,.topbar,.workflow-bar,.canvas-search-popover,.zoom-control,.selection-toolbar,.settings-drawer,.command-palette,.modal,.image-modal,.fabric-editor-modal,.cropper-modal,.camera-modal,.chat-panel,.chat-preview,.mascot-button,.mascot-switch');
   }
 
-  // Small floating menu of buttons at a screen point; onPick receives the clicked button's data-* values.
   function openCanvasMenu(clientX, clientY, html, onPick, extraClass = '') {
     closeNodeTypeMenu();
     closeNodeContextMenu();
@@ -3305,7 +3036,7 @@
       } else if (picked.action === 'grid') {
         addNode('prompt', pos.x - 160, pos.y - 80, {title: '分镜格子', prompt: '分镜格子：画面编号 / 景别 / 主体动作 / 场景 / 镜头运动 / 画面连续性。'});
       } else if (picked.action === 'template') {
-        openTemplateGallery({mode: 'insert', at: pos});
+        openWorkflowLibrary();
       } else if (picked.type) {
         const wide = ['image', 'video', 'comfyui'].includes(picked.type);
         addNode(picked.type, pos.x - (wide ? 260 : 160), pos.y - 80);
@@ -3328,30 +3059,23 @@
     nodeTypeMenuCloser = null;
     document.querySelector('.node-type-menu')?.remove();
   }
-  // Right-click menu for every node type. With several nodes selected, the common actions apply to all of them.
   function showNodeContextMenu(node, clientX, clientY) {
-    if (!node) return;
+    if (!node || (node.type !== 'image' && node.type !== 'video')) return;
     closeNodeContextMenu();
-    closeNodeTypeMenu();
-    if (!selectedNodes.has(node.id)) selectSingleNode(node.id);
-    const ids = selectedNodes.has(node.id) ? [...selectedNodes] : [node.id];
+    selectSingleNode(node.id);
     const menu = document.createElement('div');
     menu.className = 'node-context-menu';
     menu.dataset.node = node.id;
-    menu.setAttribute('role', 'menu');
-    const single = ids.length === 1;
-    menu.innerHTML = (single && node.type === 'image' ? imageContextMenuHtml() : '')
-      + (single && node.type === 'video' ? videoContextMenuHtml() : '')
-      + commonContextMenuHtml(ids);
+    menu.innerHTML = node.type === 'image' ? imageContextMenuHtml() : videoContextMenuHtml();
     document.body.appendChild(menu);
     const r = menu.getBoundingClientRect();
-    menu.style.left = Math.max(12, Math.min(clientX, window.innerWidth - r.width - 12)) + 'px';
-    menu.style.top = Math.max(12, Math.min(clientY, window.innerHeight - r.height - 12)) + 'px';
+    menu.style.left = Math.min(clientX, window.innerWidth - r.width - 12) + 'px';
+    menu.style.top = Math.min(clientY, window.innerHeight - r.height - 12) + 'px';
     menu.onclick = e => {
       const item = e.target.closest('[data-node-action]');
       if (!item || item.classList.contains('disabled')) return;
+      runNodeContextAction(node, item.dataset.nodeAction);
       closeNodeContextMenu();
-      runNodeContextAction(node, item.dataset.nodeAction, ids);
     };
     nodeContextMenuCloser = e => {
       if (!menu.contains(e.target)) closeNodeContextMenu();
@@ -3363,37 +3087,13 @@
     nodeContextMenuCloser = null;
     document.querySelector('.node-context-menu')?.remove();
   }
-  function nodeHasDownload(node) {
-    return !!node?.data?.url && ['image', 'video', 'upload', 'media-tool'].includes(node.type);
-  }
-  function commonContextMenuHtml(ids) {
-    const list = ids.map(id => nodes.get(id)).filter(Boolean);
-    const count = list.length > 1 ? `<em>${list.length} 个</em>` : '';
-    const locked = list.length && list.every(item => item.data.locked);
-    const grouped = list.some(item => [...groups.values()].some(group => group.nodeIds.includes(item.id)));
-    const key = text => `<kbd>${text}</kbd>`;
-    return `
-      <section><span>${list.length > 1 ? '选中的节点' : '节点'}</span>
-        <button data-node-action="copy"><i class="fa-regular fa-copy"></i> 复制 ${count || key('Ctrl+D')}</button>
-        <button data-node-action="delete"><i class="fa-regular fa-trash-can"></i> 删除 ${count || key('Delete')}</button>
-        <button data-node-action="lock"><i class="fa-solid ${locked ? 'fa-lock-open' : 'fa-lock'}"></i> ${locked ? '解锁' : '锁定'}</button>
-        <button data-node-action="front"><i class="fa-solid fa-arrow-up-wide-short"></i> 置顶</button>
-        <button data-node-action="back"><i class="fa-solid fa-arrow-down-short-wide"></i> 置底</button>
-        ${list.some(nodeHasDownload) ? '<button data-node-action="download"><i class="fa-solid fa-download"></i> 下载</button>' : ''}
-        ${list.some(nodeHasDownload) ? '<button data-node-action="export-share"><i class="fa-solid fa-share-nodes"></i> 导出分享包</button>' : ''}
-        ${list.length > 1 ? `<button data-node-action="group"><i class="fa-regular fa-object-group"></i> 编组 ${key('Ctrl+G')}</button>` : ''}
-        ${grouped ? `<button data-node-action="ungroup"><i class="fa-regular fa-object-ungroup"></i> 取消组 ${key('Ctrl+Shift+G')}</button>` : ''}
-        <button data-node-action="save-template"><i class="fa-solid fa-floppy-disk"></i> 保存为模板</button>
-      </section>`;
-  }
   function imageContextMenuHtml() {
     return `
       <section><span>图片操作</span>
-        <button data-node-action="region-edit"><i class="fa-solid fa-wand-magic-sparkles"></i> 局部编辑 <em>重绘/扩图/抠图</em></button>
-        <button data-node-action="batch-variants"><i class="fa-solid fa-layer-group"></i> 批量与变体 <em>一次出多张</em></button>
-        <button data-node-action="pick-continue"><i class="fa-solid fa-check-double"></i> 选用这张继续</button>
+        <button data-node-action="download"><i class="fa-solid fa-download"></i> 下载图片</button>
         <button data-node-action="crop-image"><i class="fa-solid fa-crop-simple"></i> 快速裁剪 <em>比例</em></button>
         <button data-node-action="fabric-edit"><i class="fa-solid fa-pen-ruler"></i> 编辑图片 <em>高级</em></button>
+        <button data-node-action="restore-image-version"><i class="fa-solid fa-clock-rotate-left"></i> 恢复上一版</button>
         <button data-node-action="send-to-director"><i class="fa-solid fa-video"></i> 发送到导演台 <em>背景</em></button>
         <button data-node-action="asset"><i class="fa-solid fa-plus"></i> 加入我的资产 <em>永久</em></button>
         <button data-node-action="assistant"><i class="fa-solid fa-wand-magic-sparkles"></i> 发送到灵感助手</button>
@@ -3405,13 +3105,13 @@
       <section><span>智能分析</span>
         <button data-node-action="describe"><i class="fa-regular fa-image"></i> 图片描述</button>
       </section>
-      <section><span>生成请求</span>
-        <button data-node-action="preview-request"><i class="fa-solid fa-magnifying-glass"></i> 请求预览 <em>将要发送</em></button>
-        <button data-node-action="last-request"><i class="fa-solid fa-clock-rotate-left"></i> 上次请求</button>
-      </section>
       <section><span>输入节点</span>
         <button data-node-action="grid"><i class="fa-solid fa-chart-simple"></i> 分镜格子</button>
         <button data-node-action="script"><i class="fa-solid fa-chart-simple"></i> 脚本</button>
+      </section>
+      <section>
+        <button data-node-action="copy"><i class="fa-regular fa-copy"></i> 复制节点</button>
+        <button data-node-action="delete"><i class="fa-regular fa-trash-can"></i> 删除节点</button>
       </section>`;
   }
   function videoContextMenuHtml() {
@@ -3421,24 +3121,48 @@
       </section>
       <section><span>输入节点</span>
         <button data-node-action="script"><i class="fa-solid fa-chart-simple"></i> 脚本</button>
+      </section>
+      <section>
+        <button data-node-action="copy"><i class="fa-regular fa-copy"></i> 复制节点</button>
+        <button data-node-action="delete"><i class="fa-regular fa-trash-can"></i> 删除节点</button>
       </section>`;
   }
   function renderSelection() {
+    document.body.classList.toggle('multi-node-selection', selectedNodes.size > 1);
     let layer = 80;
     nodes.forEach(node => {
       const selected = selectedNodes.has(node.id);
       node.el.classList.toggle('selected-node', selected);
-      node.el.style.zIndex = selected ? String(layer++) : CanvasNodes.layerZIndex(node.data);
+      node.el.style.zIndex = selected ? String(layer++) : '';
     });
-    // With 2+ nodes selected the shared selection toolbar replaces the per-node toolbars, which would stack and cover group labels.
-    $('canvas')?.classList.toggle('multi-selected', selectedNodes.size > 1);
     updateSelectionToolbar();
-    revealSelectedNode();
     requestAnimationFrame(drawEdges);
   }
   function clearSelection() {
+    if (!selectedNodes.size) return;
     selectedNodes.clear();
     renderSelection();
+  }
+  function isCanvasSearchOpen() {
+    return !!$('canvasSearchPopover') && !$('canvasSearchPopover').classList.contains('hidden');
+  }
+  function openCanvasSearch() {
+    const popover = $('canvasSearchPopover');
+    if (!popover) return;
+    popover.classList.remove('hidden');
+    $('canvasSearchBtn')?.setAttribute('aria-expanded', 'true');
+    requestAnimationFrame(() => {
+      $('canvasSearchInput')?.focus();
+      $('canvasSearchInput')?.select();
+    });
+  }
+  function closeCanvasSearch(restoreFocus = true) {
+    const popover = $('canvasSearchPopover');
+    if (!popover || popover.classList.contains('hidden')) return;
+    const hadFocus = popover.contains(document.activeElement);
+    popover.classList.add('hidden');
+    $('canvasSearchBtn')?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && hadFocus) $('canvasSearchBtn')?.focus();
   }
   function updateSelectionToolbar() {
     const toolbar = $('selectionToolbar');
@@ -3450,71 +3174,21 @@
     const rects = [...selectedNodes].map(id => nodes.get(id)?.el.getBoundingClientRect()).filter(Boolean);
     if (!rects.length) return toolbar.classList.add('hidden');
     const canvasRect = $('canvas').getBoundingClientRect();
-    toolbar.classList.remove('hidden');
-    const width = toolbar.offsetWidth;
-    const height = toolbar.offsetHeight;
-    // Group labels count as part of the selection, so the toolbar never covers the label you drag a group by.
-    const labels = [...groups.values()]
-      .filter(group => group.nodeIds.some(id => selectedNodes.has(id)))
-      .map(group => group.el.querySelector('.canvas-group-label')?.getBoundingClientRect())
-      .filter(rect => rect?.width);
     const left = Math.min(...rects.map(r => r.left)) - canvasRect.left;
-    const top = Math.min(...rects.concat(labels).map(r => r.top)) - canvasRect.top;
-    const bottom = Math.max(...rects.map(r => r.bottom)) - canvasRect.top;
-    toolbar.style.left = Math.max(12, Math.min(left, canvasRect.width - width - 12)) + 'px';
-    // Above the selection when there is room, otherwise just below it; always inside the canvas.
-    const above = top - height - 10;
-    toolbar.style.top = Math.max(12, Math.min(above >= 12 ? above : bottom + 10, canvasRect.height - height - 12)) + 'px';
+    const top = Math.min(...rects.map(r => r.top)) - canvasRect.top;
+    const right = Math.max(...rects.map(r => r.right)) - canvasRect.left;
+    toolbar.style.left = Math.max(12, Math.min(right - 150, left)) + 'px';
+    toolbar.style.top = Math.max(12, top - 46) + 'px';
+    toolbar.classList.remove('hidden');
   }
   function deleteSelectedNodes() {
     if (!selectedNodes.size) return toast('请先框选节点', 'warn');
-    deleteNodes([...selectedNodes]);
-  }
-  // Deletes in one save (one undo step); locked nodes are kept.
-  function deleteNodes(ids) {
-    const list = unique(ids).map(id => nodes.get(id)).filter(Boolean);
-    const removable = list.filter(node => !node.data.locked);
-    if (!removable.length) return toast(list.length ? '节点已锁定，解锁后才能删除' : '没有可删除的节点', 'warn');
-    removable.forEach(node => deleteNode(node.id, false));
+    [...selectedNodes].forEach(id => deleteNode(id, false));
+    selectedNodes.clear();
     drawEdges();
     renderSelection();
     saveProject();
-    const kept = list.length - removable.length;
-    toast(`已删除 ${removable.length} 个节点${kept ? `，${kept} 个锁定节点未删除` : ''}（Ctrl+Z 可撤销）`, 'success');
-  }
-  function setNodesLocked(ids, locked) {
-    ids.forEach(id => {
-      const node = nodes.get(id);
-      if (!node) return;
-      if (locked) node.data.locked = true;
-      else delete node.data.locked;
-      hydrateNode(node);
-    });
-    saveProject();
-    toast(locked ? '已锁定：不能拖动或删除' : '已解锁', 'success');
-  }
-  // 置顶 / 置底: the nodes get a stacking rank just above / below every other node.
-  function setNodesLayer(ids, toFront) {
-    const ranks = [...nodes.values()].filter(node => !ids.includes(node.id)).map(node => Math.round(Number(node.data.z) || 0));
-    const z = toFront ? Math.min(60, Math.max(0, ...ranks) + 1) : Math.max(-7, Math.min(0, ...ranks) - 1);
-    ids.forEach(id => {
-      const node = nodes.get(id);
-      if (node) node.data.z = z;
-    });
-    renderSelection();
-    saveProject();
-  }
-  // Every image / video / material output of the nodes; several files are staggered so none is dropped.
-  function downloadNodes(ids) {
-    const jobs = [];
-    unique(ids).map(id => nodes.get(id)).filter(nodeHasDownload).forEach(node => {
-      const url = node.data.url;
-      if (node.type === 'image') (canvasRuntime()?.imagePreviewUrls?.(node) || [url]).filter(Boolean).forEach(src => jobs.push(() => downloadImage(src)));
-      else if (node.type === 'video' || isVideoMedia(node.data.mime, url)) jobs.push(() => downloadMedia(url, 'future_video_' + Date.now() + '_' + jobs.length + '.mp4'));
-      else jobs.push(() => downloadMedia(url, node.data.name || ''));
-    });
-    if (!jobs.length) return toast('选中的节点还没有可下载的图片或视频', 'warn');
-    jobs.forEach((job, index) => setTimeout(job, index * 250));
+    toast('已删除选中节点', 'success');
   }
 
   function blankProject(...args) { return projectStore()?.blankProject?.(...args); }
@@ -3541,8 +3215,7 @@
   }
   function showHome(...args) { return projectStore()?.showHome?.(...args); }
   function showApp(...args) { return projectStore()?.showApp?.(...args); }
-  function showStartupScreen(...args) { return projectStore()?.showStartupScreen?.(...args); }
-  function openLastProject(...args) { return projectStore()?.openLastProject?.(...args); }
+  function resumeLastProjectOrShowHome(...args) { return projectStore()?.resumeLastProjectOrShowHome?.(...args); }
   function onProjectGridClick(...args) { return projectStore()?.onProjectGridClick?.(...args); }
   function onSideProjectClick(...args) { return projectStore()?.onSideProjectClick?.(...args); }
   async function renameProject(...args) { return projectStore()?.renameProject?.(...args); }
@@ -3589,8 +3262,8 @@
         nodes: () => nodes,
         selectedNodes: () => selectedNodes,
         providers: () => apiProviders,
-        imageModel: () => FutureAIApiDefaults.get('imageModel') || globalProviderForKind('image')?.imageModel || '',
-        videoModel: () => FutureAIApiDefaults.get('videoModel') || globalProviderForKind('video')?.videoModel || '',
+        imageModel: () => $('imageModel')?.value || globalProviderForKind('image')?.imageModel || '',
+        videoModel: () => $('videoModel')?.value || globalProviderForKind('video')?.videoModel || '',
         viewCenter,
         addNode,
         connectSilently,
@@ -3599,193 +3272,19 @@
         saveProject,
         runImage,
         runVideo,
-        openModal,
-        planWithChatModel: planCanvasAssistantIntent,
-        layoutItems: canvasAssistantLayoutItems,
-        moveNodes: moveCanvasAssistantNodes,
-        mediaOutputs: canvasAssistantMediaOutputs,
-        exportMedia: exportCanvasAssistantMedia,
-        generateImageKeepingOriginal,
-      exportCanvasSnapshot
+        openModal
       });
     }
     return canvasExecutorInstance;
-  }
-
-  // The canvas assistant asks the global chat model only for the intent JSON; without an API it uses keywords.
-  async function planCanvasAssistantIntent({system, user}) {
-    const provider = globalProviderForKind('chat');
-    const apiUrl = provider?.apiUrl || FutureAIApiDefaults.get('apiUrl').trim();
-    const model = provider?.chatModel || FutureAIApiDefaults.get('chatModel').trim();
-    const apiKey = provider ? await providerApiKey(provider) : '';
-    if (!apiUrl || !apiKey || !model) return null;
-    const res = await fetchJsonWithRetry(joinApiPath(apiUrl, provider?.chatEndpoint || '/chat/completions'), {timeoutMs: API_TIMEOUTS.text,
-      retries: 2,
-      retryUnsafe: true,
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey},
-      body: JSON.stringify({model, messages: [{role: 'system', content: applyModelAgnosticTextRules(system, 'json')}, {role: 'user', content: user}], temperature: 0, max_tokens: 200})
-    });
-    const data = await safeJson(res);
-    if (!res.ok) throw new Error(data.error?.message || data.message || `HTTP ${res.status}`);
-    return parseFirstJsonObject(data.choices?.[0]?.message?.content || data.output_text || data.content || '');
-  }
-
-  function canvasAssistantLayoutItems(list) {
-    const groupOf = new Map();
-    groups.forEach(group => group.nodeIds.forEach(id => groupOf.set(id, group.id)));
-    return list.map(node => ({
-      id: node.id,
-      type: node.type,
-      title: nodeDisplayTitle(node),
-      x: node.x,
-      y: node.y,
-      ...nodeSize(node),
-      seq: Number(String(node.id).replace(/\D+/g, '')) || 0,
-      groupId: groupOf.get(node.id) || ''
-    }));
-  }
-
-  // All moves land in one saveProject(), so the whole arrangement is a single undo step.
-  function moveCanvasAssistantNodes(moves) {
-    moves.forEach(move => {
-      const node = nodes.get(move.id);
-      if (node) moveNode(node, move.x, move.y);
-    });
-    renderGroups();
-    drawEdges();
-    saveProject();
-  }
-
-  function canvasAssistantMediaOutputs(list) {
-    const deliveryNodes = list.map(node => BatchExportPayload.prepareNodeForDelivery({id: node.id, type: node.type, data: node.data}));
-    return ReviewPackage.buildReviewPayload({nodes: deliveryNodes}).outputs;
-  }
-
-  async function exportCanvasAssistantMedia({format, items}) {
-    if (!window.exportBridge?.exportMedia) throw new Error('当前环境不支持导出媒体');
-    if (!await ensureStorageReady()) return null;
-    return await window.exportBridge.exportMedia({storageDir, format, items: items.map(item => ({title: item.title, mediaType: item.mediaType, sourceUrl: item.sourceUrl}))});
-  }
-
-  async function exportCanvasSnapshot({scope} = {}) {
-    const api = window.FutureAICanvasSnapshot;
-    if (!api?.createCanvasSnapshot) throw new Error('画布快照模块不可用');
-    if (!await ensureStorageReady()) return null;
-    const resolvedScope = scope || (selectedNodes.size ? 'selection' : 'all');
-    const snap = api.createCanvasSnapshot({ document });
-    const captured = await snap.capture({ nodes, selectedIds: selectedNodes, scope: resolvedScope });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const fileName = `canvas_snapshot_${resolvedScope}_${stamp}.png`;
-    const saved = await persistMediaUrl(captured.dataUrl, fileName.replace(/\.png$/i, ''), 'png');
-    return { ok: true, url: saved, fileName, width: captured.width, height: captured.height, nodeCount: captured.nodeCount, scope: captured.scope };
   }
 
   function openCanvasExecutor() {
     setActiveWorkspace('canvas');
     return canvasExecutor()?.open();
   }
-
-  function agentUi() {
-    if (!agentUiInstance && AgentUI) {
-      agentUiInstance = AgentUI.create({
-        host: {
-          get storageDir() { return storageDir; },
-          get STORE() { return STORE; },
-          get codexCli() { return codexState?.cli || null; },
-          get codexState() { return codexState; },
-          get agentSessionId() { return agentSessionId; },
-          set agentSessionId(v) { agentSessionId = v; },
-          get agentRunning() { return agentRunning; },
-          set agentRunning(v) { agentRunning = v; },
-          get agentStatus() { return agentStatus; },
-          set agentStatus(v) { agentStatus = v; },
-          get agentOutput() { return agentOutput; },
-          set agentOutput(v) { agentOutput = v; }
-        },
-        $,
-        esc,
-        toast,
-        getStore,
-        setStore,
-        saveSettings,
-        agentApiConfig,
-        refreshCodex: () => refreshCodexCli({ force: true }),
-        chooseCodex: () => chooseCodexCommand(),
-        runCodex: async prompt => runDialogCodexAssistant({ userText: prompt, alreadyRecorded: true }),
-        handleCanvasRequest: handleAgentCanvasRequest,
-        onAgentProgress: payload => {
-          if (!dialogAgentRun) return;
-          const label = payload.type === 'tool' ? `智能体 · ${payload.name || '工具'}${payload.status === 'running' || payload.status === 'output' ? ' 执行中' : ''}`
-            : payload.type === 'approval' ? `等待你批准：${payload.name || ''}`
-            : payload.type === 'plan' ? '智能体已制定计划'
-            : payload.status === 'streaming' ? `智能体：${String(payload.text || '').slice(-120)}`
-            : payload.status === 'direct' ? '已识别为简单任务，直接执行'
-            : payload.status === 'verify' ? '正在自动验证（运行项目测试/检查）'
-            : `智能体思考中（第 ${payload.step || 1} 步${payload.model ? ` · ${payload.model}` : ''}）`;
-          const detail = payload.diff || payload.output;
-          updateDialogRun(dialogAgentRun, label, { transient: payload.status === 'streaming' || payload.status === 'output', ...(detail ? { detail } : {}) });
-        },
-        onAgentFinished: payload => {
-          const fromChat = !!dialogAgentRun;
-          if (dialogAgentRun) finishDialogRun(dialogAgentRun);
-          dialogAgentRun = null;
-          const text = payload?.content
-            || (payload?.type === 'error' ? `智能体执行失败：${payload.error || '未知错误'}` : '')
-            || (fromChat && payload?.cancelled ? '智能体任务已停止。' : '');
-          if (text) pushDialogMessage('assistant', text);
-          if (text || fromChat) {
-            saveProject();
-            renderDialogEditWorkbench();
-          }
-        }
-      });
-    }
-    return agentUiInstance;
-  }
-
-  async function agentApiConfig() {
-    ensureApiProviders();
-    const provider = globalProviderForKind('chat');
-    const baseUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '') || '';
-    const model = provider.chatModel || FutureAIApiDefaults.get('chatModel').trim() || '';
-    const apiKey = await providerApiKey(provider);
-    return { apiKey, baseUrl, model, format: provider.type || provider.protocolMessage || '', providerType: provider.type || '' };
-  }
-
-  async function handleAgentCanvasRequest(payload) {
-    const text = String(payload.request || '').trim();
-    const batch = payload.batch || null;
-    if (!text && !batch?.op) throw new Error('画布请求为空');
-    const selected = new Set(Array.isArray(payload.selection) ? payload.selection : [...selectedNodes]);
-    const executor = canvasExecutor();
-    if (!executor) throw new Error('画布助手不可用');
-    if (payload.selection?.length) {
-      selectedNodes.clear();
-      payload.selection.forEach(id => { if (nodes.has(id)) selectedNodes.add(id); });
-      renderSelection();
-    }
-    if (typeof executor.runDirect === 'function') {
-      return await executor.runDirect({
-        request: text || (batch?.op || ''),
-        selection: [...selected],
-        batch,
-        autoConfirm: true
-      });
-    }
-    const previous = $('canvasAssistantInput')?.value;
-    if ($('canvasAssistantInput')) $('canvasAssistantInput').value = text;
-    await executor.plan();
-    const proposal = executor.getProposal?.();
-    if (!proposal) throw new Error('未能生成画布提案');
-    await executor.apply();
-    if ($('canvasAssistantInput') && previous != null) $('canvasAssistantInput').value = previous;
-    return { ok: true, kind: proposal.kind, request: text, selected: [...selected] };
-  }
   function loadProject(...args) {
     const result = projectStore()?.loadProject?.(...args);
     syncCurrentProjectBudgetControl();
-    scheduleUnsavedMediaSweep(0);
     return result;
   }
   function renderProjectVersionControls(...args) { return projectStore()?.renderProjectVersionControls?.(...args); }
@@ -3827,6 +3326,7 @@
   function dialogMessageRunKind(...args) { return dialogRuntime()?.dialogMessageRunKind?.(...args); }
   function fallbackDialogRunPlan(...args) { return dialogRuntime()?.fallbackDialogRunPlan?.(...args); }
   function isPromptWritingRequest(...args) { return dialogRuntime()?.isPromptWritingRequest?.(...args); }
+  function isCodexTaskRequest(...args) { return dialogRuntime()?.isCodexTaskRequest?.(...args); }
   async function planDialogRunWithTextModel(...args) { return dialogRuntime()?.planDialogRunWithTextModel?.(...args); }
   function parseFirstJsonObject(...args) { return dialogRuntime()?.parseFirstJsonObject?.(...args); }
   function dialogReferenceIntent(...args) { return dialogRuntime()?.dialogReferenceIntent?.(...args); }
@@ -3903,7 +3403,7 @@
     }, null, false);
     const portrait = addNode('image', x + 390, y - 46, {
       prompt: '角色定妆图：保持角色卡中的身份、服装、发型和气质一致。',
-      model: FutureAIApiDefaults.get('imageModel'),
+      model: $('imageModel').value,
       size: '1024x1536',
       resolution: '1K'
     }, null, false);
@@ -3927,55 +3427,24 @@
     ];
     prompts.forEach((text, i) => {
       const p = addNode('prompt', x, y + i * 250, {prompt: text}, null, false);
-      const img = addNode('image', x + 430, y + i * 250 - 55, {model: FutureAIApiDefaults.get('imageModel'), size: i === 0 ? '1024x1536' : '1280x720'}, null, false);
+      const img = addNode('image', x + 430, y + i * 250 - 55, {model: $('imageModel').value, size: i === 0 ? '1024x1536' : '1280x720'}, null, false);
       connect(p.id, 'text', img.id, 'prompt');
     });
     saveProject();
     toast('已创建三镜头分镜组', 'success');
   }
 
-  let userTemplateCache = null;
-  let templateGalleryState = {mode: 'insert', category: 'all', at: null, focusSave: false};
-
   function customWorkflowDefinitions() {
-    if (Array.isArray(userTemplateCache)) return userTemplateCache.slice();
     return WorkflowLibrary?.loadLibrary() || [];
   }
   function allWorkflowDefinitions() {
     return [...(WorkflowLibrary?.BUILT_INS || []), ...customWorkflowDefinitions()];
-  }
-  async function refreshUserTemplates({migrateLocal = true} = {}) {
-    const bridge = window.templateBridge;
-    let portable = [];
-    if (bridge?.list) {
-      try { portable = await bridge.list() || []; }
-      catch (error) { console.warn('[templates] list failed', error); }
-    }
-    portable = (Array.isArray(portable) ? portable : []).map(item => {
-      try { return WorkflowLibrary.normalizeDefinition(Object.assign({}, item, {builtIn: false})); }
-      catch { return null; }
-    }).filter(Boolean);
-    const local = WorkflowLibrary?.loadLibrary() || [];
-    if (migrateLocal && local.length && bridge?.save) {
-      for (const item of local) {
-        if (portable.some(existing => existing.id === item.id)) continue;
-        try {
-          const saved = await bridge.save(WorkflowLibrary.normalizeDefinition(item));
-          if (saved) portable.unshift(WorkflowLibrary.normalizeDefinition(Object.assign({}, saved, {builtIn: false})));
-        } catch (error) { console.warn('[templates] migrate failed', error); }
-      }
-      try { WorkflowLibrary.saveLibrary([]); } catch {}
-    }
-    // Prefer portable; fall back to localStorage when bridge is unavailable (tests/dev).
-    userTemplateCache = portable.length || bridge?.list ? portable : local;
-    return userTemplateCache;
   }
   function openWorkflowLibraryForSelection() {
     const selected = [...selectedNodes].map(id => nodes.get(id)).filter(Boolean);
     if (selected.length) {
       const title = selected.length === 1 ? nodeDisplayTitle(selected[0]) : `组合工作流 ${selected.length} 节点`;
       if ($('workflowLibraryName')) $('workflowLibraryName').value = title;
-      if ($('templateGallerySaveName')) $('templateGallerySaveName').value = title;
     }
     openWorkflowLibrary();
   }
@@ -4016,112 +3485,6 @@
     drawer?.classList.add('hidden');
     drawer?.setAttribute('aria-hidden', 'true');
   }
-  async function openTemplateGallery(options = {}) {
-    if (!WorkflowLibrary) return toast('模板模块不可用', 'error');
-    closeHistory();
-    closeAssetLibrary();
-    closeQueueDrawer();
-    closeWorkflowLibrary();
-    templateGalleryState = {
-      mode: options.mode === 'new-project' ? 'new-project' : 'insert',
-      category: options.category || templateGalleryState.category || 'all',
-      at: options.at || null,
-      focusSave: Boolean(options.focusSave)
-    };
-    await refreshUserTemplates();
-    const selected = [...selectedNodes].map(id => nodes.get(id)).filter(Boolean);
-    if (selected.length && $('templateGallerySaveName') && !$('templateGallerySaveName').value) {
-      $('templateGallerySaveName').value = selected.length === 1 ? nodeDisplayTitle(selected[0]) : `我的模板 ${selected.length} 节点`;
-    }
-    renderTemplateGallery();
-    const modal = $('templateGalleryModal');
-    modal?.classList.remove('hidden');
-    modal?.setAttribute('aria-hidden', 'false');
-    if (templateGalleryState.focusSave) setTimeout(() => $('templateGallerySaveName')?.focus?.(), 0);
-  }
-  function closeTemplateGallery() {
-    const modal = $('templateGalleryModal');
-    modal?.classList.add('hidden');
-    modal?.setAttribute('aria-hidden', 'true');
-    templateGalleryState.at = null;
-    templateGalleryState.focusSave = false;
-  }
-  function renderTemplateGallery() {
-    const tabs = $('templateGalleryTabs');
-    const grid = $('templateGalleryGrid');
-    const saveBox = $('templateGallerySaveBox');
-    const title = $('templateGalleryTitle');
-    const subtitle = $('templateGallerySubtitle');
-    if (!tabs || !grid || !WorkflowLibrary) return;
-    const cats = WorkflowLibrary.CATEGORIES || [];
-    tabs.innerHTML = cats.map(cat => `<button type="button" role="tab" data-tpl-cat="${esc(cat.id)}" class="${templateGalleryState.category === cat.id ? 'active' : ''}" aria-selected="${templateGalleryState.category === cat.id ? 'true' : 'false'}">${esc(cat.name)}</button>`).join('');
-    const list = WorkflowLibrary.listByCategory(allWorkflowDefinitions(), templateGalleryState.category);
-    grid.innerHTML = list.map(templateGalleryCardHtml).join('') || `<div class="template-gallery-empty">${templateGalleryState.category === 'mine' ? '还没有「我的模板」。选中节点后可在下方保存。' : '这一类暂时没有模板'}</div>`;
-    const canSave = templateGalleryState.mode === 'insert' && selectedNodes.size > 0;
-    if (saveBox) saveBox.hidden = !canSave;
-    if (title) title.textContent = templateGalleryState.mode === 'new-project' ? '从模板新建项目' : '插入工作流模板';
-    if (subtitle) subtitle.textContent = templateGalleryState.mode === 'new-project'
-      ? '选一个模板，会新建项目并把链路放到画布中央'
-      : '点卡片或「放到画布」，整条链路一次放入（可撤销）';
-  }
-  function templateGalleryCardHtml(definition) {
-    const builtIn = Boolean(definition.builtIn || String(definition.id || '').startsWith('builtin-'));
-    const preview = WorkflowLibrary.schematicSvg(definition);
-    const cat = (WorkflowLibrary.CATEGORIES || []).find(item => item.id === definition.category)?.name || '模板';
-    return `<article class="template-gallery-card" data-template-id="${esc(definition.id)}" tabindex="0">
-      <div class="tpl-preview">${preview}</div>
-      <strong>${esc(definition.name)}</strong>
-      <p>${esc(definition.notes || '')}</p>
-      <div class="tpl-meta"><span>${esc(cat)} · ${definition.nodes.length} 节点</span><span>${builtIn ? '内置' : '我的'}</span></div>
-      <div class="tpl-actions">
-        <button type="button" class="primary-btn" data-template-use="${esc(definition.id)}"><i class="fa-solid fa-plus"></i> ${templateGalleryState.mode === 'new-project' ? '用它新建' : '放到画布'}</button>
-        ${builtIn ? '' : `<button type="button" class="icon-btn" data-template-delete="${esc(definition.id)}" title="删除我的模板"><i class="fa-regular fa-trash-can"></i></button>`}
-      </div>
-    </article>`;
-  }
-  function handleTemplateGalleryTabClick(event) {
-    const btn = event.target.closest('[data-tpl-cat]');
-    if (!btn) return;
-    templateGalleryState.category = btn.dataset.tplCat || 'all';
-    renderTemplateGallery();
-  }
-  async function handleTemplateGalleryGridClick(event) {
-    const remove = event.target.closest('[data-template-delete]');
-    const use = event.target.closest('[data-template-use]') || event.target.closest('[data-template-id]');
-    if (remove) {
-      event.stopPropagation();
-      const definition = workflowDefinitionById(remove.dataset.templateDelete);
-      if (!definition || definition.builtIn) return;
-      try {
-        if (window.templateBridge?.remove) await window.templateBridge.remove(definition.id);
-        userTemplateCache = (userTemplateCache || []).filter(item => item.id !== definition.id);
-        WorkflowLibrary.saveLibrary(WorkflowLibrary.deleteLibraryItem(WorkflowLibrary.loadLibrary(), definition.id));
-        renderTemplateGallery();
-        renderWorkflowLibrary();
-        toast(`已删除模板：${definition.name}`, 'success');
-      } catch (error) {
-        toast(error?.message || '删除模板失败', 'error');
-      }
-      return;
-    }
-    if (!use) return;
-    const id = use.dataset.templateUse || use.dataset.templateId;
-    const definition = workflowDefinitionById(id);
-    if (!definition) return;
-    await applyTemplateDefinition(definition);
-  }
-  async function applyTemplateDefinition(definition) {
-    if (!definition) return;
-    if (templateGalleryState.mode === 'new-project') {
-      closeTemplateGallery();
-      const project = await createProject(true, definition.name, 'blank');
-      if (!project) return;
-      instantiateWorkflowDefinition(definition, {center: viewCenter()});
-      return;
-    }
-    instantiateWorkflowDefinition(definition, {center: templateGalleryState.at || viewCenter()});
-    closeTemplateGallery();
-  }
   function workflowCardHtml(definition) {
     const builtIn = Boolean(definition.builtIn || String(definition.id || '').startsWith('builtin-'));
     return `<article class="workflow-library-card" data-workflow-id="${esc(definition.id)}">
@@ -4150,150 +3513,63 @@
     })).filter(group => group.nodeIds.length > 1);
     return {nodes: selected.map(node => ({id: node.id, type: node.type, x: node.x, y: node.y, data: node.data})), edges: selectedEdges, groups: selectedGroups};
   }
-  async function persistUserTemplate(definition) {
-    const normalized = WorkflowLibrary.normalizeDefinition(Object.assign({}, definition, {builtIn: false}));
-    if (window.templateBridge?.save) {
-      const saved = await window.templateBridge.save(normalized);
-      const item = WorkflowLibrary.normalizeDefinition(Object.assign({}, saved || normalized, {builtIn: false}));
-      userTemplateCache = WorkflowLibrary.upsertLibraryItem(userTemplateCache || [], item);
-      try { WorkflowLibrary.saveLibrary([]); } catch {}
-      return item;
-    }
-    const saved = WorkflowLibrary.saveLibrary(WorkflowLibrary.upsertLibraryItem(customWorkflowDefinitions(), normalized));
-    userTemplateCache = saved;
-    return normalized;
-  }
-  async function saveSelectedAsUserTemplate() {
-    if (!WorkflowLibrary) return toast('模板模块不可用', 'error');
-    try {
-      const snapshot = selectedWorkflowSnapshot();
-      const name = String($('templateGallerySaveName')?.value || $('workflowLibraryName')?.value || '').trim();
-      if (!name) return toast('请填写模板名称', 'warn');
-      const definition = WorkflowLibrary.createDefinition({
-        name,
-        category: 'image',
-        notes: '我保存的模板',
-        ...snapshot
-      });
-      const saved = await persistUserTemplate(definition);
-      templateGalleryState.category = 'mine';
-      renderTemplateGallery();
-      renderWorkflowLibrary();
-      toast(`已保存到「我的模板」：${saved.name}`, 'success');
-    } catch (error) {
-      toast(error?.message || '保存模板失败', 'warn');
-    }
-  }
   function saveSelectedWorkflow() {
     if (!WorkflowLibrary) return toast('工作流模块不可用', 'error');
-    (async () => {
-      try {
-        const snapshot = selectedWorkflowSnapshot();
-        const name = String($('workflowLibraryName')?.value || '').trim();
-        if (!name) return toast('请填写工作流名称', 'warn');
-        const exposed = {inputs: [], outputs: [], parameters: []};
-        document.querySelectorAll('#workflowExposureControls [data-exposure-kind]:checked').forEach(input => {
-          const item = {nodeId: String(input.dataset.nodeId || '')};
-          if (input.dataset.field) item.field = String(input.dataset.field);
-          const kind = input.dataset.exposureKind;
-          if (kind === 'output') exposed.outputs.push(item);
-          else { exposed.parameters.push(item); exposed.inputs.push(item); }
-        });
-        const definition = WorkflowLibrary.createDefinition({
-          name,
-          version: String($('workflowLibraryVersion')?.value || '1.0.0').trim(),
-          notes: String($('workflowLibraryNotes')?.value || '').trim(),
-          ...snapshot,
-          exposed
-        });
-        const savedDef = await persistUserTemplate(definition);
-        const group = addGroup([...selectedNodes], null, definition.name, false, {
-          workflowId: savedDef.id,
-          workflowVersion: savedDef.version,
-          workflowDefinition: savedDef,
-          collapsed: false
-        });
-        if (group) renderGroup(group);
-        saveProject();
-        renderWorkflowLibrary();
-        renderTemplateGallery();
-        toast(`已保存工作流：${savedDef.name} v${savedDef.version}`, 'success');
-      } catch (error) {
-        toast(error?.message || '保存工作流失败', 'warn');
-      }
-    })();
+    try {
+      const snapshot = selectedWorkflowSnapshot();
+      const name = String($('workflowLibraryName')?.value || '').trim();
+      if (!name) return toast('请填写工作流名称', 'warn');
+      const exposed = {inputs: [], outputs: [], parameters: []};
+      document.querySelectorAll('#workflowExposureControls [data-exposure-kind]:checked').forEach(input => {
+        const item = {nodeId: String(input.dataset.nodeId || '')};
+        if (input.dataset.field) item.field = String(input.dataset.field);
+        const kind = input.dataset.exposureKind;
+        if (kind === 'output') exposed.outputs.push(item);
+        else { exposed.parameters.push(item); exposed.inputs.push(item); }
+      });
+      const definition = WorkflowLibrary.createDefinition({
+        name,
+        version: String($('workflowLibraryVersion')?.value || '1.0.0').trim(),
+        notes: String($('workflowLibraryNotes')?.value || '').trim(),
+        ...snapshot,
+        exposed
+      });
+      const saved = WorkflowLibrary.saveLibrary(WorkflowLibrary.upsertLibraryItem(customWorkflowDefinitions(), definition));
+      const group = addGroup([...selectedNodes], null, definition.name, false, {
+        workflowId: definition.id,
+        workflowVersion: definition.version,
+        workflowDefinition: definition,
+        collapsed: false
+      });
+      if (group) renderGroup(group);
+      saveProject();
+      renderWorkflowLibrary();
+      toast(`已保存工作流：${definition.name} v${definition.version}（本地共 ${saved.length} 个）`, 'success');
+    } catch (error) {
+      toast(error?.message || '保存工作流失败', 'warn');
+    }
   }
   function workflowDefinitionById(id) {
     return allWorkflowDefinitions().find(item => item.id === id) || null;
   }
-  function instantiateWorkflowDefinition(definition, options = {}) {
+  function instantiateWorkflowDefinition(definition) {
     if (!definition || !WorkflowLibrary) return;
-    const center = options.center || viewCenter();
-    const existing = [...nodes.values()].map(node => ({type: node.type, x: node.x, y: node.y, data: {aspect: node.data?.aspect, size: node.data?.size}}));
-    const place = WorkflowLibrary.placementOrigin(definition, existing, center);
+    const center = viewCenter();
     const instance = WorkflowLibrary.instantiate(definition, {
-      originX: place.originX,
-      originY: place.originY,
-      imageModel: FutureAIApiDefaults.get('imageModel') || '',
-      videoModel: FutureAIApiDefaults.get('videoModel') || ''
+      originX: center.x - 380,
+      originY: center.y - 220,
+      imageModel: $('imageModel')?.value || '',
+      videoModel: $('videoModel')?.value || ''
     });
     instance.nodes.forEach(item => addNode(item.type, item.x, item.y, item.data, item.id, false));
-    alignInsertedTemplateNodes(instance.nodes.map(item => item.id));
     instance.edges.forEach(edge => connectSilently(edge.from, edge.fromPort || 'image', edge.to, edge.toPort || 'ref'));
-    instance.groups.forEach(group => addGroup(group.nodeIds, group.id, group.name || definition.name, false, group));
-    // Leave nothing selected so no node composer pops open over the fresh template; the group label selects it all.
+    instance.groups.forEach(group => addGroup(group.nodeIds, group.id, group.name, false, group));
     selectedNodes.clear();
+    instance.nodes.forEach(item => selectedNodes.add(item.id));
     renderSelection();
-    // Show the whole inserted template (with its group frame) at normal size or smaller; view-only, no extra undo step.
-    if (options.fit !== false) fitView(false, instance.nodes.map(item => item.id), {save: false, pad: 64, extraTop: 72});
     drawEdges();
-    syncCanvasEmptyState();
     saveProject();
-    toast(`已添加模板：${definition.name}`, 'success');
-    return instance;
-  }
-  // Re-flow inserted template nodes with their real rendered sizes: keep the template's columns (by x) and order
-  // (by y), stack each column with a fixed gap and centre columns vertically, so ports line up and nothing overlaps.
-  function alignInsertedTemplateNodes(ids) {
-    const list = ids.map(id => nodes.get(id)).filter(Boolean);
-    if (list.length < 2) return;
-    list.forEach(node => mountNode(node));
-    const originX = Math.min(...list.map(node => node.x));
-    const originY = Math.min(...list.map(node => node.y));
-    const columns = [];
-    [...list].sort((a, b) => a.x - b.x).forEach(node => {
-      const column = columns.find(col => Math.abs(col.x - node.x) < 200);
-      if (column) column.items.push(node);
-      else columns.push({x: node.x, items: [node]});
-    });
-    const COL_GAP = 110;
-    const ROW_GAP = 64;
-    columns.forEach(col => {
-      col.items.sort((a, b) => a.y - b.y);
-      col.sizes = col.items.map(node => nodeSize(node));
-      col.width = Math.max(...col.sizes.map(size => size.width));
-      col.height = col.sizes.reduce((sum, size) => sum + size.height, 0) + ROW_GAP * (col.items.length - 1);
-    });
-    const tallest = Math.max(...columns.map(col => col.height));
-    let x = originX;
-    columns.forEach(col => {
-      let y = originY + (tallest - col.height) / 2;
-      col.items.forEach((node, index) => {
-        moveNode(node, Math.round(x + (col.width - col.sizes[index].width) / 2), Math.round(y));
-        y += col.sizes[index].height + ROW_GAP;
-      });
-      x += col.width + COL_GAP;
-    });
-    // Real sizes can exceed the library's estimate; slide the whole block right until it clears existing nodes.
-    const idSet = new Set(ids);
-    const others = [...nodes.values()].filter(node => !idSet.has(node.id)).map(node => {
-      const size = nodeSize(node);
-      return {left: node.x, top: node.y, right: node.x + size.width, bottom: node.y + size.height};
-    });
-    if (!others.length) return;
-    const boxes = () => list.map(node => { const size = nodeSize(node); return {left: node.x, top: node.y, right: node.x + size.width, bottom: node.y + size.height}; });
-    const hits = () => boxes().some(a => others.some(b => !(a.right + 40 <= b.left || b.right + 40 <= a.left || a.bottom + 40 <= b.top || b.bottom + 40 <= a.top)));
-    for (let tries = 0; tries < 40 && hits(); tries += 1) list.forEach(node => moveNode(node, node.x + 160, node.y));
+    toast(`已添加工作流：${definition.name} v${definition.version}`, 'success');
   }
   function workflowGroupRunOrder(group) {
     const ids = new Set((group?.nodeIds || []).filter(id => nodes.has(id)));
@@ -4320,14 +3596,11 @@
     const group = groups.get(groupId);
     if (!group) return toast('组合工作流不存在', 'warn');
     const order = workflowGroupRunOrder(group);
-    // Nodes that already show a result are left alone; only empty ones are filled.
-    const skipped = new Set(order.filter(id => ['image', 'video', 'comfyui', 'media-tool'].includes(nodes.get(id)?.type) && nodeHasResult(nodes.get(id))));
-    const paid = order.filter(id => !skipped.has(id)).map(id => nodes.get(id)).filter(node => ['image', 'video', 'comfyui'].includes(node?.type));
-    const skippedNote = skippedResultText(skipped.size);
+    const paid = order.map(id => nodes.get(id)).filter(node => ['image', 'video', 'comfyui'].includes(node?.type));
     if (paid.length) {
       const approved = await openModal({
         title: '确认运行组合工作流',
-        text: `将按依赖顺序运行 ${order.length - skipped.size} 个节点，其中 ${paid.length} 个可能调用生成接口。${skippedNote ? `\n${skippedNote}。` : ''}\n\n未确认前不会发送请求；每个生成节点仍会继续执行模型能力和预算检查。`,
+        text: `将按依赖顺序运行 ${order.length} 个节点，其中 ${paid.length} 个可能调用生成接口。\n\n未确认前不会发送请求；每个生成节点仍会继续执行模型能力和预算检查。`,
         okText: '确认运行',
         cancelText: '取消',
         cancelValue: false,
@@ -4341,7 +3614,7 @@
     }
     for (const id of order) {
       const node = nodes.get(id);
-      if (!node || skipped.has(id)) continue;
+      if (!node) continue;
       let ok = true;
       if (node.type === 'prompt' || node.type === 'character') runPrompt(node.id);
       else if (node.type === 'image') ok = (await runImage(node.id)) !== false;
@@ -4354,7 +3627,7 @@
       }
     }
     saveProject();
-    toast(`组合工作流“${group.name}”运行完成${skippedNote ? `；${skippedNote}` : ''}`, 'success');
+    toast(`组合工作流“${group.name}”运行完成`, 'success');
   }
   function exportWorkflowDefinition(definition) {
     if (!definition) return;
@@ -4373,11 +3646,10 @@
     try {
       const parsed = JSON.parse(await file.text());
       const incoming = Array.isArray(parsed) ? parsed : [parsed];
-      for (const value of incoming) {
-        await persistUserTemplate(WorkflowLibrary.normalizeDefinition(value));
-      }
+      let library = customWorkflowDefinitions();
+      incoming.forEach(value => { library = WorkflowLibrary.upsertLibraryItem(library, WorkflowLibrary.normalizeDefinition(value)); });
+      WorkflowLibrary.saveLibrary(library);
       renderWorkflowLibrary();
-      renderTemplateGallery();
       toast(`已导入 ${incoming.length} 个工作流，私有信息已清理`, 'success');
     } catch (error) {
       toast(`工作流导入失败：${error?.message || error}`, 'error');
@@ -4392,18 +3664,9 @@
     if (remove) {
       const definition = workflowDefinitionById(remove.dataset.workflowDelete);
       if (!definition || definition.builtIn) return;
-      (async () => {
-        try {
-          if (window.templateBridge?.remove) await window.templateBridge.remove(definition.id);
-          userTemplateCache = (userTemplateCache || []).filter(item => item.id !== definition.id);
-          WorkflowLibrary.saveLibrary(WorkflowLibrary.deleteLibraryItem(WorkflowLibrary.loadLibrary(), definition.id));
-          renderWorkflowLibrary();
-          renderTemplateGallery();
-          toast(`已删除本地工作流：${definition.name}`, 'success');
-        } catch (error) {
-          toast(error?.message || '删除失败', 'error');
-        }
-      })();
+      WorkflowLibrary.saveLibrary(customWorkflowDefinitions().filter(item => item.id !== definition.id));
+      renderWorkflowLibrary();
+      toast(`已删除本地工作流：${definition.name}`, 'success');
     }
   }
 
@@ -4413,9 +3676,7 @@
     $('chatPanel')?.classList.add('hidden');
     $('chatPreview')?.classList.add('hidden');
     document.querySelector('.workflow-bar')?.classList.remove('open');
-    setActiveWorkspace('short');
-    renderShortWorkbench();
-    jumpShortSection('idea', false);
+    setActiveWorkspace('canvas');
   }
 
   function openDialogEditWorkbench(...args) { return dialogRuntime()?.openDialogEditWorkbench?.(...args); }
@@ -4431,40 +3692,8 @@
   function isVideoUnderstandingRequest(...args) { return dialogRuntime()?.isVideoUnderstandingRequest?.(...args); }
   function isExplicitImageExecutionRequest(...args) { return dialogRuntime()?.isExplicitImageExecutionRequest?.(...args); }
   async function hydrateDialogTextAttachments(...args) { return dialogRuntime()?.hydrateDialogTextAttachments?.(...args); }
-  async function runDialogCodexAssistant(...args) {
-    const options = args[0] || {};
-    const agent = agentUi()?.settings?.() || {};
-    if (agent.backend !== 'codex') {
-      const text = String(options.userText ?? dialogEditInput ?? '').trim() || '请处理这些附件。';
-      if (!options.alreadyRecorded) {
-        if (dialogEditEditingIndex >= 0) applyDialogMessageEdit(text, options.attachments || dialogEditAttachments);
-        else pushDialogMessage('user', text, options.attachments || dialogEditAttachments);
-      }
-      // The message is in the thread either way; clear the composer so the task is not re-sent.
-      dialogEditInput = '';
-      dialogEditAttachments = [];
-      dialogEditEditingIndex = -1;
-      // Show the hand-off in the chat itself: the agent console is usually closed, so without this
-      // the chat looked dead while the agent worked (users closed the app mid-run).
-      dialogAgentRun = startDialogRun('agent', '内置智能体正在执行本地任务');
-      saveProject();
-      renderDialogEditWorkbench();
-      const started = await agentUi()?.start(text);
-      if (!started?.ok) {
-        finishDialogRun(dialogAgentRun);
-        dialogAgentRun = null;
-        pushDialogMessage('assistant', `智能体未能启动：${started?.error || '内置智能体不可用'}`);
-        saveProject();
-        renderDialogEditWorkbench();
-      }
-      return started;
-    }
-    return dialogRuntime()?.runDialogCodexAssistant?.(...args);
-  }
-  async function stopDialogCodexRun(...args) {
-    if (agentRunning) await agentUi()?.stop?.();
-    return dialogRuntime()?.stopDialogCodexRun?.(...args);
-  }
+  async function runDialogCodexAssistant(...args) { return dialogRuntime()?.runDialogCodexAssistant?.(...args); }
+  async function stopDialogCodexRun(...args) { return dialogRuntime()?.stopDialogCodexRun?.(...args); }
   async function runDialogEditGeneration(...args) { return dialogRuntime()?.runDialogEditGeneration?.(...args); }
   function setDialogEditStatus(...args) { return dialogRuntime()?.setDialogEditStatus?.(...args); }
 
@@ -4486,8 +3715,6 @@
       }
     ];
     const {res} = await fetchApiWithBaseFallback(o.apiUrl, o.endpoint || '/chat/completions', {timeoutMs: API_TIMEOUTS.text,
-      retries: 2,
-      retryUnsafe: true,
       method: 'POST',
       headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + o.apiKey},
       body: JSON.stringify({model: o.model, messages, temperature: 0.3, max_tokens: 1200}),
@@ -4519,8 +3746,6 @@
       });
     });
     const {res} = await fetchApiWithBaseFallback(o.apiUrl, o.endpoint || '/chat/completions', {timeoutMs: API_TIMEOUTS.text,
-      retries: 2,
-      retryUnsafe: true,
       method: 'POST',
       headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + o.apiKey},
       body: JSON.stringify({model: o.model, messages: [{role: 'system', content: '你是专业的视频理解与镜头分析助手。'}, {role: 'user', content}], temperature: 0.2, max_tokens: 1800})
@@ -4632,7 +3857,7 @@
   function createShortFrameNode(...args) { return shortWorkbench()?.createShortFrameNode?.(...args); }
   function createShortVideoNode(...args) { return shortWorkbench()?.createShortVideoNode?.(...args); }
 
-  function addNode(...args) { const node = canvasRuntime()?.addNode?.(...args); syncCanvasEmptyState(); return node; }
+  function addNode(...args) { return canvasRuntime()?.addNode?.(...args); }
   function normalizeTags(...args) { return canvasRuntime()?.normalizeTags?.(...args); }
   function normalizeNodeMetadata(...args) { return canvasRuntime()?.normalizeNodeMetadata?.(...args); }
   function normalizeData(...args) { return canvasRuntime()?.normalizeData?.(...args); }
@@ -4646,7 +3871,11 @@
   function renderNodeMetadata(...args) { return canvasRuntime()?.renderNodeMetadata?.(...args); }
   function nodeDefaultTitle(...args) { return canvasRuntime()?.nodeDefaultTitle?.(...args); }
   function nodeDisplayTitle(...args) { return canvasRuntime()?.nodeDisplayTitle?.(...args); }
+  function nodeQuickToolbar(...args) { return canvasRuntime()?.nodeQuickToolbar?.(...args); }
+  function getModelOptions(...args) { return canvasRuntime()?.getModelOptions?.(...args); }
+  function modelOptionsHtml(...args) { return canvasRuntime()?.modelOptionsHtml?.(...args); }
   function refreshNodeModelSelects(...args) { return canvasRuntime()?.refreshNodeModelSelects?.(...args); }
+  function refreshNodeProviderSelects(...args) { return canvasRuntime()?.refreshNodeProviderSelects?.(...args); }
   function refreshNodeCapabilityControls(...args) { return canvasRuntime()?.refreshNodeCapabilityControls?.(...args); }
   function bindNode(...args) { return canvasRuntime()?.bindNode?.(...args); }
   function beginNodeDrag(...args) { return canvasRuntime()?.beginNodeDrag?.(...args); }
@@ -4657,12 +3886,12 @@
   function clearCanvasSearch(...args) { return canvasRuntime()?.clearCanvasSearch?.(...args); }
   function canvasSearchText(...args) { return canvasRuntime()?.canvasSearchText?.(...args); }
   function nodeMatchesCanvasFilters(...args) { return canvasRuntime()?.nodeMatchesCanvasFilters?.(...args); }
-  function applyCanvasFilters(...args) { return canvasRuntime()?.applyCanvasFilters?.(...args); }
+  function applyCanvasFilters(...args) { const result = canvasRuntime()?.applyCanvasFilters?.(...args); canvasMinimap?.schedule(); return result; }
   function focusCanvasSearchResult(...args) { return canvasRuntime()?.focusCanvasSearchResult?.(...args); }
   function hydrateNode(...args) { return canvasRuntime()?.hydrateNode?.(...args); }
-  function deleteNode(...args) { const result = canvasRuntime()?.deleteNode?.(...args); syncCanvasEmptyState(); return result; }
-  function duplicateNodes(...args) { return canvasRuntime()?.duplicateNodes?.(...args) || []; }
-  function createConnectedNode(...args) { return canvasRuntime()?.createConnectedNode?.(...args); }
+  function hydrateCanvasPreviews(...args) { return canvasRuntime()?.hydrateCanvasPreviews?.(...args); }
+  function deleteNode(...args) { return canvasRuntime()?.deleteNode?.(...args); }
+  function duplicateNode(...args) { return canvasRuntime()?.duplicateNode?.(...args); }
   async function renameNode(...args) { return canvasRuntime()?.renameNode?.(...args); }
   function toggleNodeFavorite(...args) { return canvasRuntime()?.toggleNodeFavorite?.(...args); }
   async function editNodeTags(...args) { return canvasRuntime()?.editNodeTags?.(...args); }
@@ -4713,17 +3942,7 @@
     get nodes() { return [...nodes.values()].map(n => ({id: n.id, type: n.type, data: n.data})); },
     get edges() { return edges.slice(); },
     connect,
-    normalizeConnection: (fromId, toId, fromPort = 'text', toPort = 'prompt') => normalizeConnection(nodes.get(fromId), nodes.get(toId), fromPort, toPort),
-    setNodeData(id, patch = {}) {
-      const node = nodes.get(id);
-      if (!node) return false;
-      Object.assign(node.data || (node.data = {}), patch);
-      hydrateNode(node);
-      return true;
-    },
-    addImageAt(x, y, seed = {}) {
-      return addNode('image', x, y, seed);
-    }
+    normalizeConnection: (fromId, toId, fromPort = 'text', toPort = 'prompt') => normalizeConnection(nodes.get(fromId), nodes.get(toId), fromPort, toPort)
   };
 
   function getInputPrompt(id) {
@@ -4782,20 +4001,22 @@
     const prompt = (node.data.prompt || linkedPrompt || '').trim();
     if (!prompt) return toast('请先输入或连接一段提示词', 'warn');
     const provider = globalProviderForKind('chat');
-    const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
-    const model = provider.chatModel || FutureAIApiDefaults.get('chatModel').trim();
-    const apiKey = await providerApiKey(provider);
+    const apiUrl = provider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, '');
+    const model = provider.chatModel || $('chatModel').value.trim();
+    const apiKey = await providerApiKey(provider, 'chat', model);
     if (!apiUrl || !apiKey) {
+      if (apiKey) reportProviderKeyResult(provider, 'chat', {releaseOnly: true}, apiKey);
       return toast('请先在设置里完善全局聊天供应商和密钥', 'warn');
     }
     if (!model) {
+      reportProviderKeyResult(provider, 'chat', {releaseOnly: true}, apiKey);
       return toast('请先选择或填写全局聊天模型', 'warn');
     }
     const btn = node.el.querySelector('[data-optimize-prompt]');
     const oldText = btn?.innerHTML;
     if (btn) {
       btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>' + (btn.hasAttribute('data-icon-only') ? '' : ' 优化中');
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 优化中';
     }
     try {
       const optimized = await optimizePromptRequest({
@@ -4809,8 +4030,10 @@
       node.data.prompt = optimized;
       hydrateNode(node);
       saveProject();
+      reportProviderKeyResult(provider, 'chat', null, apiKey);
       toast('提示词已优化', 'success');
     } catch (err) {
+      reportProviderKeyResult(provider, 'chat', err, apiKey);
       toast('优化失败：\n' + (err.message || String(err)), 'error');
     } finally {
       if (btn) {
@@ -4826,8 +4049,6 @@
       {role: 'user', content: `请把下面内容优化为适合${target}的高质量提示词。要求：保留用户原意，补充主体、场景、镜头、光线、风格、构图、细节和一致性约束；避免敏感和违规表达；不要超过 220 个中文字。\n\n原提示词：\n${o.prompt}`}
     ];
     const res = await fetchJsonWithRetry(joinApiPath(o.apiUrl, o.provider?.chatEndpoint || '/chat/completions'), {timeoutMs: API_TIMEOUTS.text,
-      retries: 2,
-      retryUnsafe: true,
       method: 'POST',
       headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + o.apiKey},
       body: JSON.stringify({model: o.model, messages, temperature: 0.4})
@@ -4854,8 +4075,6 @@
       {role: 'user', content: `请把以下内部任务上下文整理为高质量图片提示词。只输出最终图片提示词本身，不得复述系统规则、内部任务上下文、历史对话、模型无关规则或“用户原始指令”等标题。保留用户原意和硬约束，补足主体、动作、场景、景别、构图、光线、材质、风格与细节；不要凭空添加文字、水印或未要求的人物；不超过 700 个中文字符。\n\n内部任务上下文：\n${String(rawPrompt || '').slice(0, 12000)}`}
     ];
     const res = await fetchJsonWithRetry(joinApiPath(apiUrl, provider?.chatEndpoint || '/chat/completions'), {timeoutMs: API_TIMEOUTS.text,
-      retries: 2,
-      retryUnsafe: true,
       method: 'POST',
       headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey},
       body: JSON.stringify({model, messages, temperature: 0.35, max_tokens: 1200})
@@ -4869,22 +4088,21 @@
   function providerConcurrencyLimit(...args) { return generationQueueApi()?.providerConcurrencyLimit?.(...args); }
   function enqueueImageGeneration(...args) { return generationQueueApi()?.enqueueImageGeneration?.(...args); }
 
-  async function runMediaTool(id, options = {}) {
-    // quiet: a rerun on a new node; its single result toast comes from the caller.
-    const say = (message, ...rest) => (options.quiet ? ((options.lastMessage = String(message || '')), false) : toast(message, ...rest));
+  async function runMediaTool(id) {
     const node = nodes.get(id);
     if (!node || node.type !== 'media-tool') return false;
-    if (!window.mediaBridge?.process) return say('当前安装缺少本地媒体处理桥接', 'warn');
+    if (!window.mediaBridge?.process) return toast('当前安装缺少本地媒体处理桥接', 'warn');
     if (!await ensureStorageReady()) return false;
     const linked = edges.filter(edge => edge.to === id && edge.toPort === 'media').map(edge => nodes.get(edge.from)?.data?.url || '').filter(Boolean);
     const sourceUrls = [...new Set([...(node.data.sourceUrls || []), ...linked])].filter(Boolean).slice(0, 2);
-    if (!sourceUrls.length) return say('请先连接源素材', 'warn');
+    if (!sourceUrls.length) return toast('请先连接源素材', 'warn');
     const operation = window.FutureAIMediaProcessContract?.operation(node.data.operation);
-    if (window.FutureAIMediaProcessContract?.requiresSecondSource(node.data.operation) && sourceUrls.length < 2) return say('该操作需要连接两个源素材', 'warn');
+    if (window.FutureAIMediaProcessContract?.requiresSecondSource(node.data.operation) && sourceUrls.length < 2) return toast('该操作需要连接两个源素材', 'warn');
     const previousUrl = node.data.url || '';
     const button = node.el.querySelector('[data-run="media-tool"]');
     if (button) {
-      UIRenderHelpers.setRunButtonBusy(button, true);
+      button.disabled = true;
+      button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 本地处理中';
     }
     node.data.status = `正在本地执行：${operation?.label || node.data.operation}`;
     node.data.statusType = 'running';
@@ -4896,6 +4114,11 @@
         sourceUrl: sourceUrls[0],
         secondSourceUrl: sourceUrls[1] || ''
       });
+      if (previousUrl && previousUrl !== result.url) {
+        const versions = Array.isArray(node.data.mediaVersions) ? node.data.mediaVersions : [];
+        if (!versions.some(item => item.url === previousUrl)) versions.push({url: previousUrl, operation: node.data.lastOperation || 'source', preservedAt: Date.now()});
+        node.data.mediaVersions = versions.slice(-30);
+      }
       node.data.url = result.url;
       node.data.urls = [result.url];
       node.data.sourceUrls = sourceUrls;
@@ -4918,7 +4141,7 @@
       hydrateNode(node);
       refreshDownstreamLinkedInputs(node.id);
       saveProject();
-      say('本地媒体处理完成（原素材未改动）', 'success');
+      toast('本地媒体处理完成，源文件已保留', 'success');
       return true;
     } catch (error) {
       node.data.url = previousUrl;
@@ -4926,11 +4149,12 @@
       node.data.statusType = 'error';
       hydrateNode(node);
       saveProject();
-      say(`本地媒体处理失败：\n${error?.message || error}`, 'error');
+      toast(`本地媒体处理失败：\n${error?.message || error}`, 'error');
       return false;
     } finally {
       if (button) {
-        UIRenderHelpers.setRunButtonBusy(button, false, 'fa-play');
+        button.disabled = false;
+        button.innerHTML = '<i class="fa-solid fa-play"></i> 运行本地处理';
       }
     }
   }
@@ -4976,7 +4200,13 @@
 
   function providerHasCapabilityKey(provider, capability, model = '') {
     if (!provider) return false;
-    if (provider.useGlobalKey) return Boolean(FutureAIApiDefaults.get('apiKey')?.trim());
+    if (provider.useGlobalKey) return Boolean($('apiKey')?.value?.trim());
+    const keyPool = window.FutureAIKeyPool;
+    if (keyPool?.selectKeyIdForRequest) return Boolean(keyPool.selectKeyIdForRequest(provider, capability, model));
+    if (Array.isArray(provider.keyPool) && provider.keyPool.length) {
+      const now = Date.now();
+      return provider.keyPool.some(item => (item.scope === 'all' || item.scope === capability) && item.health !== 'blocked' && Number(item.cooldownUntil || 0) <= now);
+    }
     return Boolean(provider.apiKeySaved || provider.apiKey);
   }
 
@@ -5084,9 +4314,6 @@
     budgetBatchOverride.remaining -= 1;
     return true;
   }
-  // Every image/video generation goes authorize → (request) → complete with the returned id.
-  // Besides the budget ledger, the id carries the balance-chip spend ticket (balance snapshot
-  // taken here, just before the request), so it is always non-empty even without a ledger entry.
   const generationSpendTickets = new Map();
   async function authorizeGenerationBudget(args = {}) {
     const ledgerId = await authorizeGenerationBudgetLedger(args);
@@ -5138,10 +4365,9 @@
     return id;
   }
   function completeGenerationBudget(id, result = {}) {
-    // Every image/video generation (done or failed) ends here; a failed one may still have billed.
     const ticket = generationSpendTickets.get(id);
     generationSpendTickets.delete(id);
-    balanceChip?.noteGenerationFinished(ticket?.spend || null, result);
+    void balanceChip?.noteGenerationFinished(ticket?.spend || null, result);
     if (!id || !BudgetGuard || (ticket && !ticket.ledger)) return;
     setGenerationBudgetLedger(BudgetGuard.completeEntry(generationBudgetLedger(), id, result));
   }
@@ -5161,13 +4387,8 @@
     });
   }
   function generationReferenceDescriptors(node) {
-    // Image nodes also remember roles of refs that are no longer (or not yet) wired; count only the live ones.
-    const live = item => node.type !== 'image' || (item?.sourceNodeId
-      ? edges.some(edge => edge.from === item.sourceNodeId && edge.to === node.id && edge.toPort === 'ref')
-      : Boolean(item?.url));
-    const saved = Array.isArray(node.data.references) ? node.data.references.filter(live) : [];
-    if (saved.length) {
-      return saved.map(item => ({
+    if (Array.isArray(node.data.references) && node.data.references.length) {
+      return node.data.references.map(item => ({
         role: String(item?.role || 'reference'),
         sourceNodeId: String(item?.sourceNodeId || ''),
         assetId: String(item?.assetId || ''),
@@ -5200,10 +4421,7 @@
     const issues = [];
     const warnings = [];
     const blockedNodeIds = new Set();
-    // Whole-canvas runs only fill empty nodes; nodes that already show a result are skipped.
-    const allGenerationNodes = [...nodes.values()].filter(node => node.type === 'image' || node.type === 'video' || node.type === 'comfyui');
-    const skippedNodeIds = new Set(allGenerationNodes.filter(nodeHasResult).map(node => node.id));
-    const generationNodes = allGenerationNodes.filter(node => !skippedNodeIds.has(node.id));
+    const generationNodes = [...nodes.values()].filter(node => node.type === 'image' || node.type === 'video' || node.type === 'comfyui');
     let requests = 0;
     const estimatedCosts = new Map();
     let globalBlocked = false;
@@ -5222,11 +4440,11 @@
       }
       const capability = node.type === 'video' ? 'video' : 'image';
       const provider = currentProviderForNode(node, capability);
-      const apiUrl = String(provider?.apiUrl || FutureAIApiDefaults.get('apiUrl') || '').trim();
-      const model = String(node.data.model || (node.type === 'video' ? provider?.videoModel || FutureAIApiDefaults.get('videoModel') : provider?.imageModel || FutureAIApiDefaults.get('imageModel')) || '').trim();
+      const apiUrl = String(provider?.apiUrl || $('apiUrl')?.value || '').trim();
+      const model = String(node.data.model || (node.type === 'video' ? provider?.videoModel || $('videoModel')?.value : provider?.imageModel || $('imageModel')?.value) || '').trim();
       if (!apiUrl) add(node, '缺少 API 地址', '打开设置并选择可用供应商', {focusId: 'apiProviderList'});
       const keyOptional = node.type === 'image' && provider?.type === 'custom-sync';
-      if (!keyOptional && !providerHasCapabilityKey(provider, capability, model)) add(node, `没有可用于${node.type === 'video' ? '视频' : '图片'}的 Key`, '在设置中为该 API 保存 Key', {focusId: 'apiProviderList'});
+      if (!keyOptional && !providerHasCapabilityKey(provider, capability, model)) add(node, `没有可用于${node.type === 'video' ? '视频' : '图片'}的 Key`, '在该 API 下添加对应用途 Key', {focusId: 'apiProviderList'});
       if (!model) add(node, `没有选择${node.type === 'video' ? '视频' : '图片'}模型`, '选择该 API 支持的模型', {focusId: 'apiProviderList'});
       if (node.type === 'image') {
         requests += Math.max(1, Math.min(4, Number(node.data.count) || 1));
@@ -5279,7 +4497,6 @@
       } else {
         try {
           await window.localStorageBridge.checkWritable(storageDir);
-          if (usingDefaultStorageDir()) warnings.push(`当前使用默认存储目录 ${storageDir}，建议在设置 › 本地存储中选择你自己的存储目录。`);
         } catch (err) {
           issues.push({text: `本地存储目录不可写：${err.message || String(err)}（重新选择可写目录）`, focusId: 'localStoragePath'});
           globalBlocked = true;
@@ -5296,7 +4513,7 @@
       [...estimatedCosts.entries()].map(([currency, estimate]) => ({currency, ...estimate})),
       Object.assign({}, safety, {singleBudget: 0})
     );
-    return {issues, warnings: [...new Set(warnings)], requests, runnableRequests, estimatedCostText, budgetDecision, totalNodes: generationNodes.length, runnableNodes: globalBlocked ? 0 : Math.max(0, generationNodes.length - blockedNodeIds.size), blockedNodes: globalBlocked ? generationNodes.length : blockedNodeIds.size, blockedNodeIds, skippedNodeIds, globalBlocked, safety};
+    return {issues, warnings: [...new Set(warnings)], requests, runnableRequests, estimatedCostText, budgetDecision, totalNodes: generationNodes.length, runnableNodes: globalBlocked ? 0 : Math.max(0, generationNodes.length - blockedNodeIds.size), blockedNodes: globalBlocked ? generationNodes.length : blockedNodeIds.size, blockedNodeIds, globalBlocked, safety};
   }
   function focusGenerationIssue(issue) {
     if (!issue) return;
@@ -5329,8 +4546,7 @@
       if (fix === true) focusGenerationIssue(preflight.issues[0]);
       if (fix !== 'run-available') return;
     }
-    const skippedNote = skippedResultText(preflight.skippedNodeIds.size);
-    if (!preflight.requests) return toast(skippedNote ? `没有需要生成的空节点：${skippedNote}` : '当前画布没有可生成的图片、视频或 ComfyUI 节点', 'warn');
+    if (!preflight.requests) return toast('当前画布没有可生成的图片、视频或 ComfyUI 节点', 'warn');
     const plannedRequests = preflight.runnableRequests || preflight.requests;
     if (preflight.budgetDecision && !preflight.budgetDecision.allowed) {
       const budgetConfirmed = await openModal({
@@ -5349,7 +4565,7 @@
       : '';
     const confirmed = await openModal({
       title: '确认运行全部节点',
-      text: `可运行节点 ${preflight.runnableNodes} 个，不可运行 ${preflight.blockedNodes} 个。${skippedNote ? `\n${skippedNote}。` : ''}\n预计发起 ${preflight.runnableRequests || preflight.requests} 次生成请求。${preflight.estimatedCostText ? `\n已配置价格的模型预计费用：${preflight.estimatedCostText}。` : '\n当前模型尚未配置价格，无法准确估算费用。'}\n连续失败 ${preflight.safety.failureStop} 次后会停止后续任务。\n\n${preflight.warnings.join('\n')}${dailyWarning}`,
+      text: `可运行节点 ${preflight.runnableNodes} 个，不可运行 ${preflight.blockedNodes} 个。\n预计发起 ${preflight.runnableRequests || preflight.requests} 次生成请求。${preflight.estimatedCostText ? `\n已配置价格的模型预计费用：${preflight.estimatedCostText}。` : '\n当前模型尚未配置价格，无法准确估算费用。'}\n连续失败 ${preflight.safety.failureStop} 次后会停止后续任务。\n\n${preflight.warnings.join('\n')}${dailyWarning}`,
       okText: '开始运行',
       confirm: true
     });
@@ -5368,7 +4584,7 @@
         runPrompt(node.id);
         completed++;
       }
-      const tasks = [...nodes.values()].filter(node => (node.type === 'image' || node.type === 'comfyui' || node.type === 'video') && !preflight.blockedNodeIds.has(node.id) && !preflight.skippedNodeIds.has(node.id));
+      const tasks = [...nodes.values()].filter(node => (node.type === 'image' || node.type === 'comfyui' || node.type === 'video') && !preflight.blockedNodeIds.has(node.id));
       for (const node of tasks) {
         let ok = false;
         try {
@@ -5388,7 +4604,7 @@
           break;
         }
       }
-      toast(`全部节点运行结束：完成 ${completed}，失败 ${failed}${stopped ? `，因连续失败 ${consecutiveFailures} 次已停止后续任务` : ''}${skippedNote ? `；${skippedNote}` : ''}`, failed ? 'warn' : 'success');
+      toast(`全部节点运行结束：完成 ${completed}，失败 ${failed}${stopped ? `，因连续失败 ${consecutiveFailures} 次已停止后续任务` : ''}`, failed ? 'warn' : 'success');
     } finally {
       if (button) {
         button.disabled = false;
@@ -5411,7 +4627,8 @@
     if (!workflowText.trim()) { toast('请先在设置里导入 ComfyUI workflow JSON', 'warn'); return false; }
     if (!prompt) { toast('ComfyUI 节点缺少提示词', 'warn'); return false; }
     const btn = node.el.querySelector('[data-run="comfyui"]');
-    UIRenderHelpers.setRunButtonBusy(btn, true);
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ComfyUI 运行中';
     setImageStatus(node, 'running', '正在提交 ComfyUI workflow', 'ComfyUI 运行中');
     try {
       const workflow = prepareComfyWorkflow(workflowText, {
@@ -5429,7 +4646,7 @@
       const urls = [];
       for (let i = 0; i < images.length; i++) {
         const viewUrl = comfyViewUrl(baseUrl, images[i]);
-        urls.push(await persistMediaUrl(viewUrl, `comfyui_${Date.now()}_${i + 1}`, 'png'));
+        urls.push(await persistRemoteImage(viewUrl, `comfyui_${Date.now()}_${i + 1}`, 'png'));
       }
       node.data.url = urls[0] || '';
       node.data.urls = urls;
@@ -5442,18 +4659,16 @@
         .filter(edge => edge.from === node.id && edge.fromPort === 'image')
         .map(edge => nodes.get(edge.to))
         .find(target => target?.type === 'image');
-      // Only an empty linked output node is filled; one that already shows a picture keeps it and the new output gets its own node.
-      const fillLinked = linkedOutput && !nodeHasResult(linkedOutput);
-      const imageNode = fillLinked ? linkedOutput : batchVariants().spawnRight(linkedOutput || node, 'image', outputData);
-      if (fillLinked) {
+      const imageNode = linkedOutput || addNode('image', node.x + Math.max(600, node.el.offsetWidth + 80), node.y, outputData, null, false);
+      if (linkedOutput) {
         Object.assign(imageNode.data, outputData);
+        hydrateNode(imageNode);
       } else {
         connectSilently(node.id, 'image', imageNode.id, 'ref');
       }
-      hydrateNode(imageNode);
       drawEdges();
       saveProject();
-      toast(linkedOutput && !fillLinked ? 'ComfyUI 输出已放到右侧新节点，原图保留' : 'ComfyUI 输出已回流到画布', 'success');
+      toast('ComfyUI 输出已回流到画布', 'success');
       return true;
     } catch (err) {
       node.data.url = previousUrl;
@@ -5464,10 +4679,20 @@
       toast('ComfyUI 失败：\n' + (err.message || String(err)), 'error');
       return false;
     } finally {
-      UIRenderHelpers.setRunButtonBusy(btn, false);
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-diagram-project"></i> 运行 ComfyUI 工作流';
     }
   }
 
+  async function persistRemoteImage(url, name, ext = 'png') {
+    if (!storageDir || !window.localStorageBridge?.saveMedia) return url;
+    const blob = await fetch(url).then(res => {
+      if (!res.ok) throw new Error('读取 ComfyUI 输出失败：' + res.status);
+      return res.blob();
+    });
+    const dataUrl = await blobToDataUrl(blob);
+    return await window.localStorageBridge.saveMedia(storageDir, {dataUrl, name, ext}) || url;
+  }
   function blobToDataUrl(blob) {
     return MediaUtils.blobToDataUrl(blob);
   }
@@ -5572,6 +4797,9 @@
   }
 
   function modelFieldForKind(kind) {
+    return kind === 'video' ? 'videoModel' : kind === 'image' ? 'imageModel' : 'chatModel';
+  }
+  function inputIdForModelKind(kind) {
     return kind === 'video' ? 'videoModel' : kind === 'image' ? 'imageModel' : 'chatModel';
   }
   function capabilityForModelKind(kind) {
@@ -5798,7 +5026,7 @@
   }
   function providerModelsForKind(provider, kind) {
     const field = modelFieldForKind(kind);
-    const active = FutureAIApiDefaults.get(modelFieldForKind(kind)).trim();
+    const active = $(inputIdForModelKind(kind))?.value?.trim() || '';
     const catalogModels = (Array.isArray(provider?.modelCatalog) ? provider.modelCatalog : [])
       .filter(record => (record?.kind || classifyModelKind(`${record?.id || ''} ${record?.label || ''}`)) === kind)
       .map(record => record.id);
@@ -5809,11 +5037,10 @@
   function globalProviderForKind(kind) {
     ensureApiProviders();
     const capability = capabilityForModelKind(kind);
-    return window.FutureAIModelAvailability.preferredGlobalProvider(apiProviders, {
-      selectedId: globalModelProviders[kind],
-      supports: provider => providerSupports(provider, capability),
-      hasUsableKey: provider => window.FutureAIModelAvailability.providerHasUsableKey(provider, FutureAIApiDefaults.get('apiKey'))
-    }) || defaultApiProvider();
+    return apiProviders.find(provider => provider.id === globalModelProviders[kind] && providerSupports(provider, capability))
+      || apiProviders.find(provider => providerSupports(provider, capability))
+      || apiProviders[0]
+      || defaultApiProvider();
   }
   function providerOptionsForKind(kind, selected = '') {
     const capability = capabilityForModelKind(kind);
@@ -5823,21 +5050,15 @@
   }
   function syncGlobalModelInputs() {
     ['chat', 'image', 'video'].forEach(kind => {
-      const previousProviderId = globalModelProviders[kind];
       const provider = globalProviderForKind(kind);
       globalModelProviders[kind] = provider.id;
-      // The saved default could not send requests and another service took over (e.g. the user added
-      // their own relay on a fresh install): use that service's model, as a manual switch would.
-      if (previousProviderId && previousProviderId !== provider.id) {
-        const ownModel = provider[modelFieldForKind(kind)] || firstImportedModelForKind(provider.models || [], kind);
-        if (ownModel) FutureAIApiDefaults.set(modelFieldForKind(kind), ownModel);
-      }
       const providerSelect = $(`global${kind[0].toUpperCase() + kind.slice(1)}Provider`);
       const modelInput = $(`global${kind[0].toUpperCase() + kind.slice(1)}Model`);
       const modelList = $(`global${kind[0].toUpperCase() + kind.slice(1)}ModelList`);
+      const hidden = $(inputIdForModelKind(kind));
       const models = providerModelsForKind(provider, kind);
       if (providerSelect) providerSelect.innerHTML = providerOptionsForKind(kind, provider.id);
-      if (modelInput) modelInput.value = FutureAIApiDefaults.get(modelFieldForKind(kind)) || provider?.[modelFieldForKind(kind)] || '';
+      if (modelInput && hidden) modelInput.value = hidden.value || provider?.[modelFieldForKind(kind)] || '';
       if (modelList) modelList.innerHTML = models.map(model => `<option value="${esc(model)}"></option>`).join('');
     });
   }
@@ -5849,11 +5070,13 @@
     setGlobalModelValue(kind, current, {save: false, rerender: false});
     saveSettings();
     renderModels();
+    refreshNodeProviderSelects();
     refreshNodeModelSelects();
   }
   function setGlobalModelValue(kind, value, options = {}) {
     const model = String(value || '').trim();
-    FutureAIApiDefaults.set(modelFieldForKind(kind), model);
+    const hidden = $(inputIdForModelKind(kind));
+    if (hidden) hidden.value = model;
     const provider = globalProviderForKind(kind);
     if (provider && model) {
       const changed = kind === 'image' && provider.imageModel !== model;
@@ -5862,7 +5085,8 @@
       if (changed) {
         provider.imageCapabilityStatus = 'unknown';
         provider.imageCapabilityMessage = '';
-
+        provider.imageCapabilityKeyId = '';
+        provider.imageCapabilityByKey = {};
       }
     }
     const input = $(`global${kind[0].toUpperCase() + kind.slice(1)}Model`);
@@ -5872,6 +5096,7 @@
   }
   function providerTypeLabel(...args) { return providerUI()?.providerTypeLabel?.(...args); }
   function providerTypeMeta(...args) { return providerUI()?.providerTypeMeta?.(...args); }
+  function providerTypeOptionsHtml(...args) { return providerUI()?.providerTypeOptionsHtml?.(...args); }
   function providerSupports(...args) { return providerUI()?.providerSupports?.(...args); }
   function defaultEndpointForProvider(...args) { return providerUI()?.defaultEndpointForProvider?.(...args); }
   function defaultApiProvider(...args) { return providerUI()?.defaultApiProvider?.(...args); }
@@ -5880,7 +5105,7 @@
   function migrateLegacyProviderKeys(...args) { return providerUI()?.migrateLegacyProviderKeys?.(...args); }
   function uniqueById(...args) { return providerUI()?.uniqueById?.(...args); }
   function syncLegacyApiProvider(...args) { return providerUI()?.syncLegacyApiProvider?.(...args); }
-  function modelPickerGroups(...args) { return providerUI()?.modelPickerGroups?.(...args); }
+  function providerOptionsHtml(...args) { return providerUI()?.providerOptionsHtml?.(...args); }
   function currentProviderForNode(...args) { return providerUI()?.currentProviderForNode?.(...args); }
   function renderApiProviders(...args) { return providerUI()?.renderApiProviders?.(...args); }
   async function hydrateProviderKeyInputs(...args) { return providerUI()?.hydrateProviderKeyInputs?.(...args); }
@@ -5894,19 +5119,35 @@
   function syncApiProviderCardFields(...args) { return providerUI()?.syncApiProviderCardFields?.(...args); }
   function handleApiProviderInput(...args) { return providerUI()?.handleApiProviderInput?.(...args); }
   function handleApiProviderClick(...args) { return providerUI()?.handleApiProviderClick?.(...args); }
-  function refreshProviderBalances(...args) { return providerUI()?.refreshProviderBalances?.(...args); }
   function useProviderModelFromCard(...args) { return providerUI()?.useProviderModelFromCard?.(...args); }
   function addProviderModelFromCard(...args) { return providerUI()?.addProviderModelFromCard?.(...args); }
   function toggleApiProviderCollapsed(...args) { return providerUI()?.toggleApiProviderCollapsed?.(...args); }
   async function providerApiKey(...args) { return providerUI()?.providerApiKey?.(...args); }
+  function reportProviderKeyResult(...args) { return providerUI()?.reportProviderKeyResult?.(...args); }
+  async function addProviderKeyFromCard(...args) { return providerUI()?.addProviderKeyFromCard?.(...args); }
   async function saveProviderKeyFromCard(...args) { return providerUI()?.saveProviderKeyFromCard?.(...args); }
   async function saveTypedProviderKeyIfNeeded(...args) { return providerUI()?.saveTypedProviderKeyIfNeeded?.(...args); }
+  async function removeProviderKeyFromCard(...args) { return providerUI()?.removeProviderKeyFromCard?.(...args); }
   function setProviderTestStatus(...args) { return providerUI()?.setProviderTestStatus?.(...args); }
   function imageCapabilityError(...args) { return providerUI()?.imageCapabilityError?.(...args); }
   function isImageProviderCapabilityError(...args) { return providerUI()?.isImageProviderCapabilityError?.(...args); }
   function markImageProviderCapability(...args) { return providerUI()?.markImageProviderCapability?.(...args); }
   function assertImageProviderCapability(...args) { return providerUI()?.assertImageProviderCapability?.(...args); }
   async function testImageProviderFromCard(...args) { return providerUI()?.testImageProviderFromCard?.(...args); }
+  function providerConformanceOption(...args) { return providerUI()?.providerConformanceOption?.(...args); }
+  function conformanceStepSelection(...args) { return providerUI()?.conformanceStepSelection?.(...args); }
+  function configureConformanceOptions(...args) { return providerUI()?.configureConformanceOptions?.(...args); }
+  async function openProviderConformance(...args) { return providerUI()?.openProviderConformance?.(...args); }
+  function closeProviderConformance(...args) { return providerUI()?.closeProviderConformance?.(...args); }
+  function resetProviderConformanceModal(...args) { return providerUI()?.resetProviderConformanceModal?.(...args); }
+  function conformanceReferenceImage(...args) { return providerUI()?.conformanceReferenceImage?.(...args); }
+  async function conformanceImageEvidence(...args) { return providerUI()?.conformanceImageEvidence?.(...args); }
+  async function conformanceVideoEvidence(...args) { return providerUI()?.conformanceVideoEvidence?.(...args); }
+  function conformanceEvidenceText(...args) { return providerUI()?.conformanceEvidenceText?.(...args); }
+  function renderProviderConformanceReport(...args) { return providerUI()?.renderProviderConformanceReport?.(...args); }
+  async function exportProviderConformanceEvidence(...args) { return providerUI()?.exportProviderConformanceEvidence?.(...args); }
+  async function runProviderConformanceFromModal(...args) { return providerUI()?.runProviderConformanceFromModal?.(...args); }
+  async function testApiProviderFromCard(...args) { return providerUI()?.testApiProviderFromCard?.(...args); }
   async function autoConfigureProviderFromCard(...args) { return providerUI()?.autoConfigureProviderFromCard?.(...args); }
   async function importModelsForProviderCard(...args) { return providerUI()?.importModelsForProviderCard?.(...args); }
 
@@ -5985,39 +5226,10 @@
   async function safeJson(...args) { return providerApi()?.safeJson?.(...args); }
   async function persistGeneratedImageResult(...args) { return providerApi()?.persistGeneratedImageResult?.(...args); }
 
-  const REMOTE_MEDIA_RETRY_DELAYS_MS = [0, 2000, 6000];
-  const UNSAVED_MEDIA_SWEEP_DELAY_MS = 60 * 1000;
-  const UNSAVED_MEDIA_SWEEP_LIMIT = 12;
-  let unsavedMediaSweepAttempt = 0;
-  const unsavedMediaFailures = new Map();
-  let unsavedMediaSweepTimer = null;
-  function isRemoteMediaUrl(value) {
-    return /^https?:\/\//i.test(String(value || ''));
-  }
-  function remoteMediaKind(url, ext) {
-    return /^(mp4|webm|mov)$/i.test(String(ext || '')) || /\.(mp4|webm|mov)(?:[?#]|$)/i.test(String(url || '')) ? 'video' : 'image';
-  }
-  async function saveRemoteMedia(url, ext) {
-    let lastError;
-    for (const delay of REMOTE_MEDIA_RETRY_DELAYS_MS) {
-      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-      try {
-        return await window.localStorageBridge.saveRemoteMedia(storageDir, {url, kind: remoteMediaKind(url, ext)});
-      } catch (err) {
-        lastError = err;
-      }
-    }
-    throw lastError;
-  }
-  // Every generated/remote result is copied into <storageDir>/media before it is
-  // used; remote URLs expire. If that fails the remote URL is kept but the node
-  // shows "未保存" and a background sweep keeps retrying.
   async function persistMediaUrl(url, name = 'media', ext = '') {
     const value = String(url || '');
-    const remote = isRemoteMediaUrl(value);
-    if (!storageDir || !window.localStorageBridge?.saveMedia || (!remote && !value.startsWith('data:') && !value.startsWith('blob:'))) return value;
+    if (!storageDir || !window.localStorageBridge?.saveMedia || (!value.startsWith('data:') && !value.startsWith('blob:'))) return value;
     try {
-      if (remote) return await saveRemoteMedia(value, ext);
       const dataUrl = value.startsWith('blob:') ? await blobUrlToDataUrl(value) : value;
       return await window.localStorageBridge.saveMedia(storageDir, {
         dataUrl,
@@ -6026,104 +5238,9 @@
       }) || value;
     } catch (err) {
       console.warn('media persist failed', err);
-      toast(`媒体未保存到本地：${err?.message || err}。节点已标记“未保存”，稍后会自动重试。`, 'warn');
-      scheduleUnsavedMediaSweep();
-      // A blob: URL dies with the page; keep the bytes in the project instead
-      // (written to media/ by the sweep or on next open).
-      if (value.startsWith('blob:')) {
-        try { return await blobUrlToDataUrl(value); } catch {}
-      }
+      toast('媒体已生成，但保存到本地 media 文件夹失败，已临时保留在当前会话。', 'warn');
       return value;
     }
-  }
-  function scheduleUnsavedMediaSweep(delay = UNSAVED_MEDIA_SWEEP_DELAY_MS) {
-    clearTimeout(unsavedMediaSweepTimer);
-    unsavedMediaSweepTimer = setTimeout(() => { retryUnsavedMedia().catch(err => console.warn('unsaved media retry failed', err)); }, delay);
-  }
-  // Every media field of every node (url, urls, refUrl, references, variants…)
-  // that is still remote or inline is copied into <storageDir>/media. Keeps
-  // retrying with backoff (1/5/15/30 min) for the whole session.
-  async function retryUnsavedMedia() {
-    if (!storageDir || !window.localStorageBridge?.saveRemoteMedia) return;
-    const MediaRefs = window.FutureAIMediaRefs;
-    if (!MediaRefs) return;
-    let changed = false;
-    let pending = false;
-    for (const node of [...nodes.values()]) {
-      if (!node?.data) continue;
-      const nodeChanged = await MediaRefs.mapNodeMediaRefs(node.data, async value => {
-        if ((unsavedMediaFailures.get(value) || 0) >= UNSAVED_MEDIA_SWEEP_LIMIT) return value;
-        try {
-          if (isRemoteMediaUrl(value)) {
-            const local = await saveRemoteMedia(value, node.type === 'video' ? 'mp4' : '');
-            if (local && local !== value) {
-              if (!node.data.sourceUrl) node.data.sourceUrl = value;
-              return local;
-            }
-            return value;
-          }
-          if (/^data:(image|video|audio)\//i.test(value)) {
-            return await window.localStorageBridge.saveMedia(storageDir, {dataUrl: value, name: `node_${node.id}`, ext: mediaExtFromDataUrl(value)}) || value;
-          }
-          return value;
-        } catch {
-          unsavedMediaFailures.set(value, (unsavedMediaFailures.get(value) || 0) + 1);
-          pending = true;
-          return value;
-        }
-      });
-      if (nodeChanged && node.el) hydrateNode(node);
-      changed ||= nodeChanged;
-    }
-    if (changed) saveProject();
-    if (pending) scheduleUnsavedMediaSweep(MediaRefs.sweepDelayMs(unsavedMediaSweepAttempt++));
-    else unsavedMediaSweepAttempt = 0;
-  }
-  // 「图片文件找不到」→ 重新定位: the picked file is copied into media/ and every
-  // field of the node that pointed at the missing file is switched to it.
-  async function onMediaRelocateRequest(event) {
-    const missingUrl = String(event?.detail?.url || '');
-    const nodeId = String(event?.detail?.nodeId || '');
-    if (!missingUrl) return;
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = event?.detail?.kind === 'video' ? 'video/*' : 'image/*';
-    input.addEventListener('change', async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(file);
-        });
-        const saved = await persistMediaUrl(String(dataUrl), file.name || 'relocated', mediaExtFromMime(file.type, file.name));
-        let count = 0;
-        for (const node of nodes.values()) {
-          if (nodeId && node.id !== nodeId) continue;
-          const replaced = window.FutureAIMediaRefs?.replaceNodeMediaRef(node.data, missingUrl, saved) || 0;
-          if (replaced) { count += replaced; if (node.el) hydrateNode(node); }
-        }
-        if (count) { saveProject(); toast('已重新定位图片，并复制到存储文件夹', 'success'); }
-      } catch (err) {
-        toast('重新定位失败：' + (err?.message || err), 'error');
-      }
-    }, {once: true});
-    input.click();
-  }
-  // Non-blocking reminder while results go to the default folder: always visible in
-  // Settings, plus a dismissible banner that comes back next launch until a folder is chosen.
-  async function syncStoragePathField() {
-    if ($('localStoragePath')) $('localStoragePath').value = storageDir;
-    const usingDefault = usingDefaultStorageDir();
-    $('storageDirDefaultNotice')?.classList.toggle('hidden', !usingDefault);
-    $('storageDefaultBanner')?.classList.toggle('hidden', !usingDefault || storageDefaultNoticeDismissed);
-    document.querySelectorAll('[data-default-storage-dir]').forEach(el => { el.textContent = defaultStorageDir; });
-    const warning = $('storageDirInstallWarning');
-    if (!warning) return;
-    const inspected = storageDir ? await window.localStorageBridge?.inspectDir?.(storageDir).catch(() => null) : null;
-    warning.classList.toggle('hidden', !inspected?.insideInstallDir);
   }
   async function blobUrlToDataUrl(url) {
     return await MediaUtils.blobUrlToDataUrl(url);
@@ -6164,7 +5281,7 @@
     const msg = err?.message || String(err);
     const prefix = imageErrorTitle(refCount);
     return isSafetyError(err)
-      ? 'API 内容审核拒绝：\n' + msg + '\n可点击「安全改写」改写提示词后重试。'
+      ? 'API 内容审核拒绝：\n' + msg + '\n已尝试把提示词改写为更安全表达。'
       : prefix + '：\n' + msg;
   }
 
@@ -6179,7 +5296,7 @@
       detail: msg
     };
     if (isSafetyError(err)) {
-      return {...base, category: 'safety', summary: '内容审核拒绝', suggestion: '点击「安全改写」改写提示词后重试，或减少敏感动作、裸露、未成年人或危险描述'};
+      return {...base, category: 'safety', summary: '内容审核拒绝', suggestion: '已尝试安全改写，也可以减少敏感动作、裸露、未成年人或危险描述'};
     }
     if (isImageProviderCapabilityError(err) || /image generation is not enabled for this group/i.test(msg)) {
       return {...base, category: 'image-capability-disabled', summary: '当前 API 未开通图片生成', suggestion: '请在该中转站为当前密钥所属账户组开通图片生成；开通后在 API 设置中点击“检测图片能力”'};
@@ -6450,11 +5567,50 @@
     const s = getStore(STORE.settings, {});
     if (s.loaded) return;
   }
+  function modelPresetOptionsHtml(active = 'openai-compatible') {
+    return ModelPresets.modelPresetOptionsHtml(active, esc);
+  }
+  function currentModelPreset(id = $('modelPresetSelect')?.value || 'openai-compatible') {
+    return ModelPresets.currentModelPreset(id);
+  }
+  function updateModelPresetHint() {
+    const preset = currentModelPreset();
+    if ($('modelPresetHint')) $('modelPresetHint').textContent = `${preset.hint} 不会自动填写或改写 API 密钥。`;
+  }
+  function bindModelPresetControls() {
+    const select = $('modelPresetSelect');
+    if (!select) return;
+    select.innerHTML = modelPresetOptionsHtml(select.value || 'openai-compatible');
+    updateModelPresetHint();
+    select.addEventListener('change', updateModelPresetHint);
+    $('applyModelPreset')?.addEventListener('click', () => applyModelPreset(select.value));
+  }
+  function applyModelPreset(id = $('modelPresetSelect')?.value || 'openai-compatible') {
+    const preset = currentModelPreset(id);
+    const apiKeyBeforePreset = $('apiKey')?.value || '';
+    if ($('apiUrl')) $('apiUrl').value = preset.apiUrl || '';
+    if ($('imageModel')) $('imageModel').value = preset.imageModel || '';
+    if ($('videoModel')) $('videoModel').value = preset.videoModel || '';
+    if ($('chatModel')) $('chatModel').value = preset.chatModel || '';
+    if (preset.comfyUrl && $('comfyUrl')) $('comfyUrl').value = preset.comfyUrl;
+    $('apiKey').value = apiKeyBeforePreset;
+    importedModels = unique([preset.imageModel, preset.videoModel, preset.chatModel, ...importedModels].filter(Boolean));
+    setStore(STORE.models, importedModels);
+    syncLegacyApiProvider();
+    saveSettings();
+    renderModels();
+    refreshNodeModelSelects();
+    renderApiProviders();
+    refreshNodeProviderSelects();
+    updateModelPresetHint();
+    toast(`已应用模型预设：${preset.label}`, 'success');
+    return preset;
+  }
   function loadSettings() {
     const s = getStore(STORE.settings, {});
+    if (typeof s.fastCanvasMode === 'boolean') fastCanvasMode = s.fastCanvasMode;
+    localStorage.setItem('futureai.fastCanvasMode', fastCanvasMode ? 'on' : 'off');
     uiSoundEnabled = s.uiSoundEnabled !== false;
-    autoOpenLastProject = s.autoOpenLastProject === true;
-    if ($('autoOpenLastProject')) $('autoOpenLastProject').checked = autoOpenLastProject;
     uiSoundVolume = Math.max(0, Math.min(1, Number(s.uiSoundVolume ?? .35)));
     if (typeof s.reduceMotionMode === 'boolean') {
       reduceMotionMode = s.reduceMotionMode;
@@ -6478,28 +5634,26 @@
       $('customThemeName').value = savedColorThemes.find(item => item.id === activeSavedColorThemeId)?.name || nextSavedColorThemeName();
     }
     storageDir = s.storageDir || '';
-    syncStoragePathField();
+    if ($('localStoragePath')) $('localStoragePath').value = storageDir;
+    codexCommand = s.codexCommand || '';
     codexPermission = ['readonly','project','full'].includes(s.codexPermission) ? s.codexPermission : 'project';
-    if (s.apiUrl) FutureAIApiDefaults.set('apiUrl', s.apiUrl);
-    if (s.imageModel) FutureAIApiDefaults.set('imageModel', s.imageModel);
-    if (s.videoModel) FutureAIApiDefaults.set('videoModel', s.videoModel);
-    if (s.chatModel) FutureAIApiDefaults.set('chatModel', s.chatModel);
+    if (s.apiUrl) $('apiUrl').value = s.apiUrl;
+    if (s.imageModel) $('imageModel').value = s.imageModel;
+    if (s.videoModel) $('videoModel').value = s.videoModel;
+    if (s.chatModel) $('chatModel').value = s.chatModel;
     globalModelProviders = {
       chat: s.globalModelProviders?.chat || s.chatProviderId || '',
       image: s.globalModelProviders?.image || s.imageProviderId || '',
       video: s.globalModelProviders?.video || s.videoProviderId || ''
     };
-    // v2: only the user's picks (or none = automatic short chain); older full `order` lists are dropped.
-    imageFallback = window.FutureAIModelAvailability.normalizeFallbackSettings(s.imageFallback || {});
-    if (s.imageFallback && s.imageFallback.version !== 2) setStore(STORE.settings, {...s, imageFallback});
     const nextAssistantContextMode = validAssistantContextMode(s.assistantContextMode);
+    if ($('assistantContextMode')) $('assistantContextMode').value = nextAssistantContextMode;
     if ($('assistantContextModeInline')) $('assistantContextModeInline').value = nextAssistantContextMode;
     if (s.comfyUrl && $('comfyUrl')) $('comfyUrl').value = s.comfyUrl;
     if (s.comfyWorkflowName && $('comfyWorkflowName')) $('comfyWorkflowName').value = s.comfyWorkflowName;
     if (s.comfyWorkflowJson && $('comfyWorkflowJson')) $('comfyWorkflowJson').value = s.comfyWorkflowJson;
     if ($('generationMaxTasks')) $('generationMaxTasks').value = String(Math.max(1, Math.min(100, Number(s.generationMaxTasks || 12))));
     if ($('generationFailureStop')) $('generationFailureStop').value = String(Math.max(1, Math.min(20, Number(s.generationFailureStop || 3))));
-    if ($('generationAutoRetry')) $('generationAutoRetry').value = String(window.FutureAIAutoRetry?.normalizeLimit(s.generationAutoRetry, 1) ?? 1);
     if ($('generationDailyReminder')) $('generationDailyReminder').value = String(Math.max(1, Math.min(1000, Number(s.generationDailyReminder || 30))));
     if ($('generationRequireStorage')) $('generationRequireStorage').checked = s.generationRequireStorage !== false;
     if ($('generationBudgetCurrency')) $('generationBudgetCurrency').value = ['USD', 'CNY'].includes(String(s.generationBudgetCurrency || '').toUpperCase()) ? String(s.generationBudgetCurrency).toUpperCase() : 'USD';
@@ -6512,27 +5666,11 @@
     applyAppearanceMode(s.appearanceMode || 'standard');
     applyColorTheme(colorTheme, customThemeColor);
     canvasWallpaper?.load(s.canvasWallpaper);
+    applyFastCanvasMode();
     balanceChip?.load(s.balanceChipProviderId);
     applyMascot(s.mascot || 'boy');
     migrateLegacyApiKeySecret(s);
     syncUISoundControls();
-  }
-  async function followMovedStorageDir() {
-    if (!storageDir || !window.localStorageBridge?.resolveMovedRoot) return storageDir;
-    try {
-      const result = await window.localStorageBridge.resolveMovedRoot(storageDir);
-      if (result?.moved && result.dir) {
-        storageDir = result.dir;
-        syncStoragePathField();
-        saveSettings();
-        toast('存储文件夹位置已变化，已自动切换到：' + result.dir, 'success');
-      } else if (result?.missing) {
-        toast('找不到存储文件夹：' + storageDir + '。如果移动过，请在 设置 → 存储 中重新选择。');
-      }
-    } catch (err) {
-      console.warn('storage directory relocation failed', err);
-    }
-    return storageDir;
   }
   async function recoverStorageDir() {
     if (storageDir || !window.localStorageBridge?.findProjectRoot) return storageDir;
@@ -6540,25 +5678,12 @@
       const recovered = await window.localStorageBridge.findProjectRoot();
       if (!recovered) return '';
       storageDir = recovered;
-      syncStoragePathField();
+      if ($('localStoragePath')) $('localStoragePath').value = storageDir;
       saveSettings();
       return storageDir;
     } catch (err) {
       console.warn('storage directory recovery failed', err);
       return '';
-    }
-  }
-  function usingDefaultStorageDir() {
-    return Boolean(storageDir) && storageDir === defaultStorageDir;
-  }
-  async function useDefaultStorageDirIfUnset() {
-    if (!window.localStorageBridge?.defaultDir) return;
-    try {
-      defaultStorageDir = await window.localStorageBridge.defaultDir();
-      if (!storageDir) storageDir = await window.localStorageBridge.defaultDir({create: true});
-      syncStoragePathField();
-    } catch (err) {
-      console.warn('default storage directory unavailable', err);
     }
   }
   function saveSettings() {
@@ -6570,13 +5695,12 @@
     storageDir = persistedStorageDir;
     persistCurrentProjectBudget();
     setStore(STORE.settings, {
-      apiUrl: FutureAIApiDefaults.get('apiUrl'),
-      imageModel: FutureAIApiDefaults.get('imageModel'),
-      videoModel: FutureAIApiDefaults.get('videoModel'),
-      chatModel: FutureAIApiDefaults.get('chatModel'),
+      apiUrl: $('apiUrl').value,
+      imageModel: $('imageModel').value,
+      videoModel: $('videoModel').value,
+      chatModel: $('chatModel').value,
       globalModelProviders,
-      imageFallback,
-      assistantContextMode: validAssistantContextMode($('assistantContextModeInline')?.value),
+      assistantContextMode: validAssistantContextMode($('assistantContextModeInline')?.value || $('assistantContextMode')?.value),
       apiProviders: persistedApiProviders,
       comfyUrl: $('comfyUrl')?.value || 'http://127.0.0.1:8188',
       comfyWorkflowName: $('comfyWorkflowName')?.value || '默认工作流',
@@ -6584,24 +5708,22 @@
       storageDir: persistedStorageDir,
       generationMaxTasks: Math.max(1, Math.min(100, Number($('generationMaxTasks')?.value || 12))),
       generationFailureStop: Math.max(1, Math.min(20, Number($('generationFailureStop')?.value || 3))),
-      generationAutoRetry: window.FutureAIAutoRetry?.normalizeLimit($('generationAutoRetry')?.value, 1) ?? 1,
       generationDailyReminder: Math.max(1, Math.min(1000, Number($('generationDailyReminder')?.value || 30))),
       generationRequireStorage: $('generationRequireStorage')?.checked !== false,
       generationBudgetCurrency: String($('generationBudgetCurrency')?.value || 'USD').toUpperCase(),
       generationSingleBudget: Math.max(0, Number($('generationSingleBudget')?.value || 0)),
       generationDailyBudget: Math.max(0, Number($('generationDailyBudget')?.value || 0)),
+      codexCommand,
       codexPermission,
+      codexLastAutoUpdateAt: previous.codexLastAutoUpdateAt || 0,
       codexSharedExtensions: previous.codexSharedExtensions !== false,
       codexSharedSkillIds: Array.isArray(previous.codexSharedSkillIds) ? previous.codexSharedSkillIds : undefined,
       codexSharedPluginIds: Array.isArray(previous.codexSharedPluginIds) ? previous.codexSharedPluginIds : undefined,
       installedAssistantSkills: previous.installedAssistantSkills || [],
-      // Agent settings are owned by agent-ui.js (saved via setStore before calling us); keep them.
-      agent: previous.agent,
-      codexScheduleAutoRun: previous.codexScheduleAutoRun,
       uiSoundEnabled,
-      autoOpenLastProject,
       uiSoundVolume,
       reduceMotionMode,
+      fastCanvasMode,
       colorTheme,
       customThemeColor,
       customThemePalette,
@@ -6613,8 +5735,44 @@
       appearanceMode: normalizeAppearanceMode($('appearanceMode')?.value || document.body.dataset.appearance || 'standard'),
       mascot: $('mascotImage')?.dataset.mascot || 'boy'
     });
-    // Provider edits (add, rename, delete, key) all end in saveSettings; keep the chip in step.
+    scheduleUiPreferencesSave();
     balanceChip?.render();
+  }
+  async function loadPersistentUiPreferences() {
+    let saved = null;
+    try {
+      saved = await window.uiPreferencesBridge?.load?.();
+    } catch (error) {
+      console.warn('persistent UI preference read failed', error);
+    }
+    if (typeof saved?.fastCanvasMode === 'boolean') {
+      fastCanvasMode = saved.fastCanvasMode;
+      localStorage.setItem('futureai.fastCanvasMode', fastCanvasMode ? 'on' : 'off');
+      applyFastCanvasMode();
+    }
+    if (saved?.canvasWallpaper && canvasWallpaper) {
+      canvasWallpaper.load(saved.canvasWallpaper);
+      saveSettings();
+    } else {
+      scheduleUiPreferencesSave();
+    }
+  }
+  function scheduleUiPreferencesSave() {
+    if (!window.uiPreferencesBridge?.save) return;
+    clearTimeout(uiPreferencesSaveTimer);
+    uiPreferencesSaveTimer = setTimeout(() => {
+      void persistUiPreferences();
+    }, 250);
+  }
+  function persistUiPreferences() {
+    if (!window.uiPreferencesBridge?.save) return Promise.resolve(false);
+    return window.uiPreferencesBridge.save({
+      fastCanvasMode,
+      canvasWallpaper: canvasWallpaper?.value()
+    }).catch(error => {
+      console.warn('persistent UI preference write failed', error);
+      return false;
+    });
   }
   function initUISoundFeedback() {
     if (!window.FutureAIUISound?.createUISoundController) return;
@@ -6635,7 +5793,7 @@
     if (!window.secretBridge?.getApiKey) return;
     try {
       const apiKey = await window.secretBridge.getApiKey();
-      if (apiKey) FutureAIApiDefaults.set('apiKey', apiKey);
+      if (apiKey) $('apiKey').value = apiKey;
     } catch (error) {
       console.warn('[security] API key could not be loaded', error);
       toast('系统安全存储暂不可用，API 密钥未加载；稍后可在设置中重试。', 'warn');
@@ -6643,11 +5801,24 @@
   }
   function migrateLegacyApiKeySecret(settings) {
     if (!settings?.apiKey || !window.secretBridge?.setApiKey) return;
-    FutureAIApiDefaults.set('apiKey', settings.apiKey);
+    $('apiKey').value = settings.apiKey;
     window.secretBridge.setApiKey(settings.apiKey).catch(err => console.warn('api key migration failed', err));
     const next = {...settings};
     delete next.apiKey;
     setStore(STORE.settings, next);
+  }
+  function saveApiKeySecret() {
+    if (!window.secretBridge?.setApiKey) return;
+    clearTimeout(apiKeySaveTimer);
+    apiKeySaveTimer = setTimeout(() => {
+      window.secretBridge?.setApiKey($('apiKey').value.trim()).catch(err => toast('API 密钥保存失败：\n' + (err.message || String(err)), 'error'));
+    }, 250);
+  }
+  async function clearApiKeySecret() {
+    $('apiKey').value = '';
+    clearTimeout(apiKeySaveTimer);
+    await window.secretBridge?.clearApiKey?.();
+    toast('API 密钥已清除', 'success');
   }
   async function persistProjectMedia(...args) { return projectStore()?.persistProjectMedia?.(...args); }
   function hasStorageDir(...args) { return projectStore()?.hasStorageDir?.(...args); }
@@ -6856,9 +6027,10 @@
       button.setAttribute('aria-selected', String(active));
       button.querySelector('.theme-zone-swatch')?.style.setProperty('--zone-color', customThemePalette[zone] || customThemeColor);
     });
+    const custom = colorTheme === 'custom';
     if ($('customThemeRow')) {
-      $('customThemeRow').classList.add('active');
-      $('customThemeRow').setAttribute('aria-hidden', 'false');
+      $('customThemeRow').classList.toggle('active', custom);
+      $('customThemeRow').setAttribute('aria-hidden', String(!custom));
     }
     renderSavedColorThemes();
   }
@@ -6905,7 +6077,7 @@
   }
   function renderModels() {
     syncGlobalModelInputs();
-    const active = {image: FutureAIApiDefaults.get('imageModel'), video: FutureAIApiDefaults.get('videoModel'), chat: FutureAIApiDefaults.get('chatModel')};
+    const active = {image: $('imageModel').value, video: $('videoModel').value, chat: $('chatModel').value};
     const providerModels = apiProviders.flatMap(provider => [provider.chatModel, provider.imageModel, provider.videoModel, ...(provider.models || [])]).filter(Boolean);
     const buckets = ModelRendering.modelBuckets({
       imageModel: active.image,
@@ -6913,9 +6085,9 @@
       chatModel: active.chat,
       importedModels: unique([...providerModels, ...importedModels])
     });
-    fillSelect($('imageModelSelect'), buckets.image, active.image, globalProviderForKind('image')?.availableModels?.image);
+    fillSelect($('imageModelSelect'), buckets.image, active.image);
     fillSelect($('videoModelSelect'), buckets.video, active.video);
-    fillSelect($('chatModelSelect'), buckets.chat, active.chat, globalProviderForKind('chat')?.availableModels?.chat);
+    fillSelect($('chatModelSelect'), buckets.chat, active.chat);
     refreshNodeModelSelects();
     const modelStore = $('modelStore');
     if (!modelStore) return;
@@ -6931,21 +6103,23 @@
       if (chatBtn) setGlobalModelValue('chat', btn.dataset.useChatModel);
     };
   }
-  function fillSelect(sel, items, value, available = []) {
+  function fillSelect(sel, items, value) {
     if (!sel) return;
-    sel.innerHTML = ModelRendering.selectOptionsHtml({models: items, available, esc});
+    sel.innerHTML = ModelRendering.selectOptionsHtml({models: items, esc});
     sel.value = value;
   }
   async function testApi() {
     ensureApiProviders();
     const provider = globalProviderForKind('chat');
-    const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
-    const model = provider.chatModel || FutureAIApiDefaults.get('chatModel').trim();
-    const apiKey = await providerApiKey(provider);
+    const apiUrl = provider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, '');
+    const model = provider.chatModel || $('chatModel').value.trim();
+    const apiKey = await providerApiKey(provider, 'chat', model);
     if (!apiUrl || !apiKey) {
+      if (apiKey) reportProviderKeyResult(provider, 'chat', {releaseOnly: true}, apiKey);
       return toast('请先完善全局聊天供应商的 API 地址和密钥', 'warn');
     }
     if (!model) {
+      reportProviderKeyResult(provider, 'chat', {releaseOnly: true}, apiKey);
       return toast('请先选择或填写全局聊天模型', 'warn');
     }
     try {
@@ -6975,8 +6149,10 @@
         endpoint: provider.chatEndpoint
       });
       if (provider) setProviderTestStatus(provider, modelsNote ? 'warn' : 'ok', `文本可用：${model}`);
+      reportProviderKeyResult(provider, 'chat', null, apiKey);
       toast(`API 测试通过：${provider.name || '全局聊天供应商'} / ${model} 可返回内容。${reply ? '' : ''}${modelsNote}`, modelsNote ? 'warn' : 'success');
     } catch (err) {
+      reportProviderKeyResult(provider, 'chat', err, apiKey);
       toast(apiErrorMessage(err, 'API 测试失败'), 'error');
     }
   }
@@ -6989,16 +6165,16 @@
       let total = 0;
       for (const provider of providers) {
         try {
-          const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
+          const apiUrl = provider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, '');
           let selectedCapability = 'chat';
-          let apiKey = await providerApiKey(provider);
+          let apiKey = await providerApiKey(provider, 'chat');
           if (!apiKey) {
             selectedCapability = 'image';
-            apiKey = await providerApiKey(provider);
+            apiKey = await providerApiKey(provider, 'image');
           }
           if (!apiKey) {
             selectedCapability = 'video';
-            apiKey = await providerApiKey(provider);
+            apiKey = await providerApiKey(provider, 'video');
           }
           if (!apiUrl || !apiKey) {
             summaries.push(`${provider.name || providerTypeLabel(provider.type)}：缺少地址或密钥，已跳过`);
@@ -7012,6 +6188,7 @@
           assertModelListResponse({response: res, payload: data, models, requestUrl});
           const counts = applyImportedModelsToProvider(provider, models);
           importedModels = unique([...importedModels, ...models]);
+          reportProviderKeyResult(provider, selectedCapability, null, apiKey);
           total += models.length;
           summaries.push(`${provider.name || providerTypeLabel(provider.type)}：${models.length} 个（${modelImportSummary(counts)}）`);
         } catch (err) {
@@ -7022,6 +6199,7 @@
       saveSettings();
       renderApiProviders();
       renderModels();
+      refreshNodeProviderSelects();
       refreshNodeModelSelects();
       toast(`模型导入完成：${total} 个\n${summaries.join('\n')}`, 'success');
     } catch (err) {
@@ -7039,8 +6217,8 @@
   }
 
   async function autoImportGlobalApiModels() {
-    const apiUrl = String(FutureAIApiDefaults.get('apiUrl') || '').trim().replace(/\/$/, '');
-    const apiKey = String(FutureAIApiDefaults.get('apiKey') || '').trim();
+    const apiUrl = String($('apiUrl')?.value || '').trim().replace(/\/$/, '');
+    const apiKey = String($('apiKey')?.value || '').trim();
     if (!apiUrl || !apiKey) return;
     try {
       ensureApiProviders();
@@ -7068,6 +6246,7 @@
       saveSettings();
       renderApiProviders();
       renderModels();
+      refreshNodeProviderSelects();
       refreshNodeModelSelects();
       toast(`API 已保存，自动导入 ${models.length} 个模型`, 'success');
     } catch (error) {
@@ -7094,12 +6273,19 @@
   function fitView(...args) { return canvasLayout()?.fitView?.(...args); }
   function fitNodeIntoView(...args) { return canvasLayout()?.fitNodeIntoView?.(...args); }
   function resetView(...args) { return canvasLayout()?.resetView?.(...args); }
-  function moveNode(...args) { return canvasLayout()?.moveNode?.(...args); }
-  function scheduleTransform(...args) { return canvasLayout()?.scheduleTransform?.(...args); }
-  function applyTransform(...args) { return canvasLayout()?.applyTransform?.(...args); }
-  function revealSelectedNode(...args) { return canvasLayout()?.revealSelectedNode?.(...args); }
+  function moveNode(...args) { const result = canvasLayout()?.moveNode?.(...args); canvasMinimap?.schedule(); return result; }
+  function scheduleTransform(...args) {
+    if (!panning && !canvasProxyActive && !viewportInteractionTimer) canvasMinimap?.schedule();
+    return canvasLayout()?.scheduleTransform?.(...args);
+  }
+  function applyTransform(...args) { const result = canvasLayout()?.applyTransform?.(...args); canvasMinimap?.schedule(); return result; }
   function proxyNodeSize(...args) { return canvasLayout()?.proxyNodeSize?.(...args); }
-  function setCanvasProxyActive(...args) { return canvasLayout()?.setCanvasProxyActive?.(...args); }
+  function setCanvasProxyActive(...args) {
+    const wasActive = canvasProxyActive;
+    const result = canvasLayout()?.setCanvasProxyActive?.(...args);
+    if (wasActive && !canvasProxyActive) canvasMinimap?.schedule();
+    return result;
+  }
   function scheduleCanvasProxyDraw(...args) { return canvasLayout()?.scheduleCanvasProxyDraw?.(...args); }
   function drawCanvasProxy(...args) { return canvasLayout()?.drawCanvasProxy?.(...args); }
   function scheduleViewportInteractionEnd(...args) { return canvasLayout()?.scheduleViewportInteractionEnd?.(...args); }
@@ -7124,7 +6310,7 @@
   function viewCenter(...args) { return canvasLayout()?.viewCenter?.(...args); }
 
 
-  function openModal({title, value = '', text = '', okText = '确定', cancelText = '取消', cancelValue = null, confirm = false}) {
+  function openModal({title, value = '', text = '', okText = '纭畾', cancelText = '取消', cancelValue = null, confirm = false}) {
     modalPreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     $('modalTitle').textContent = title;
     $('modalInput').value = value;
@@ -7222,57 +6408,48 @@
   async function saveFabricEditor() { return imageEditors()?.saveFabricEditor?.(); }
   function syncFabricBrush() { return imageEditors()?.syncFabricBrush?.(); }
 
+  function imageNodeVersions(node) {
+    if (!Array.isArray(node?.data?.imageVersions)) node.data.imageVersions = [];
+    node.data.imageVersions = node.data.imageVersions.filter(item => item?.url).slice(-12);
+    return node.data.imageVersions;
+  }
+
+  function rememberImageNodeVersion(node, label = '上一版') {
+    if (!node?.data?.url) return;
+    const versions = imageNodeVersions(node);
+    if (versions[versions.length - 1]?.url === node.data.url) return;
+    versions.push({
+      url: node.data.url,
+      urls: Array.isArray(node.data.urls) ? node.data.urls.slice(0, 4) : [],
+      label,
+      time: Date.now()
+    });
+    node.data.imageVersions = versions.slice(-12);
+  }
+
+  function applyImageNodeUrl(node, url, urls = null) {
+    node.data.url = url;
+    const nextUrls = Array.isArray(urls) && urls.length ? urls : [url, ...(node.data.urls || [])];
+    node.data.urls = nextUrls.filter(Boolean).filter((item, index, source) => source.indexOf(item) === index).slice(0, 4);
+    node.data.status = '';
+    node.data.statusType = '';
+  }
+
+  function restorePreviousImageVersion(node) {
+    if (!node || node.type !== 'image') return;
+    const versions = imageNodeVersions(node);
+    const previous = versions.pop();
+    if (!previous?.url) return toast('当前图片节点没有可恢复的上一版', 'warn');
+    applyImageNodeUrl(node, previous.url, previous.urls);
+    hydrateNode(node);
+    saveProject();
+    toast('已恢复上一版图片', 'success');
+  }
+
   async function openCropperEditor(node) { return imageEditors()?.openCropperEditor?.(node); }
   function closeCropperEditor() { return imageEditors()?.closeCropperEditor?.(); }
   function onCropperEditorClick(e) { return imageEditors()?.onCropperEditorClick?.(e); }
   async function saveCropperEditor() { return imageEditors()?.saveCropperEditor?.(); }
-  async function openLocalEdit(node) { return localEdit()?.openLocalEdit?.(node); }
-  function closeLocalEdit() { return localEdit()?.closeLocalEdit?.(); }
-  function openBatchVariants(node) { return batchVariants()?.openBatchVariants?.(node); }
-  function closeBatchVariants() { return batchVariants()?.closeBatchVariants?.(); }
-  function regenerateImageAsNew(node, overrides) { return batchVariants()?.regenerateAsNew?.(node, overrides); }
-  // A node that already shows a finished result (video still being fetched does not count).
-  function nodeHasResult(node) {
-    if (!node || node.data?.videoTask) return false;
-    return Boolean(node.data?.url || (Array.isArray(node.data?.urls) && node.data.urls.some(Boolean)));
-  }
-  // One rule for every way of starting a run: a node that already shows a result keeps it, the run goes to a new node on its right.
-  function generateImageKeepingOriginal(node, overrides = {}) {
-    if (!node || node.type !== 'image') return Promise.resolve(false);
-    if (nodeHasResult(node) && node.data.statusType !== 'running') return regenerateImageAsNew(node, overrides);
-    Object.assign(node.data, overrides);
-    hydrateNode(node);
-    return enqueueImageGeneration(node.id);
-  }
-  function runVideoKeepingOriginal(node) {
-    if (!nodeHasResult(node)) return runVideo(node.id);
-    return batchVariants()?.rerunAsNew?.(node, {label: '重新生成', noun: '视频', run: next => quietRun(options => runVideo(next.id, new Set(), options))});
-  }
-  function runMediaToolKeepingOriginal(node) {
-    if (!nodeHasResult(node)) return runMediaTool(node.id);
-    return batchVariants()?.rerunAsNew?.(node, {label: '再次处理', noun: '结果', port: 'media', run: next => quietRun(options => runMediaTool(next.id, options))});
-  }
-  // Quiet runs keep their warning text so the single failure toast can say why.
-  async function quietRun(run) {
-    const options = {quiet: true, lastMessage: ''};
-    const ok = await run(options);
-    if (ok === false && options.lastMessage) throw new Error(options.lastMessage.replace(/^[^：\n]{0,12}失败：\s*/, '').replace(/\s*\n\s*/g, ' '));
-    return ok;
-  }
-  // Group / canvas runs only fill empty nodes; finished ones are left alone (redo one with its own 重新生成 button).
-  function skippedResultText(count) {
-    return count ? `${count} 个节点已有结果，已跳过（要重做请点节点上的重新生成）` : '';
-  }
-  function openPromptAssist(node) { return promptAssist()?.openForNode?.(node); }
-  function closePromptAssist() { return promptAssist()?.close?.(); }
-  function pickBatchContinue(node) {
-    const urls = Array.isArray(node?.data?.urls) ? node.data.urls.filter(Boolean) : [];
-    if (urls.length > 1) {
-      const active = node.data?.url && urls.includes(node.data.url) ? node.data.url : urls[0];
-      return batchVariants()?.pickVariantSpawn?.(node, active);
-    }
-    return batchVariants()?.pickContinue?.(node);
-  }
 
   function closeImageModal() {
     const wasOpen = !$('imageModal').classList.contains('hidden');
@@ -7420,12 +6597,11 @@
   async function applyCameraModal() {
     const node = nodes.get(cameraTargetNodeId);
     if (!node) return closeCameraModal();
-    const camera3d = normalizeCameraState(cameraDraft);
+    node.data.camera3d = normalizeCameraState(cameraDraft);
+    saveProject();
     closeCameraModal();
-    // A node with a picture keeps it (and its angle); the new angle renders on a new node to the right.
-    if (nodeHasResult(node)) toast('多角度：' + cameraSummary(camera3d) + '，将在右侧新节点生成', 'info');
-    else toast('已应用 3D 相机角度：' + cameraSummary(camera3d), 'success');
-    await generateImageKeepingOriginal(node, {camera3d});
+    toast('已应用 3D 相机角度：' + cameraSummary(node.data.camera3d), 'success');
+    await runImage(node.id);
   }
   function updateCameraFromControls() {
     cameraDraft = normalizeCameraState({
@@ -7517,49 +6693,23 @@
     const extra = [cameraPrompt(node?.data?.camera3d), composerPromptExtras(node)].filter(Boolean).join('\n');
     return extra ? [prompt, extra].filter(Boolean).join('\n\n') : prompt;
   }
-  // Next-step node to the right of the source, wired to it (same options as dropping a wire on empty canvas).
-  function createNextStepNode(node, optionId) {
-    const kind = node.type === 'video' ? 'video' : 'image';
-    const option = CanvasNodes.wireDropOptions(node, 'out', kind).find(item => item.id === optionId);
-    if (!option) return null;
-    return createConnectedNode(node.id, 'out', option, node.x + nodeSize(node).width + 80, node.y);
-  }
-  function runNodeContextAction(node, action, ids = [node?.id]) {
+  function runNodeContextAction(node, action) {
     if (!node) return;
-    if (action === 'copy') return duplicateNodes(ids);
-    if (action === 'delete') return deleteNodes(ids);
-    if (action === 'lock') return setNodesLocked(ids, !ids.every(id => nodes.get(id)?.data.locked));
-    if (action === 'front' || action === 'back') return setNodesLayer(ids, action === 'front');
-    if (action === 'download') return downloadNodes(ids);
-    if (action === 'export-share') {
-      selectedNodes.clear();
-      ids.forEach(id => selectedNodes.add(id));
-      renderSelection();
-      return openExportShare({scope: 'selection', format: 'share-zip'});
-    }
-    if (action === 'group' || action === 'ungroup') {
-      selectedNodes.clear();
-      ids.forEach(id => selectedNodes.add(id));
-      return action === 'group' ? groupSelectedNodes() : ungroupSelectedNodes();
-    }
-    if (action === 'save-template') {
-      selectedNodes.clear();
-      ids.forEach(id => selectedNodes.add(id));
-      renderSelection();
-      return openTemplateGallery({mode: 'insert', focusSave: true, category: 'mine'});
-    }
+    const center = viewCenter();
     if (action === 'fullscreen') return openMediaViewer(node);
-    if (action === 'region-edit') return openLocalEdit(node);
-    if (action === 'batch-variants') return openBatchVariants(node);
-    if (action === 'prompt-assist') return openPromptAssist(node);
-    if (action === 'pick-continue') return pickBatchContinue(node);
     if (action === 'fabric-edit') return openFabricEditor(node);
     if (action === 'crop-image') return openCropperEditor(node);
+    if (action === 'restore-image-version') return restorePreviousImageVersion(node);
     if (action === 'send-to-director') return sendImageNodeToDirectorDesk(node);
-    if (action === 'preview-request' || action === 'last-request') {
-      try { return generationQueueApi()?.previewImageRequest(node.id, getResolvedImageRefItems(node.id, node.data.manualRefUrl || ''), action === 'last-request'); }
-      catch (error) { return toast(error.message, 'warn'); }
+    if (action === 'download') {
+      if (node.type === 'video') return downloadMedia(node.data.url, 'future_video_' + Date.now() + '.mp4');
+      const urls = canvasRuntime()?.imagePreviewUrls?.(node) || [node.data.url].filter(Boolean);
+      if (urls.length > 1) urls.forEach((url, index) => setTimeout(() => downloadImage(url), index * 250));
+      else downloadImage(node.data.url);
+      return;
     }
+    if (action === 'copy') return duplicateNode(node.id);
+    if (action === 'delete') return deleteNode(node.id);
     if (action === 'favorite' || action === 'asset') {
       const asset = addAssetLibraryItem({
         type: node.type === 'video' || isVideoMedia(node.data.mime, node.data.url) ? 'video' : 'image',
@@ -7570,7 +6720,7 @@
         size: node.data.size || '',
         time: Date.now()
       });
-      if (asset) return toast('已加入资产库；便携素材会写入软件旁的 library 文件夹', 'success');
+      if (asset) return toast('已加入资产库', 'success');
       return;
     }
     if (action === 'assistant') {
@@ -7579,12 +6729,20 @@
       renderChat();
       return;
     }
-    if (action === 'image-to-image' || action === 'image-to-video') return createNextStepNode(node, action);
+    if (action === 'image-to-image') {
+      const n = addNode('image', center.x - 260, center.y - 160, {refUrl: node.data.url || '', model: $('imageModel').value, size: node.data.size || '1024x1024'});
+      connect(node.id, node.type === 'upload' ? 'media' : 'image', n.id, 'ref');
+      return toast('已创建图生图节点', 'success');
+    }
+    if (action === 'image-to-video') {
+      const n = addNode('video', center.x - 260, center.y - 160, {refUrl: node.data.url || '', model: $('videoModel').value, size: '1280x720'});
+      connect(node.id, node.type === 'upload' ? 'media' : 'image', n.id, 'ref');
+      return toast('已创建图生视频节点', 'success');
+    }
     if (action === 'describe') {
-      // Placed beside the image and not wired into its prompt port, so it can never become the image's own prompt.
-      selectSingleNode(batchVariants().spawnRight(node, 'prompt', {prompt: '请分析这张图片的主体、风格、构图、光线、场景和可复用提示词。'}).id);
-      saveProject();
-      return toast('已在右侧创建图片描述提示节点', 'success');
+      const p = addNode('prompt', center.x - 160, center.y - 80, {prompt: '请分析这张图片的主体、风格、构图、光线、场景和可复用提示词。'});
+      connect(p.id, 'text', node.id, 'prompt');
+      return toast('已创建图片描述提示节点', 'success');
     }
     if (action === 'edit') {
       dialogEditActiveNodeId = node.id;
@@ -7592,16 +6750,17 @@
       return toast('已打开对话改图工作区', 'success');
     }
     if (action === 'grid') {
-      selectSingleNode(batchVariants().spawnRight(node, 'prompt', {prompt: '分镜格子：画面编号 / 景别 / 主体动作 / 场景 / 镜头运动 / 画面连续性。'}).id);
-      saveProject();
-      return toast('已在右侧创建分镜格子节点', 'success');
+      addNode('prompt', center.x - 160, center.y - 80, {prompt: '分镜格子：画面编号 / 景别 / 主体动作 / 场景 / 镜头运动 / 画面连续性。'});
+      return toast('已创建分镜格子节点', 'success');
     }
     if (action === 'script') {
-      selectSingleNode(batchVariants().spawnRight(node, 'prompt', {prompt: '脚本：镜头目标、角色动作、旁白/对白、画面调度、情绪节奏。'}).id);
-      saveProject();
-      return toast('已在右侧创建脚本节点', 'success');
+      addNode('prompt', center.x - 160, center.y - 80, {prompt: '脚本：镜头目标、角色动作、旁白/对白、画面调度、情绪节奏。'});
+      return toast('已创建脚本节点', 'success');
     }
-    if (action === 'cover') return createNextStepNode(node, 'last-frame');
+    if (action === 'cover') {
+      const n = addNode('image', center.x - 260, center.y - 160, {refUrl: node.data.url || '', prompt: '从该视频中提取尾帧作为参考图。', model: $('imageModel').value});
+      return toast('已创建截取尾帧参考节点', 'success');
+    }
     if (action === 'camera') return openCameraModal(node);
   }
   function enhanceTextareas(root) {
@@ -7620,8 +6779,6 @@
       btn.innerHTML = '<i class="fa-solid fa-expand"></i>';
       wrap.appendChild(btn);
       btn.addEventListener('click', () => openTextEditor(textarea));
-      // Media node prompts get the 优化提示词 icon beside the expand button; the node click handler runs it.
-      if (textarea.hasAttribute('data-inline-optimize')) wrap.insertAdjacentHTML('beforeend', '<button type="button" class="text-optimize-btn" data-optimize-prompt data-icon-only title="优化提示词" aria-label="优化提示词"><i class="fa-solid fa-wand-magic-sparkles"></i></button>');
     });
   }
   function openTextEditor(textarea) {
@@ -7688,8 +6845,6 @@
     if (persist) {
       try { localStorage.setItem('futureai.settingsTab', id); } catch {}
     }
-    if (id === 'api') refreshProviderBalances();
-    if (id === 'appearance') void ensureColorThemePicker();
   }
   function revealSettingsTarget(id) {
     const target = $(id);
@@ -7717,7 +6872,8 @@
     setTimeout(() => {
       if (!$('settingsDrawer')?.classList.contains('hidden')) $('closeSettings')?.focus();
     }, 50);
-    void ensureColorThemePicker();
+    if (colorTheme === 'custom') void ensureColorThemePicker();
+    refreshLicenseStatus();
   }
   function closeSettings() {
     const wasOpen = !$('settingsDrawer').classList.contains('hidden');
@@ -7749,7 +6905,6 @@
     $('assetLibraryDrawer')?.setAttribute('aria-hidden', String($('assetLibraryDrawer').classList.contains('hidden')));
     renderAssetLibrary();
     if (opening) {
-      mediaWorkbench()?.syncPortableLibraryIntoAssets?.().catch(err => console.warn('portable sync failed', err));
       focusDrawer('assetLibraryDrawer', '#assetLibrarySearch');
       setTimeout(() => {
         if (!$('assetLibraryDrawer')?.classList.contains('hidden')) $('assetLibrarySearch')?.focus();
@@ -7943,7 +7098,7 @@
   }
 
   function assistantContextMode() {
-    const value = $('assistantContextModeInline')?.value || 'auto';
+    const value = $('assistantContextMode')?.value || 'auto';
     return ['auto', 'selected', 'full', 'off'].includes(value) ? value : 'auto';
   }
 
@@ -7984,7 +7139,7 @@
       '【当前助手画像】',
       JSON.stringify({
         name: profile.name || '智能创作助手',
-        model: profile.model || globalProviderForKind('chat')?.chatModel || FutureAIApiDefaults.get('chatModel') || '',
+        model: profile.model || globalProviderForKind('chat')?.chatModel || $('chatModel')?.value || '',
         negativePrompt: profile.negativePrompt || ''
       }, null, 2),
       ...contextSections,
@@ -8003,10 +7158,11 @@
     $('chatInput').value = '';
     renderChat();
     const provider = globalProviderForKind('chat');
-    const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
-    const model = provider.chatModel || FutureAIApiDefaults.get('chatModel').trim();
-    const apiKey = await providerApiKey(provider);
+    const apiUrl = provider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, '');
+    const model = provider.chatModel || $('chatModel').value.trim();
+    const apiKey = await providerApiKey(provider, 'chat', model);
     if (!apiUrl || !apiKey) {
+      if (apiKey) reportProviderKeyResult(provider, 'chat', {releaseOnly: true}, apiKey);
       const reply = '先在设置里完善全局聊天供应商和密钥，我就能接入你的聊天模型。';
       chatMessages.push({role: 'assistant', content: reply});
       renderChat();
@@ -8014,6 +7170,7 @@
       return;
     }
     if (!model) {
+      reportProviderKeyResult(provider, 'chat', {releaseOnly: true}, apiKey);
       const reply = '请先选择或填写全局聊天模型。';
       chatMessages.push({role: 'assistant', content: reply});
       renderChat();
@@ -8027,8 +7184,6 @@
         ...chatMessages.slice(-12).map(chatToApiMessage)
       ];
       const res = await fetchJsonWithRetry(joinApiPath(apiUrl, provider.chatEndpoint || '/chat/completions'), {timeoutMs: API_TIMEOUTS.text,
-        retries: 2,
-        retryUnsafe: true,
         method: 'POST',
         headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey},
         body: JSON.stringify({model, messages, temperature: .45, max_tokens: 1600})
@@ -8037,8 +7192,10 @@
       if (!res.ok) throw new Error(data.error?.message || data.message || JSON.stringify(data));
       const reply = cleanAiText(data.choices?.[0]?.message?.content || data.output_text || data.content || '没有返回内容。');
       chatMessages.push({role: 'assistant', content: reply});
+      reportProviderKeyResult(provider, 'chat', null, apiKey);
       showChatPreview(reply);
     } catch (err) {
+      reportProviderKeyResult(provider, 'chat', err, apiKey);
       const reply = '请求失败：\n' + (err.message || err);
       chatMessages.push({role: 'assistant', content: reply});
       showChatPreview(reply);
@@ -8274,6 +7431,113 @@
     } catch (err) {
       toast('一键清理失败：\n' + (err.message || err), 'error');
     }
+  }
+  function formatUpdateSummary(result) {
+    return UpdateRendering.formatUpdateSummary(result);
+  }
+  function renderLicenseStatus(result) { return licenseUI()?.renderLicenseStatus?.(result); }
+  async function refreshLicenseStatus() { return licenseUI()?.refreshLicenseStatus?.(); }
+  async function createLicenseActivationRequest() { return licenseUI()?.createLicenseActivationRequest?.(); }
+  async function redeemLicense() { return licenseUI()?.redeemLicense?.(); }
+  async function copyLicenseActivationRequest() { return licenseUI()?.copyLicenseActivationRequest?.(); }
+  async function importLicenseActivation() { return licenseUI()?.importLicenseActivation?.(); }
+  async function deactivateLicense() { return licenseUI()?.deactivateLicense?.(); }
+  async function checkUpdates() {
+    if (!window.updateBridge?.checkOnlineUpdates) return toast('当前环境不支持在线更新', 'warn');
+    try {
+      const result = await window.updateBridge.checkOnlineUpdates({storageDir});
+      if (result?.canceled) return result;
+      toast(result.updateAvailable ? `发现新版本：${result.availableVersion}，签名验证通过` : '当前已是最新版本', result.updateAvailable ? 'success' : 'warn');
+      return result;
+    } catch (err) {
+      toast('检查更新失败：\n' + (err.message || err), 'error');
+      throw err;
+    }
+  }
+  async function installOnlineUpdate() {
+    if (!window.updateBridge?.checkOnlineUpdates || !window.updateBridge?.applyOnlineUpdate) return toast('当前环境不支持在线更新', 'warn');
+    try {
+      if (!await ensureStorageReady()) return null;
+      await flushWorkspaceStores();
+      const check = await window.updateBridge.checkOnlineUpdates({storageDir});
+      if (!check?.updateAvailable) {
+        toast('当前已是最新版本', 'warn');
+        return check;
+      }
+      const confirmed = await openModal({
+        title: `安装版本 ${check.availableVersion}`,
+        text: formatUpdateSummary(check),
+        okText: '备份并安装',
+        confirm: true
+      });
+      if (!confirmed) return null;
+      const result = await window.updateBridge.applyOnlineUpdate({
+        ...workspaceBackupPayload(),
+        updatePath: check.packageDir
+      });
+      toast(result?.scheduled ? '更新包已验证，软件即将退出并安装' : '更新操作完成', 'success');
+      return result;
+    } catch (err) {
+      toast('在线更新失败：\n' + (err.message || err), 'error');
+      throw err;
+    }
+  }
+  async function applyUpdatePackage() {
+    if (!window.updateBridge?.applyUpdatePackage || !window.updateBridge?.checkUpdates) return toast('当前环境不支持本地更新', 'warn');
+    try {
+      if (!await ensureStorageReady()) return null;
+      await flushWorkspaceStores();
+      const check = await window.updateBridge.checkUpdates({storageDir});
+      if (check?.canceled) return null;
+      const confirmed = await openModal({title: '应用本地更新包', text: formatUpdateSummary(check), okText: '备份并更新', confirm: true});
+      if (!confirmed) return null;
+      const result = await window.updateBridge.applyUpdatePackage({...workspaceBackupPayload(), updatePath: check.packageDir});
+      toast(result?.scheduled ? '升级已验证，软件即将退出并安装' : '更新操作完成', 'success');
+      return result;
+    } catch (err) {
+      toast('应用更新失败：\n' + (err.message || err), 'error');
+      throw err;
+    }
+  }
+  async function rollbackUpdate() {
+    if (!window.updateBridge?.rollbackUpdate) return toast('当前环境不支持更新回滚', 'warn');
+    try {
+      if (!await ensureStorageReady()) return null;
+      await flushWorkspaceStores();
+      const confirmed = await openModal({title: '回滚上一版', text: UpdateRendering.rollbackConfirmationText(), okText: '确认回滚', confirm: true});
+      if (!confirmed) return null;
+      const result = await window.updateBridge.rollbackUpdate(workspaceBackupPayload());
+      toast(result?.scheduled ? '回滚已验证，软件即将退出并安装上一版' : '回滚操作完成', 'success');
+      return result;
+    } catch (err) {
+      toast('回滚失败：\n' + (err.message || err), 'error');
+      throw err;
+    }
+  }
+  async function showInstallerUpdateOutcome(waitForTerminal = false) {
+    if (!window.updateBridge?.getOutcome) return false;
+    let outcome = null;
+    const attempts = waitForTerminal ? 12 : 1;
+    for (let attempt = 0; attempt < attempts && !outcome; attempt += 1) {
+      try {
+        outcome = await window.updateBridge.getOutcome();
+      } catch {
+        toast('更新状态记录损坏，但项目数据未被修改。软件已继续正常启动。', 'warn');
+        return true;
+      }
+      if (!outcome && attempt + 1 < attempts) await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    if (!outcome) return false;
+    if (outcome.status === 'completed') {
+      const action = outcome.mode === 'rollback' ? '已回滚到' : '已更新到';
+      toast(`${action} ${outcome.targetVersion}，启动健康检查通过。`, 'success');
+    } else if (outcome.status === 'rolled-back') {
+      toast(`新版本未通过健康检查，已恢复 ${outcome.currentVersion}；升级前项目备份已验证并保留。`, 'warn');
+    } else if (outcome.status === 'rollback-failed') {
+      toast('自动回滚未能完成。升级前项目备份仍保留，请先停止修改项目并联系支持。', 'error');
+    }
+    try { await window.updateBridge.acknowledgeOutcome?.(outcome); } catch {}
+    return true;
   }
   function getStore(...args) { return projectStore()?.getStore?.(...args); }
   function setStore(...args) { return projectStore()?.setStore?.(...args); }

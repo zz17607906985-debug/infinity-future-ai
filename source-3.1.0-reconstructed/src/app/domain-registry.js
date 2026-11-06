@@ -6,10 +6,8 @@
    * First-cut split map (grow this as more of app.js is extracted):
    *
    *   media/image-editors.js      → FutureAIImageEditors
-   *   media/local-edit.js          → FutureAILocalEdit
-   *   generation/batch-variants.js  → FutureAIBatchVariants
-   *   generation/prompt-assist.js   → FutureAIPromptAssist
    *   support/support-ui.js        → FutureAISupportUI
+   *   licensing/license-ui.js      → FutureAILicenseUI
    *   runtime/performance-mode.js  → FutureAIPerformanceMode
    *   media/short-workbench.js     → FutureAIShortWorkbench
    *   providers/provider-api.js    → FutureAIProviderApi
@@ -37,10 +35,8 @@
 
   function createDomains(deps) {
     const imageEditors = requireDomain('image-editors', 'FutureAIImageEditors')?.create(deps.imageEditors || {});
-    const localEdit = requireDomain('local-edit', 'FutureAILocalEdit')?.create(deps.localEdit || {});
-    const batchVariants = requireDomain('batch-variants', 'FutureAIBatchVariants')?.create(deps.batchVariants || {});
-    const promptAssist = requireDomain('prompt-assist', 'FutureAIPromptAssist')?.create(deps.promptAssist || {});
     const supportUI = requireDomain('support-ui', 'FutureAISupportUI')?.create(deps.supportUI || {});
+    const licenseUI = requireDomain('license-ui', 'FutureAILicenseUI')?.create(deps.licenseUI || {});
     const performanceMode = requireDomain('performance-mode', 'FutureAIPerformanceMode')?.create(deps.performanceMode || {});
     const providerApi = requireDomain('provider-api', 'FutureAIProviderApi')?.create(deps.providerApi || {});
     const providerUI = requireDomain('provider-ui', 'FutureAIProviderUI')?.create(deps.providerUI || {});
@@ -48,18 +44,16 @@
     const canvasRuntime = requireDomain('canvas-runtime', 'FutureAICanvasRuntime')?.create(deps.canvasRuntime || {});
     const canvasLayout = requireDomain('canvas-layout', 'FutureAICanvasLayout')?.create(deps.canvasLayout || {});
     const canvasEvents = requireDomain('canvas-events', 'FutureAICanvasEvents')?.create(deps.canvasEvents || {});
-    const shortWorkbench = requireDomain('short-workbench', 'FutureAIShortWorkbench')?.create(deps.shortWorkbench || {});
+    const shortWorkbench = window.FutureAIShortWorkbench?.create(deps.shortWorkbench || {}) || null;
     const e2eSmoke = requireDomain('e2e-smoke', 'FutureAIE2ESmoke')?.create(deps.e2eSmoke || {});
     const dialogRuntime = requireDomain('dialog-runtime', 'FutureAIDialogRuntime')?.create(deps.dialogRuntime || {});
     const assistantChrome = requireDomain('assistant-chrome', 'FutureAIAssistantChrome')?.create(deps.assistantChrome || {});
-    const mediaWorkbench = requireDomain('media-workbench', 'FutureAIMediaWorkbench')?.create(deps.mediaWorkbench || {});
+    const mediaWorkbench = window.FutureAIMediaWorkbench?.create(deps.mediaWorkbench || {}) || null;
     const projectStore = requireDomain('project-store', 'FutureAIProjectStore')?.create(deps.projectStore || {});
     return {
       imageEditors,
-      localEdit,
-      batchVariants,
-      promptAssist,
       supportUI,
+      licenseUI,
       performanceMode,
       providerApi,
       providerUI,
@@ -80,10 +74,8 @@
     createDomains,
     map: Object.freeze({
       imageEditors: 'FutureAIImageEditors',
-      localEdit: 'FutureAILocalEdit',
-      batchVariants: 'FutureAIBatchVariants',
-      promptAssist: 'FutureAIPromptAssist',
       supportUI: 'FutureAISupportUI',
+      licenseUI: 'FutureAILicenseUI',
       performanceMode: 'FutureAIPerformanceMode',
       providerApi: 'FutureAIProviderApi',
       providerUI: 'FutureAIProviderUI',

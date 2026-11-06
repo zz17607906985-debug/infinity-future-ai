@@ -37,9 +37,14 @@
     const buildPromptContext = deps.buildPromptContext;
     const canvasContextSnapshot = deps.canvasContextSnapshot;
     const buildBatchExportPayload = deps.buildBatchExportPayload;
+    const applyModelPreset = deps.applyModelPreset;
+    const currentModelPreset = deps.currentModelPreset;
     const exportDiagnosticsPackage = deps.exportDiagnosticsPackage;
     const scanMediaLibrary = deps.scanMediaLibrary;
     const runOneClickCleanup = deps.runOneClickCleanup;
+    const checkUpdates = deps.checkUpdates;
+    const applyUpdatePackage = deps.applyUpdatePackage;
+    const rollbackUpdate = deps.rollbackUpdate;
     const normalizeApiProvider = deps.normalizeApiProvider;
     const fetchJsonWithRetry = deps.fetchJsonWithRetry;
     const API_TIMEOUTS = deps.API_TIMEOUTS;
@@ -213,21 +218,21 @@ async function runE2EApiFailureCheck() {
   });
   host.apiProviders = [...originalProviders, testProvider];
   node.data.providerId = testProvider.id;
-  const originalApiUrl = FutureAIApiDefaults.get('apiUrl');
-  const originalApiKey = FutureAIApiDefaults.get('apiKey');
-  const originalImageModel = FutureAIApiDefaults.get('imageModel');
-  FutureAIApiDefaults.set('apiUrl', 'http://127.0.0.1:9/v1');
-  FutureAIApiDefaults.set('apiKey', 'e2e-redacted-key');
-  FutureAIApiDefaults.set('imageModel', 'e2e-image-model');
+  const originalApiUrl = $('apiUrl').value;
+  const originalApiKey = $('apiKey').value;
+  const originalImageModel = $('imageModel').value;
+  $('apiUrl').value = 'http://127.0.0.1:9/v1';
+  $('apiKey').value = 'e2e-redacted-key';
+  $('imageModel').value = 'e2e-image-model';
   try {
     await runImage(node.id);
   } catch (error) {
     node.data.e2eError = String(error?.message || error);
   } finally {
     host.apiProviders = originalProviders;
-    FutureAIApiDefaults.set('apiUrl', originalApiUrl);
-    FutureAIApiDefaults.set('apiKey', originalApiKey);
-    FutureAIApiDefaults.set('imageModel', originalImageModel);
+    $('apiUrl').value = originalApiUrl;
+    $('apiKey').value = originalApiKey;
+    $('imageModel').value = originalImageModel;
   }
   e2eAssert(node.data.statusType === 'error', 'AI generation failure should mark the image node as error');
   e2eAssert(/失败|failed|fetch|network|timeout|aborted/i.test(node.data.status || ''), 'AI failure status should be visible');
@@ -252,8 +257,8 @@ async function runE2EComfyFailureCheck() {
   return {nodeId: node.id, status: node.data.status};
 }
 async function runE2EDiagnosticsCheck() {
-  const originalApiKey = FutureAIApiDefaults.get('apiKey');
-  FutureAIApiDefaults.set('apiKey', 'e2e-redacted-key');
+  const originalApiKey = $('apiKey').value;
+  $('apiKey').value = 'e2e-redacted-key';
   try {
     const result = await window.diagnosticsBridge.exportDiagnostics({
       storageDir: host.storageDir,
@@ -263,12 +268,12 @@ async function runE2EDiagnosticsCheck() {
     e2eAssert(result?.reportFile?.includes('diagnostic-report.json'), 'diagnostics should write diagnostic-report.json');
     return result;
   } finally {
-    FutureAIApiDefaults.set('apiKey', originalApiKey);
+    $('apiKey').value = originalApiKey;
   }
 }
 async function runE2EBatchExportCheck(uploadNode) {
-  const originalApiKey = FutureAIApiDefaults.get('apiKey');
-  FutureAIApiDefaults.set('apiKey', 'e2e-redacted-key');
+  const originalApiKey = $('apiKey').value;
+  $('apiKey').value = 'e2e-redacted-key';
   selectSingleNode(uploadNode.id);
   host.history.unshift({
     id: 'e2e-history-export',
@@ -290,8 +295,23 @@ async function runE2EBatchExportCheck(uploadNode) {
     e2eAssert(result?.files?.some(file => file.endsWith('history.json')), 'batch export should write history.json');
     return result;
   } finally {
-    FutureAIApiDefaults.set('apiKey', originalApiKey);
+    $('apiKey').value = originalApiKey;
   }
+}
+async function runE2EModelPresetCheck() {
+  const originalApiKey = $('apiKey').value;
+  $('apiKey').value = 'e2e-redacted-key';
+  if ($('modelPresetSelect')) $('modelPresetSelect').value = 'siliconflow';
+  const preset = applyModelPreset('siliconflow');
+  const apiKeyChanged = $('apiKey').value !== 'e2e-redacted-key';
+  e2eAssert(preset.id === 'siliconflow', 'model preset should apply SiliconFlow');
+  e2eAssert($('apiUrl').value === preset.apiUrl, 'model preset should update API url');
+  e2eAssert($('imageModel').value === preset.imageModel, 'model preset should update image model');
+  e2eAssert($('videoModel').value === preset.videoModel, 'model preset should update video model');
+  e2eAssert($('chatModel').value === preset.chatModel, 'model preset should update chat model');
+  e2eAssert(!apiKeyChanged, 'model preset should preserve API key');
+  $('apiKey').value = originalApiKey;
+  return {presetId: preset.id, apiUrl: preset.apiUrl, imageModel: preset.imageModel, apiKeyChanged};
 }
 async function runE2EMediaLibraryCheck(uploadNode) {
   const duplicateUrl = await window.localStorageBridge.saveMedia(host.storageDir, {
@@ -347,6 +367,21 @@ async function runE2ECleanupCheck(uploadNode) {
     deletedCount: result.deleted.length,
     unreferencedUrl,
     referencedUrl: uploadNode.data.url
+  };
+}
+async function runE2EUpdateSystemCheck() {
+  const result = await window.updateBridge.capabilities();
+  e2eAssert(result?.protected?.includes('projects.json'), 'update system should protect projects.json');
+  e2eAssert(result?.protected?.includes('history.json'), 'update system should protect history.json');
+  e2eAssert(result?.protected?.includes('api-key.json'), 'update system should protect api-key.json');
+  e2eAssert(result?.mode === 'signed-nsis-installer', 'update system should use complete signed installer');
+  e2eAssert(result?.asarIntegrityPreserved === true, 'update system should preserve ASAR integrity');
+  e2eAssert(result?.automaticRollback === true, 'update system should support automatic rollback');
+  return {
+    mode: result.mode,
+    protected: result.protected,
+    automaticRollback: result.automaticRollback,
+    runtimeData: result.runtimeData
   };
 }
 async function runE2EAIContextCheck(promptNode, imageNode) {
@@ -753,6 +788,8 @@ async function startE2ESmokeTest() {
 
     report.batchExport = await runE2EBatchExportCheck(uploadNode);
     report.checks.push('batch-export');
+    report.modelPreset = await runE2EModelPresetCheck();
+    report.checks.push('model-preset');
     report.mediaLibrary = await runE2EMediaLibraryCheck(uploadNode);
     report.checks.push('media-library');
     report.apiFailure = await runE2EApiFailureCheck();
@@ -763,6 +800,7 @@ async function startE2ESmokeTest() {
     report.checks.push('diagnostics-export');
     report.cleanup = await runE2ECleanupCheck(uploadNode);
     report.checks.push('cleanup-unreferenced');
+    report.updateSystem = await runE2EUpdateSystemCheck();
     report.checks.push('update-system');
     report.musicSourcePolicy = await runE2EMusicSourcePolicyCheck();
     report.checks.push('music-source-policy');

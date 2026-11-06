@@ -1,19 +1,21 @@
 {
   "name": "future-ai-canvas-desktop",
   "version": "3.1.0",
-  "buildLabel": "agent17z4",
   "description": "∞未来 AI - 一念起，万象生。",
   "main": "src/main.js",
   "private": true,
   "scripts": {
-    "pretest": "node scripts/test-image-request-policy.js && node scripts/test-short-import.js && node scripts/test-short-asset-pipeline.js && node scripts/test-canvas-node-history.js && node scripts/test-canvas-wallpaper.js && node scripts/test-window-controls-layout.js && node scripts/test-appearance-release-ui.js && node scripts/test-local-edit.js && node scripts/test-batch-variants.js && node scripts/test-keep-original.js && node scripts/test-prompt-assist.js && node scripts/test-prompt-store.js",
+    "pretest": "node scripts/test-restored-canvas-features.js && node scripts/test-image-request-policy.js && node scripts/test-canvas-gestures.js && node scripts/test-canvas-drag-performance.js && node scripts/test-dialog-runtime-restoration.js && node scripts/test-short-import.js && node scripts/test-short-asset-pipeline.js && node scripts/test-image-regeneration-node.js && node scripts/test-window-controls-layout.js",
     "build:tools": "npm ci --prefix build-tools --ignore-scripts --no-audit --no-fund",
     "build": "npm run build:tools && npm test && node scripts/build-release.js",
     "build:install": "npm run build:tools && npm test && node scripts/build-release.js --install",
+    "build:installer": "node scripts/build-windows-installer.js",
+    "prepare:update-manifest": "node scripts/prepare-update-manifest.js",
     "clean:stale-asars": "node scripts/clean-stale-asars.js",
     "check:release-resources": "node scripts/check-release-resources.js",
-    "test": "node scripts/check-no-undef.js && node scripts/test-domain-wiring.js && node scripts/test-studio-local-task.js && node scripts/test-atomic-write.js && node scripts/test-agent-speed.js && node scripts/smoke-test.js && node scripts/test-media-dimensions.js && node scripts/test-media-process-contract.js && node scripts/test-canvas-executor.js && node scripts/test-canvas-snapshot.js && node scripts/test-asset-smart-index.js && node scripts/test-review-package.js && node scripts/test-review-export.js && node scripts/test-review-package-input.js && node scripts/test-model-capabilities.js && node scripts/test-model-import-capabilities.js && node scripts/test-reference-roles.js && node scripts/test-reference-control.js && node scripts/test-video-director.js && node scripts/test-budget-guard.js && node scripts/test-workflow-library.js && node scripts/test-template-store.js && node scripts/test-prompt-store.js && node scripts/test-variant-manager.js && node scripts/test-batch-variants.js && node scripts/test-keep-original.js && node scripts/test-prompt-assist.js && node scripts/test-canvas-arrange.js && node scripts/test-project-undo-history.js && node scripts/test-generation-count.js && node scripts/test-provenance.js && node scripts/test-short-audio-provenance.js && node scripts/test-workflow-run-contract.js && node scripts/test-batch-delivery.js && node scripts/test-canvas-layout.js && node scripts/test-skill-market.js && node scripts/test-zip-utils.js && node scripts/test-api-settings-simplicity.js && node scripts/test-provider-auto-config.js && node scripts/test-provider-image-size.js && node scripts/test-provider-image-edit-fallback.js && node scripts/test-provider-chat-image-route.js && node scripts/test-project-store-save.js && node scripts/test-home-startup.js && node scripts/test-secret-startup.js && node scripts/test-workspace-restore.js && node scripts/test-operational-contracts.js && node scripts/test-media-persistence.js && node scripts/test-media-resolver.js && node scripts/test-project-files.js && node scripts/test-codex-cli.js && node scripts/test-agent-permissions.js && node scripts/test-agent-tools.js && node scripts/test-agent-loop.js && node scripts/test-agent-resume.js && node scripts/test-agent-coding.js && node scripts/test-agent-eval.js && node scripts/test-profile-isolation.js && node scripts/test-agent-documents.js && node scripts/test-agent-templates.js && node scripts/test-agent-approvals.js && node scripts/test-agent-memory.js && node scripts/test-agent-gui-lock.js && node scripts/test-agent-canvas-batch.js && node scripts/test-error-paths.js && node scripts/test-provider-runtime.js && node scripts/test-real-api-smoke.js && node scripts/test-build-release-contract.js && node scripts/verify-url-dom-safety.js && node scripts/verify-release-version.js && node scripts/test-appearance-release-ui.js && node scripts/check-release-resources.js && node scripts/test-ffmpeg-runtime.js && node scripts/test-agent-delegate.js && node scripts/test-image-fallback.js && node scripts/test-agent-settings-render.js && node scripts/test-provider-balance.js && node scripts/test-balance-chip.js && node scripts/test-balance-spend.js && node scripts/test-spend-history.js && node scripts/test-auto-retry.js && node scripts/test-update-check.js",
+    "test": "node scripts/smoke-test.js && node scripts/test-media-dimensions.js && node scripts/test-media-process-contract.js && node scripts/test-canvas-executor.js && node scripts/test-asset-smart-index.js && node scripts/test-review-package.js && node scripts/test-review-export.js && node scripts/test-review-package-input.js && node scripts/test-model-capabilities.js && node scripts/test-model-import-capabilities.js && node scripts/test-reference-roles.js && node scripts/test-video-director.js && node scripts/test-budget-guard.js && node scripts/test-workflow-library.js && node scripts/test-variant-manager.js && node scripts/test-generation-count.js && node scripts/test-provenance.js && node scripts/test-short-audio-provenance.js && node scripts/test-workflow-run-contract.js && node scripts/test-batch-delivery.js && node scripts/test-canvas-layout.js && node scripts/test-skill-market.js && node scripts/test-zip-utils.js && node scripts/test-provider-key-pool.js && node scripts/test-provider-key-concurrency.js && node scripts/test-provider-key-recovery.js && node scripts/test-api-settings-simplicity.js && node scripts/test-provider-auto-config.js && node scripts/test-provider-image-size.js && node scripts/test-provider-image-edit-fallback.js && node scripts/test-project-store-save.js && node scripts/test-workspace-restore.js && node scripts/test-operational-contracts.js && node scripts/test-error-paths.js && node scripts/test-provider-runtime.js && node scripts/test-real-api-smoke.js && node scripts/test-build-release-contract.js && node scripts/test-github-releases.js && node scripts/verify-url-dom-safety.js && node scripts/verify-release-version.js && node scripts/check-release-resources.js && node scripts/test-ffmpeg-runtime.js",
     "test:smoke": "node scripts/smoke-test.js",
+    "test:restored": "node scripts/test-restored-canvas-features.js",
     "test:ui-layout": "node scripts/test-ui-layout.js",
     "test:request-ui": "node scripts/test-image-request-ui.js",
     "test:asset-browser": "node scripts/test-short-asset-browser.js",
@@ -21,34 +23,11 @@
     "test:skill-market": "node scripts/test-skill-market.js",
     "test:zip": "node scripts/test-zip-utils.js",
     "test:operations": "node scripts/test-operational-contracts.js",
+    "test:updates": "node scripts/test-github-releases.js",
+    "verify:update-keypair": "node scripts/verify-update-keypair.js",
     "verify:release-version": "node scripts/verify-release-version.js",
     "verify:url-dom-safety": "node scripts/verify-url-dom-safety.js",
     "verify:review-package": "node scripts/verify-review-package-input.js",
     "test:real-api": "node scripts/real-api-smoke.js"
-  },
-  "build": {
-    "appId": "com.infinityfutureai.canvas",
-    "productName": "∞未来 AI 无限画布",
-    "directories": {
-      "output": "dist-installer"
-    },
-    "compression": "maximum",
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "solid": true,
-      "artifactName": "${productName}-Setup-${version}.${ext}"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    }
   }
 }

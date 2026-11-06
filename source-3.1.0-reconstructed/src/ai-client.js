@@ -27,15 +27,11 @@
 
   function shouldRetryRequest(err, res) {
     if (res && [408, 429, 500, 502, 503, 504].includes(res.status)) return true;
-    const detail = `${err?.code || ''} ${err?.message || ''} ${err?.name || ''}`;
-    return Boolean(
-      err?.isTimeout ||
-      /network|fetch failed|failed to fetch|econnreset|econnrefused|etimedout|socket hang up|timeout|aborted|ENOTFOUND|EAI_AGAIN/i.test(detail)
-    );
+    return Boolean(err?.isTimeout || /network|fetch|failed|timeout|aborted/i.test(err?.message || err?.name || ''));
   }
 
   function requestRetryDelay(attempt) {
-    return Math.min(800 * Math.pow(2, attempt), 4000);
+    return Math.min(800 * (attempt + 1), 2400);
   }
 
   function isRetrySafeRequest(options = {}) {
@@ -47,9 +43,9 @@
     const value = String(res?.headers?.get?.('retry-after') || '').trim();
     if (value) {
       const seconds = Number(value);
-      if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30000);
+      if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 10000);
       const date = Date.parse(value);
-      if (Number.isFinite(date)) return Math.min(Math.max(0, date - Date.now()), 30000);
+      if (Number.isFinite(date)) return Math.min(Math.max(0, date - Date.now()), 10000);
     }
     return requestRetryDelay(attempt);
   }
@@ -116,21 +112,6 @@
     throw lastError || new Error('请求失败');
   }
 
-  function transientApiErrorMessage(err, res) {
-    const status = Number(res?.status || err?.status || 0);
-    const msg = String(err?.message || err || '');
-    if (status === 429 || /\b429\b|rate.?limit|too many requests|配额|限流/i.test(msg)) {
-      return '接口请求过于频繁或额度受限（HTTP 429）。请稍后再试，或在设置中切换其他 API / 模型。';
-    }
-    if ([502, 503, 504].includes(status) || /\b502\b|\b503\b|\b504\b|bad gateway|service unavailable|gateway timeout/i.test(msg)) {
-      return `中转站暂时不可用（HTTP ${status || '5xx'}）。已自动重试仍失败，请稍后重试，或在设置中切换其他 API / 模型。`;
-    }
-    if (err?.isTimeout || /timeout|超时|econnreset|socket hang up|network|fetch failed/i.test(msg)) {
-      return '网络不稳定或请求超时，已自动重试仍失败。请检查网络，或在设置中切换其他 API / 模型。';
-    }
-    return '';
-  }
-
   window.FutureAICanvasAIClient = {
     API_TIMEOUTS,
     requestTimeoutError,
@@ -139,7 +120,6 @@
     requestRetryDelay,
     isRetrySafeRequest,
     responseRetryDelay,
-    transientApiErrorMessage,
     wait,
     fetchWithTimeout,
     fetchJsonWithRetry

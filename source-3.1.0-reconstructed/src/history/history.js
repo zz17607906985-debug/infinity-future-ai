@@ -10,7 +10,9 @@
   }
 
   function scopedHistoryItems(history, currentProjectId) {
-    return (Array.isArray(history) ? history : []).filter(item => !item?.projectId || item.projectId === currentProjectId);
+    return (Array.isArray(history) ? history : [])
+      .slice()
+      .sort((a, b) => Number(b?.time || 0) - Number(a?.time || 0));
   }
 
   function historyRestoreUrls(item) {

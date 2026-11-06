@@ -63,19 +63,9 @@
     const renderGroups = deps.renderGroups;
     const persistMediaUrl = deps.persistMediaUrl;
     const mediaExtFromDataUrl = deps.mediaExtFromDataUrl;
-    const syncStoragePathField = deps.syncStoragePathField;
     const getActiveProjectWork = deps.getActiveProjectWork || (() => '');
     const CanvasNodes = deps.CanvasNodes || window.FutureAICanvasNodes;
 
-// Undo snapshots kept per project. Each one is a copy of the canvas only (nodes, wires, groups),
-// so view, chat and workbench state are never rolled back by Ctrl+Z.
-const PROJECT_HISTORY_LIMIT = 20;
-// Saves carrying the same coalesce key (e.g. typing in one prompt) within this window share one undo step.
-const PROJECT_HISTORY_COALESCE_MS = 2000;
-const CANVAS_STATE_KEYS = ['nodeSeq', 'groupSeq', 'edges', 'groups', 'nodes'];
-let pendingSaveCoalesce = '';
-// Project opened in the previous session (from storage) or most recently in this one.
-let lastOpenedProjectId = '';
 function blankProject(name, templateId = selectedProjectTemplateId()) {
   return {id: 'p_' + Date.now() + '_' + Math.random().toString(16).slice(2), name, templateId: selectedProjectTemplateId(templateId), createdAt: Date.now(), updatedAt: Date.now(), state: null};
 }
@@ -87,27 +77,11 @@ function loadProjects() {
     host.currentProjectId = null;
     clearCanvas();
     try { localStorage.removeItem(host.STORE.current); } catch {}
-    lastOpenedProjectId = '';
     return;
   }
-  lastOpenedProjectId = localStorage.getItem(host.STORE.current) || '';
-  host.currentProjectId = lastOpenedProjectId || host.projects[0].id;
+  host.currentProjectId = localStorage.getItem(host.STORE.current) || host.projects[0].id;
   if (!host.projects.some(p => p.id === host.currentProjectId)) host.currentProjectId = host.projects[0].id;
-  // A corrupt project must neither block startup nor be overwritten by an empty canvas.
-  let loaded = isProjectUsable(host.projects.find(p => p.id === host.currentProjectId));
-  if (loaded) {
-    try {
-      loadProject(host.currentProjectId);
-    } catch (err) {
-      console.error('[project] load on startup failed', err);
-      loaded = false;
-    }
-  }
-  if (!loaded) {
-    host.currentProjectId = null;
-    clearCanvas();
-    return;
-  }
+  loadProject(host.currentProjectId);
   saveProjects();
 }
 function migrateLegacyProjects(list) {
@@ -145,7 +119,7 @@ function defaultPromptFor(type) {
   return CanvasNodes.defaultPromptFor(type);
 }
 function ensureAssistantProfiles() {
-  const defaultChatModel = globalProviderForKind('chat')?.chatModel || FutureAIApiDefaults.get('chatModel') || '';
+  const defaultChatModel = globalProviderForKind('chat')?.chatModel || $('chatModel')?.value || '';
   const next = AssistantTopics.normalizeAssistantProfiles({
     profiles: host.assistantProfiles,
     activeId: host.assistantActiveId,
@@ -165,9 +139,12 @@ function assistantSystemPrompt() {
 function validAssistantContextMode(value) {
   return ['auto', 'selected', 'full', 'off'].includes(value) ? value : 'auto';
 }
-function syncAssistantContextModeControls() {
+function syncAssistantContextModeControls(sourceId = '') {
+  const main = $('assistantContextMode');
   const inline = $('assistantContextModeInline');
-  if (inline) inline.value = validAssistantContextMode(inline.value);
+  const next = validAssistantContextMode(sourceId === 'assistantContextModeInline' ? inline?.value : main?.value || inline?.value);
+  if (main && main.value !== next) main.value = next;
+  if (inline && inline.value !== next) inline.value = next;
 }
 function ensurePromptWorkbenchState() {
   const next = AssistantTopics.ensurePromptTopics({topics: host.promptTopics, activeId: host.promptWorkbenchActiveId});
@@ -178,64 +155,54 @@ function getActivePromptTopic() {
   ensurePromptWorkbenchState();
   return AssistantTopics.activePromptTopic(host.promptTopics, host.promptWorkbenchActiveId);
 }
+function setSaveStatus(state, text) {
+  const status = $('saveStatus');
+  if (!status) return;
+  status.classList.remove('is-saving', 'is-saved', 'is-error');
+  status.classList.add(`is-${state}`);
+  const icon = state === 'saving' ? 'fa-arrows-rotate fa-spin' : state === 'error' ? 'fa-triangle-exclamation' : 'fa-check';
+  status.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i><span>${esc(text)}</span>`;
+}
 function saveProjects() {
   if (!Array.isArray(host.projects)) host.projects = [];
   const projectsSaved = setStore(host.STORE.projects, host.projects);
   let currentSaved = true;
   try { localStorage.setItem(host.STORE.current, host.currentProjectId || ''); } catch { currentSaved = false; }
   const saved = projectsSaved && currentSaved;
-  // Autosave is silent while it works; a failure toasts once per failure streak and the
-  // next successful save says so, so a broken save never goes unnoticed.
-  if (!saved && !host.projectSaveFailed) toast('项目保存失败：本地缓存不可写或空间已满。请在设置中选择本地存储文件夹或清理磁盘，修改会在下次自动保存时重试。', 'error');
-  else if (saved && host.projectSaveFailed) toast('项目已恢复自动保存', 'success');
-  host.projectSaveFailed = !saved;
+  setSaveStatus(saved ? 'saved' : 'error', saved ? '已保存' : '保存失败');
   return saved;
 }
 function cloneProjectState(state) {
   if (!state || typeof state !== 'object') return null;
   try { return JSON.parse(JSON.stringify(state)); } catch { return null; }
 }
-function canvasState(state) {
-  if (!state || typeof state !== 'object') return null;
-  const canvas = {};
-  CANVAS_STATE_KEYS.forEach(key => { if (state[key] !== undefined) canvas[key] = state[key]; });
-  return canvas;
-}
 function projectStateSignature(state) {
-  try { return JSON.stringify(canvasState(state)); } catch { return ''; }
+  try { return JSON.stringify(state || null); } catch { return ''; }
 }
 function normalizeProjectHistory(project) {
   if (!project) return [];
   const history = Array.isArray(project.history) ? project.history : [];
-  return history.filter(item => item?.state && typeof item.state === 'object').slice(-PROJECT_HISTORY_LIMIT);
+  return history.filter(item => item?.state && typeof item.state === 'object').slice(-24);
 }
-function recordProjectVersion(project, nextState, coalesceKey = '') {
+function recordProjectVersion(project, nextState) {
   if (!project || host.projectHistoryBusy || !project.state) return;
   const previousSignature = projectStateSignature(project.state);
   const nextSignature = projectStateSignature(nextState);
   if (!previousSignature || previousSignature === nextSignature) return;
-  host.projectRedoStack = [];
+  const snapshot = cloneProjectState(project.state);
+  if (!snapshot) return;
   const history = normalizeProjectHistory(project);
   const last = history[history.length - 1];
-  const now = Date.now();
-  if (coalesceKey && last?.coalesceKey === coalesceKey && now - Number(last.touchedAt || last.createdAt || 0) < PROJECT_HISTORY_COALESCE_MS) {
-    // Same continuous edit: keep the state from before it started, just extend the window.
-    last.touchedAt = now;
-    return;
-  }
   if (last && projectStateSignature(last.state) === previousSignature) return;
-  const snapshot = cloneProjectState(canvasState(project.state));
-  if (!snapshot) return;
   history.push({
-    id: 'v_' + now + '_' + Math.random().toString(16).slice(2, 6),
-    createdAt: now,
-    touchedAt: now,
+    id: 'v_' + Date.now() + '_' + Math.random().toString(16).slice(2, 6),
+    createdAt: Date.now(),
     label: '自动恢复点',
-    coalesceKey: String(coalesceKey || ''),
     state: snapshot
   });
-  project.history = history.slice(-PROJECT_HISTORY_LIMIT);
+  project.history = history.slice(-24);
   host.projectUndoStack = project.history;
+  host.projectRedoStack = [];
 }
 function selectedProjectTemplateId(id = host.selectedProjectTemplate) {
   return ProjectTemplates.selectedProjectTemplateId(id);
@@ -245,7 +212,7 @@ function resetAssistantStateForNewProject() {
     host.promptTopics = AssistantTopics?.defaultPromptTopics?.() || [];
     host.promptWorkbenchActiveId = host.promptTopics[0]?.id || '';
     host.assistantActiveTab = 'dialog';
-    const defaultModel = globalProviderForKind?.('chat')?.chatModel || FutureAIApiDefaults.get('chatModel') || '';
+    const defaultModel = globalProviderForKind?.('chat')?.chatModel || $('chatModel')?.value || '';
     host.assistantProfiles = AssistantTopics?.defaultAssistantProfiles?.(defaultModel) || [];
     host.assistantActiveId = host.assistantProfiles[0]?.id || '';
     host.codexSchedules = [];
@@ -347,7 +314,6 @@ function showHome() {
   $('projectHome')?.classList.remove('hidden');
 }
 function showApp() {
-  lastOpenedProjectId = host.currentProjectId || lastOpenedProjectId;
   $('projectHome').classList.add('hidden');
   $('appShell').classList.remove('hidden');
   setActiveWorkspace(host.activeWorkspace || 'canvas');
@@ -359,35 +325,13 @@ function showApp() {
   updateZoomLabel();
   scheduleVisibilityUpdate();
 }
-function lastProject() {
-  return lastOpenedProjectId ? (host.projects || []).find(item => item.id === lastOpenedProjectId) || null : null;
-}
-function isProjectUsable(project) {
-  if (!project || typeof project !== 'object') return false;
-  if (project.state == null) return true;
-  return typeof project.state === 'object' && (project.state.nodes == null || Array.isArray(project.state.nodes));
-}
-// Opens the previous session's project. Returns false when it is missing or corrupt.
-function openLastProject() {
-  const project = lastProject();
-  if (!hasStorageDir() || !isProjectUsable(project)) return false;
-  try {
-    enterProject(project.id);
-    return true;
-  } catch (err) {
-    console.error('[project] open last project failed', err);
-    host.currentProjectId = null;
-    clearCanvas();
-    showHome();
-    return false;
+function resumeLastProjectOrShowHome() {
+  if (hasStorageDir() && host.projects.length && host.currentProjectId) {
+    showApp();
+    return;
   }
-}
-// Launch always lands on the home screen unless the user opted into auto-opening.
-function showStartupScreen() {
   showHome();
-  if (!hasStorageDir()) return promptStorageDirRequired();
-  if (!host.autoOpenLastProject || !lastOpenedProjectId) return;
-  if (!openLastProject()) toast('上次的项目不存在或已损坏，已回到主界面', 'warn');
+  if (!hasStorageDir()) promptStorageDirRequired();
 }
 function onProjectGridClick(e) {
   const emptyAction = e.target.closest('[data-empty-action]')?.dataset.emptyAction;
@@ -512,19 +456,18 @@ function serialize() {
     })),
     edges: host.edges,
     groups: [...host.groups.values()]
-      .map(g => ({id: g.id, name: g.name, nodeIds: g.nodeIds.filter(id => host.nodes.has(id)), workflowId: g.workflowId || '', workflowVersion: g.workflowVersion || '', workflowDefinition: g.workflowDefinition || null, collapsed: Boolean(g.collapsed), color: g.color || ''}))
+      .map(g => ({id: g.id, name: g.name, nodeIds: g.nodeIds.filter(id => host.nodes.has(id)), workflowId: g.workflowId || '', workflowVersion: g.workflowVersion || '', workflowDefinition: g.workflowDefinition || null, collapsed: Boolean(g.collapsed)}))
       .filter(g => g.nodeIds.length > 1),
     nodes: [...host.nodes.values()].map(n => ({id: n.id, type: n.type, x: n.x, y: n.y, data: n.data}))
   };
 }
-// Also used directly as an event listener, so options may be an Event.
-function saveProject(options) {
+function saveProject() {
   const p = host.projects.find(x => x.id === host.currentProjectId);
   if (!p) return;
+  setSaveStatus('saving', '正在保存');
   const nextState = serialize();
-  recordProjectVersion(p, nextState, typeof options?.coalesce === 'string' ? options.coalesce : '');
-  // Keep the saved canvas detached from the live nodes/edges, so later in-place edits can't rewrite it before the next undo step is taken.
-  p.state = Object.assign(nextState, cloneProjectState(canvasState(nextState)));
+  recordProjectVersion(p, nextState);
+  p.state = nextState;
   p.updatedAt = Date.now();
   saveProjects();
   renderProjectVersionControls();
@@ -560,8 +503,7 @@ function applyProjectSnapshot(state, message = '项目已恢复') {
   const undoStack = Array.isArray(host.projectUndoStack) ? host.projectUndoStack : [];
   const redoStack = Array.isArray(host.projectRedoStack) ? host.projectRedoStack : [];
   try {
-    // Only the canvas part is restored; chat, workbench and view stay as they are now.
-    project.state = Object.assign(cloneProjectState(project.state) || {}, cloneProjectState(canvasState(state)));
+    project.state = cloneProjectState(state);
     project.updatedAt = Date.now();
     loadProject(project.id, {preserveHistory: true});
     host.projectUndoStack = undoStack;
@@ -576,32 +518,25 @@ function applyProjectSnapshot(state, message = '项目已恢复') {
     renderProjectVersionControls();
   }
 }
-function flushPendingSave() {
-  if (!host.saveTimer) return;
-  clearTimeout(host.saveTimer);
-  host.saveTimer = null;
-  saveProject({coalesce: pendingSaveCoalesce});
-}
 function undoProject() {
-  flushPendingSave();
   const project = host.projects?.find(item => item.id === host.currentProjectId);
   const history = normalizeProjectHistory(project);
   if (!project?.state || !history.length) return toast('还没有可撤销的项目修改', 'warn');
-  const current = cloneProjectState(canvasState(project.state));
+  const current = cloneProjectState(project.state);
   const previous = history[history.length - 1];
   project.history = history.slice(0, -1);
   host.projectUndoStack = project.history;
-  host.projectRedoStack = [...(host.projectRedoStack || []), {id: 'redo_' + Date.now(), state: current}].slice(-PROJECT_HISTORY_LIMIT);
+  host.projectRedoStack = [...(host.projectRedoStack || []), {id: 'redo_' + Date.now(), state: current}].slice(-24);
   return applyProjectSnapshot(previous.state, '已撤销到上一个恢复点');
 }
 function redoProject() {
   const project = host.projects?.find(item => item.id === host.currentProjectId);
   const redo = Array.isArray(host.projectRedoStack) ? host.projectRedoStack : [];
   if (!project || !redo.length) return toast('没有可重做的项目修改', 'warn');
-  const current = cloneProjectState(canvasState(project.state));
+  const current = cloneProjectState(project.state);
   const next = redo[redo.length - 1];
   host.projectRedoStack = redo.slice(0, -1);
-  project.history = [...normalizeProjectHistory(project), {id: 'v_' + Date.now(), createdAt: Date.now(), label: '重做前恢复点', state: current}].slice(-PROJECT_HISTORY_LIMIT);
+  project.history = [...normalizeProjectHistory(project), {id: 'v_' + Date.now(), createdAt: Date.now(), label: '重做前恢复点', state: current}].slice(-24);
   host.projectUndoStack = project.history;
   return applyProjectSnapshot(next.state, '已重做上一个项目修改');
 }
@@ -610,22 +545,17 @@ function restoreProjectVersion(index) {
   const history = normalizeProjectHistory(project);
   const selected = Number(index ?? $('projectVersionSelect')?.value);
   if (!Number.isInteger(selected) || !history[selected]) return toast('请选择一个有效的项目恢复点', 'warn');
-  const current = cloneProjectState(canvasState(project.state));
+  const current = cloneProjectState(project.state);
   const newer = history.slice(selected + 1).map(item => ({id: item.id, state: cloneProjectState(item.state)}));
-  host.projectRedoStack = [...newer, {id: 'redo_' + Date.now(), state: current}].filter(item => item.state).slice(-PROJECT_HISTORY_LIMIT);
+  host.projectRedoStack = [...newer, {id: 'redo_' + Date.now(), state: current}].filter(item => item.state).slice(-24);
   project.history = history.slice(0, selected);
   host.projectUndoStack = project.history;
   return applyProjectSnapshot(history[selected].state, '已恢复所选项目版本');
 }
-// options.coalesce groups rapid edits of one field into a single undo step; mixed edits are not merged.
-function queueSave(options) {
-  const key = typeof options?.coalesce === 'string' ? options.coalesce : '';
-  pendingSaveCoalesce = host.saveTimer && pendingSaveCoalesce !== key ? '' : key;
+function queueSave() {
   clearTimeout(host.saveTimer);
-  host.saveTimer = setTimeout(() => {
-    host.saveTimer = null;
-    saveProject({coalesce: pendingSaveCoalesce});
-  }, 300);
+  setSaveStatus('saving', '正在保存');
+  host.saveTimer = setTimeout(saveProject, 300);
 }
 function loadProject(id, options = {}) {
   const p = host.projects.find(x => x.id === id);
@@ -654,7 +584,7 @@ function loadProject(id, options = {}) {
   host.promptWorkbenchActiveId = p.state.promptWorkbench?.activeId || host.promptTopics[0]?.id || '';
   host.codexSchedules = normalizeCodexSchedules(p.state.promptWorkbench?.codexSchedules);
   host.assistantActiveTab = 'dialog';
-  host.assistantProfiles = Array.isArray(p.state.promptWorkbench?.assistantProfiles) ? p.state.promptWorkbench.assistantProfiles : AssistantTopics.defaultAssistantProfiles(globalProviderForKind('chat')?.chatModel || FutureAIApiDefaults.get('chatModel') || '');
+  host.assistantProfiles = Array.isArray(p.state.promptWorkbench?.assistantProfiles) ? p.state.promptWorkbench.assistantProfiles : AssistantTopics.defaultAssistantProfiles(globalProviderForKind('chat')?.chatModel || $('chatModel')?.value || '');
   host.assistantActiveId = p.state.promptWorkbench?.assistantActiveId || host.assistantProfiles[0]?.id || '';
   ensureAssistantProfiles();
   host.activeWorkspace = normalizeWorkspace(p.state.promptWorkbench?.workspace || 'canvas');
@@ -673,9 +603,7 @@ function loadProject(id, options = {}) {
   if (activeTopic && !activeTopic.dialogEdit) activeTopic.dialogEdit = legacyDialogState;
   loadActiveTopicDialogState(legacyDialogState);
   applyTransform();
-  // Build the live canvas from a copy, so editing it never changes the saved state behind undo.
-  const canvas = cloneProjectState(canvasState(p.state)) || {};
-  (canvas.nodes || []).forEach(item => addNode(item.type, item.x, item.y, item.data || {}, item.id, false));
+  (p.state.nodes || []).forEach(item => addNode(item.type, item.x, item.y, item.data || {}, item.id, false));
   host.generationQueue = (Array.isArray(p.state.generationQueue) ? p.state.generationQueue : [])
     .filter(item => item?.nodeId && host.nodes.has(item.nodeId))
     .map(item => {
@@ -693,8 +621,8 @@ function loadProject(id, options = {}) {
       hydrateNode(node);
     }
   }
-  (canvas.groups || []).forEach(item => addGroup(item.nodeIds || [], item.id, item.name || '', false, item));
-  host.edges = canvas.edges || [];
+  (p.state.groups || []).forEach(item => addGroup(item.nodeIds || [], item.id, item.name || '', false, item));
+  host.edges = p.state.edges || [];
   refreshAllLinkedInputs();
   drawEdges();
   renderGroups();
@@ -726,8 +654,8 @@ function clearCanvas() {
   }
 }
 function createDefaultScene() {
-  const imageModel = FutureAIApiDefaults.get('imageModel') || 'gpt-image2';
-  const videoModel = FutureAIApiDefaults.get('videoModel') || 'omni-flash';
+  const imageModel = $('imageModel')?.value || 'gpt-image2';
+  const videoModel = $('videoModel')?.value || 'omni-flash';
   const img = addNode?.('image', 260, 190, {model: imageModel, size: '1024x1024', prompt: ''}, null, false);
   const video = addNode?.('video', 820, 190, {model: videoModel, size: '1280x720', duration: '5', prompt: ''}, null, false);
   if (img?.id && video?.id) connectSilently?.(img.id, 'image', video.id, 'ref');
@@ -736,7 +664,6 @@ function createProjectFromTemplate(templateId = 'default') {
   applyProjectTemplate(selectedProjectTemplateId(templateId));
 }
 function applyProjectTemplate(templateId) {
-  if (templateId === 'blank') return;
   if (templateId === 'short-video') return createShortVideoTemplate();
   if (templateId === 'character') return createCharacterTemplate();
   if (templateId === 'image-to-image') return createImageToImageTemplate();
@@ -746,20 +673,20 @@ function applyProjectTemplate(templateId) {
 }
 function createShortVideoTemplate() {
   const script = addNode('prompt', 160, 180, {title: '短视频脚本', prompt: '短视频脚本：主题、角色、冲突、结尾反转、旁白节奏。', tags: ['短视频', '脚本']}, null, false);
-  const firstFrame = addNode('image', 520, 150, {title: '首帧画面', prompt: '根据脚本生成竖屏短视频首帧，强调主体、情绪和场景。', model: FutureAIApiDefaults.get('imageModel'), size: '720x1280', tags: ['短视频', '首帧']}, null, false);
-  const video = addNode('video', 1080, 170, {title: '视频生成', prompt: '把首帧扩展为连贯短视频，保留角色和镜头连续性。', model: FutureAIApiDefaults.get('videoModel'), size: '720x1280', duration: '5', tags: ['短视频', '视频']}, null, false);
+  const firstFrame = addNode('image', 520, 150, {title: '首帧画面', prompt: '根据脚本生成竖屏短视频首帧，强调主体、情绪和场景。', model: $('imageModel').value, size: '720x1280', tags: ['短视频', '首帧']}, null, false);
+  const video = addNode('video', 1080, 170, {title: '视频生成', prompt: '把首帧扩展为连贯短视频，保留角色和镜头连续性。', model: $('videoModel').value, size: '720x1280', duration: '5', tags: ['短视频', '视频']}, null, false);
   connectSilently(script.id, 'text', firstFrame.id, 'prompt');
   connectSilently(firstFrame.id, 'image', video.id, 'ref');
 }
 function createCharacterTemplate() {
   const character = addNode('character', 170, 180, {title: '角色设定', prompt: '角色姓名、年龄、外貌、服装、性格、口头禅、禁忌元素。', tags: ['角色', '设定'], favorite: true}, null, false);
-  const portrait = addNode('image', 560, 160, {title: '角色参考图', prompt: '根据角色设定生成稳定角色参考图，正面半身，清晰服装和面部特征。', model: FutureAIApiDefaults.get('imageModel'), size: '1024x1536', tags: ['角色', '参考图']}, null, false);
+  const portrait = addNode('image', 560, 160, {title: '角色参考图', prompt: '根据角色设定生成稳定角色参考图，正面半身，清晰服装和面部特征。', model: $('imageModel').value, size: '1024x1536', tags: ['角色', '参考图']}, null, false);
   connectSilently(character.id, 'text', portrait.id, 'prompt');
 }
 function createImageToImageTemplate() {
   const upload = addNode('upload', 180, 210, {title: '上传参考', name: '参考素材', kind: 'image', tags: ['图生图', '参考']}, null, false);
   const prompt = addNode('prompt', 180, 520, {title: '改图要求', prompt: '保留主体结构，调整风格、背景、光影或细节。', tags: ['图生图', '提示词']}, null, false);
-  const image = addNode('image', 620, 210, {title: '图生图结果', prompt: '按照参考图和改图要求生成新图。', model: FutureAIApiDefaults.get('imageModel'), size: '1024x1024', tags: ['图生图', '输出']}, null, false);
+  const image = addNode('image', 620, 210, {title: '图生图结果', prompt: '按照参考图和改图要求生成新图。', model: $('imageModel').value, size: '1024x1024', tags: ['图生图', '输出']}, null, false);
   connectSilently(upload.id, 'media', image.id, 'ref');
   connectSilently(prompt.id, 'text', image.id, 'prompt');
 }
@@ -771,35 +698,30 @@ function createComfyUITemplate() {
 function createStoryboardTemplate() {
   const story = addNode('prompt', 150, 160, {title: '故事大纲', prompt: '故事大纲：起因、发展、转折、结尾。', tags: ['分镜', '大纲']}, null, false);
   const shot = addNode('prompt', 150, 430, {title: '分镜表', prompt: '分镜表：镜头编号、景别、角色动作、场景、镜头运动、时长。', tags: ['分镜', '镜头']}, null, false);
-  const frame = addNode('image', 560, 210, {title: '关键帧', prompt: '根据分镜生成关键帧，保持画面连续性。', model: FutureAIApiDefaults.get('imageModel'), size: '1280x720', tags: ['分镜', '关键帧']}, null, false);
-  const video = addNode('video', 1120, 220, {title: '镜头视频', prompt: '根据分镜和关键帧生成单镜头视频，保持节奏和连续性。', model: FutureAIApiDefaults.get('videoModel'), size: '1280x720', duration: '5', tags: ['分镜', '视频']}, null, false);
+  const frame = addNode('image', 560, 210, {title: '关键帧', prompt: '根据分镜生成关键帧，保持画面连续性。', model: $('imageModel').value, size: '1280x720', tags: ['分镜', '关键帧']}, null, false);
+  const video = addNode('video', 1120, 220, {title: '镜头视频', prompt: '根据分镜和关键帧生成单镜头视频，保持节奏和连续性。', model: $('videoModel').value, size: '1280x720', duration: '5', tags: ['分镜', '视频']}, null, false);
   connectSilently(story.id, 'text', frame.id, 'prompt');
   connectSilently(shot.id, 'text', frame.id, 'prompt');
   connectSilently(shot.id, 'text', video.id, 'prompt');
   connectSilently(frame.id, 'image', video.id, 'ref');
 }
 
-function renderResumeLastButton() {
-  const button = $('homeResumeLast');
-  if (!button) return;
-  const project = host.storageDir ? lastProject() : null;
-  const usable = isProjectUsable(project);
-  button.hidden = !usable;
-  button.disabled = !usable;
-  const meta = $('homeResumeLastMeta');
-  if (!usable) {
-    if (meta) meta.textContent = '';
-    return;
-  }
-  const time = new Date(project.updatedAt || project.createdAt || Date.now()).toLocaleString('zh-CN', {hour12: false});
-  if (meta) meta.textContent = `${project.name || '未命名项目'} · ${time}`;
-  button.title = `继续上次项目：${project.name || '未命名项目'}`;
-}
 function renderProjects() {
   const list = Array.isArray(host.projects) ? host.projects : [];
+  const hasCurrentProject = Boolean(host.storageDir && host.currentProjectId && list.some(item => item.id === host.currentProjectId));
   const grid = $('projectGrid');
   const side = $('sideProjects');
-  renderResumeLastButton();
+  const currentButton = $('homeOpenCurrent');
+  if (currentButton) {
+    currentButton.disabled = !hasCurrentProject;
+    currentButton.setAttribute('aria-disabled', String(!hasCurrentProject));
+    currentButton.title = hasCurrentProject ? '进入当前项目' : '请先选择存储位置并创建项目';
+  }
+  const quickOpen = $('homeQuickOpen');
+  if (quickOpen) {
+    quickOpen.disabled = !hasCurrentProject;
+    quickOpen.setAttribute('aria-disabled', String(!hasCurrentProject));
+  }
   if (grid) {
     grid.innerHTML = list.length ? list.map(p => {
       const thumb = projectThumb(p);
@@ -888,24 +810,14 @@ async function ensureStorageReady() {
 }
 async function loadLocalStores() {
   if (!host.storageDir || !window.localStorageBridge) return;
-  // Each store is read on its own. A store whose file could not be read is
-  // write-protected for this session: the browser cache copy has media stripped
-  // and may be older, so it must never be written over the real files.
-  const names = ['projects', 'history', 'assets', 'asset-folders', 'models'];
-  const results = await Promise.allSettled(names.map(name => window.localStorageBridge.readJson(host.storageDir, name)));
-  host.storeReadFailed = {};
-  const failed = [];
-  results.forEach((result, index) => {
-    if (result.status === 'rejected') {
-      host.storeReadFailed[names[index]] = host.storageDir;
-      failed.push(`${names[index]}：${result.reason?.message || result.reason}`);
-    }
-  });
-  if (failed.length) {
-    toast('读取本地存储失败，为保护你的项目，本次不会覆盖磁盘上的这些文件：\n' + failed.join('\n') + '\n请检查存储文件夹后重启软件。', 'error');
-  }
   try {
-    let [localProjects, localHistory, localAssets, localAssetFolders, localModels] = results.map(result => result.status === 'fulfilled' ? result.value : null);
+    let [localProjects, localHistory, localAssets, localAssetFolders, localModels] = await Promise.all([
+      window.localStorageBridge.readJson(host.storageDir, 'projects'),
+      window.localStorageBridge.readJson(host.storageDir, 'history'),
+      window.localStorageBridge.readJson(host.storageDir, 'assets'),
+      window.localStorageBridge.readJson(host.storageDir, 'asset-folders'),
+      window.localStorageBridge.readJson(host.storageDir, 'models')
+    ]);
     if (localProjects) {
       const migration = await persistProjectMedia(localProjects);
       localProjects = migration.projects;
@@ -933,33 +845,13 @@ async function loadLocalStores() {
     toast('读取本地存储失败：\n' + (err.message || err), 'error');
   }
 }
-// Leaving the default folder: optionally copy its media into the new folder and
-// rebase in-memory references. Declining keeps absolute references to the default
-// folder, which stays authorized, so nothing is lost either way.
-async function carryOverDefaultStorageMedia(fromDir, toDir) {
-  saveProject();
-  const copy = await openModal({
-    title: '迁移默认目录中的媒体',
-    text: `默认目录 ${fromDir} 中的项目媒体是否复制到新目录？\n复制后项目将引用新目录中的文件；不复制则继续从默认目录读取。默认目录中的文件都不会被删除。`,
-    okText: '复制到新目录',
-    confirm: true
-  });
-  if (!copy) return;
-  const {copied, fromPrefix, toPrefix} = await window.localStorageBridge.copyMedia(fromDir, toDir);
-  const rebase = value => JSON.parse(JSON.stringify(value ?? null).split(fromPrefix).join(toPrefix));
-  setStore(host.STORE.projects, rebase(getStore(host.STORE.projects, [])));
-  host.history = rebase(host.history);
-  host.assetLibrary = rebase(host.assetLibrary);
-  toast(`已复制 ${copied} 个媒体文件到新目录`, 'success');
-}
 async function chooseStorageDir() {
   if (blockProjectTransition('更改存储目录')) return;
   if (!window.localStorageBridge) return toast('当前环境不支持选择本地文件夹', 'warn');
   const dir = await window.localStorageBridge.chooseDir();
   if (!dir) return;
-  if (host.usingDefaultStorageDir && dir !== host.storageDir) await carryOverDefaultStorageMedia(host.storageDir, dir);
   host.storageDir = dir;
-  syncStoragePathField();
+  if ($('localStoragePath')) $('localStoragePath').value = host.storageDir;
   saveSettings();
   await Promise.all([
     syncLocalStore('projects', getStore(host.STORE.projects, [])),
@@ -980,11 +872,6 @@ async function chooseStorageDir() {
 async function openStorageDir() {
   if (!host.storageDir) return toast('请先选择本地存储文件夹', 'warn');
   await window.localStorageBridge?.openDir(host.storageDir);
-}
-// Window close / page hide: write the debounced canvas save and wait for the writes.
-async function flushBeforeClose() {
-  flushPendingSave();
-  await flushWorkspaceStores();
 }
 async function flushWorkspaceStores() {
   saveProject();
@@ -1118,13 +1005,6 @@ function warnStorageQuotaOnce() {
 }
 function syncLocalStore(name, value) {
   if (!host.storageDir || !window.localStorageBridge) return Promise.resolve(false);
-  if (host.storeReadFailed?.[name] && host.storeReadFailed[name] === host.storageDir) {
-    if (!host.storeReadFailedWarned) {
-      host.storeReadFailedWarned = true;
-      console.warn('store write skipped: file read failed this session', name);
-    }
-    return Promise.resolve(false);
-  }
   const seq = Number(host.storageSyncSeq || 0) + 1;
   host.storageSyncSeq = seq;
   return window.localStorageBridge.writeJson(host.storageDir, name, value).then(() => {
@@ -1137,6 +1017,7 @@ function syncLocalStore(name, value) {
     console.warn('local storage sync failed', err);
     if (seq === host.storageSyncSeq) {
       host.storageSyncFailed = true;
+      setSaveStatus('error', '保存失败');
       if (!host.storageSyncWarned) {
         host.storageSyncWarned = true;
         toast('项目已更新，但写入本地存储文件夹失败。请检查磁盘空间和目录权限后重试。', 'error');
@@ -1167,8 +1048,7 @@ function syncLocalStore(name, value) {
       enterProject,
       showHome,
       showApp,
-      showStartupScreen,
-      openLastProject,
+      resumeLastProjectOrShowHome,
       onProjectGridClick,
       onSideProjectClick,
       renameProject,
@@ -1200,8 +1080,6 @@ function syncLocalStore(name, value) {
       chooseStorageDir,
       openStorageDir,
       flushWorkspaceStores,
-      flushBeforeClose,
-      flushPendingSave,
       workspaceBackupPayload,
       exportWorkspaceBackup,
       restoreWorkspaceBackup,

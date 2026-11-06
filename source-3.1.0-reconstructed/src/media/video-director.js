@@ -181,6 +181,10 @@
     };
   }
 
+  function isVersionedOperation(operation) {
+    return SOURCE_VIDEO_OPERATIONS.has(normalizeOperation(operation));
+  }
+
   function requestSummary({request = {}, profile = null, estimate = null} = {}) {
     const validation = validateRequest(request);
     const grouped = validation.grouped;
@@ -216,6 +220,7 @@
     validateRequest,
     operationInstructions,
     protocolPayload,
+    isVersionedOperation,
     requestSummary,
     unique
   };

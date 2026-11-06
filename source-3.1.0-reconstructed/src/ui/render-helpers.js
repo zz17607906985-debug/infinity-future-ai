@@ -5,6 +5,10 @@
     return String(value ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
 
+  function unique(values) {
+    return [...new Set(values)];
+  }
+
   function isVideoMedia(mime = '', url = '') {
     return /^video\//i.test(mime || '') || /^data:video\//i.test(url || '') || /\.(mp4|webm|mov|m4v|avi)$/i.test(url || '');
   }
@@ -19,74 +23,35 @@
     return `<div class="node-tags" data-node-metadata>${favorite}${tags.map(tag => `<span class="node-tag" title="${esc(tag)}">${esc(tag)}</span>`).join('')}</div>`;
   }
 
-  // One labeled toolbar above the selected node; each node type lists only the actions it already supports.
-  // A tool is [attribute, icon, label, title]; `quick:<action>` routes through the node context actions.
-  const FLOAT_TOOLS = {
-    image: [
-      ['quick:camera', 'fa-solid fa-cube', '多角度', '3D 机位：换角度生成（已有图时放到右侧新节点，原图保留）'],
-      ['quick:region-edit', 'fa-solid fa-wand-magic-sparkles', '局部', '局部编辑（重绘 / 扩图 / 抠图 / 放大）'],
-      ['quick:batch-variants', 'fa-solid fa-layer-group', '批量', '批量与变体：一次出多张 / 风格 / 比例'],
-      ['quick:prompt-assist', 'fa-solid fa-lightbulb', '辅助', '提示词辅助：结构补全 / 片段 / AI 优化'],
-      ['quick:pick-continue', 'fa-solid fa-check-double', '选用', '选用这张继续（其他结果仍保留）'],
-      ['quick:fabric-edit', 'fa-solid fa-pen-ruler', '编辑', '编辑图片（画笔 / 涂抹 / 文字），保存为右侧新节点，原图保留'],
-      ['quick:crop-image', 'fa-solid fa-crop-simple', '裁剪', '按比例快速裁剪，保存为右侧新节点，原图保留'],
-      ['quick:edit', 'fa-regular fa-comments', '对话', '对话改图'],
-      ['quick:describe', 'fa-regular fa-eye', '描述', '生成图片描述提示节点'],
-      ['quick:grid', 'fa-solid fa-table-cells', '分镜', '创建分镜格子节点'],
-      ['quick:image-to-video', 'fa-solid fa-film', '转视频', '用这张图创建图生视频节点']
-    ],
-    video: [['quick:cover', 'fa-regular fa-image', '尾帧', '截取尾帧作为参考图']],
-    comfyui: [
-      ['data-comfy-test', 'fa-solid fa-vial', '测试连接', '测试 ComfyUI 连接'],
-      ['data-comfy-import', 'fa-solid fa-file-import', '导入', '导入 workflow JSON'],
-      ['data-comfy-save-global', 'fa-solid fa-floppy-disk', '存为全局', '保存为全局默认 workflow'],
-      ['data-comfy-export', 'fa-solid fa-file-export', '导出', '导出 workflow JSON'],
-      ['data-comfy-refresh', 'fa-solid fa-rotate', '刷新结构', '重新解析 workflow 结构']
-    ],
-    upload: [['data-upload-btn', 'fa-solid fa-folder-open', '选文件', '选择图片或视频（已有素材时放到右侧新节点，原素材保留）']],
-    'media-tool': [],
-    prompt: [
-      ['data-run="prompt"', 'fa-solid fa-list-check', '整理', '整理提示词'],
-      ['quick:prompt-assist', 'fa-solid fa-lightbulb', '辅助', '提示词辅助：结构补全 / 片段 / AI 优化'],
-      ['data-optimize-prompt', 'fa-solid fa-wand-magic-sparkles', '优化', '优化提示词'],
-      ['data-clear', 'fa-solid fa-eraser', '清空', '清空提示词']
-    ]
-  };
-  FLOAT_TOOLS.character = FLOAT_TOOLS.prompt;
-  const FLOAT_ICONS = {
-    copy: ['quick:copy', 'fa-regular fa-copy', '复制节点'],
-    download: ['quick:download', 'fa-solid fa-download', '下载'],
-    'download-media': ['data-download-media', 'fa-solid fa-download', '下载'],
-    favorite: ['quick:favorite', 'fa-regular fa-heart', '加入资产库'],
-    fullscreen: ['quick:fullscreen', 'fa-solid fa-expand', '放大观看']
-  };
-  const FLOAT_ICON_SETS = {
-    image: ['copy', 'download', 'favorite', 'fullscreen'],
-    video: ['copy', 'download', 'favorite', 'fullscreen'],
-    comfyui: ['copy', 'download', 'favorite', 'fullscreen'],
-    upload: ['copy', 'download-media', 'favorite', 'fullscreen'],
-    'media-tool': ['copy', 'download-media', 'fullscreen'],
-    prompt: ['copy'],
-    character: ['copy']
-  };
-  function floatToolAttr(attr) {
-    return attr.startsWith('quick:') ? `data-quick="${attr.slice(6)}"` : attr;
-  }
-  function nodeFloatToolbar(kind) {
-    const tools = (FLOAT_TOOLS[kind] || []).map(([attr, icon, label, title]) =>
-      `<button type="button" class="float-tool" ${floatToolAttr(attr)} title="${title}"><i class="${icon}"></i><span>${label}</span></button>`);
-    const icons = (FLOAT_ICON_SETS[kind] || ['copy']).map(name => {
-      const [attr, icon, title] = FLOAT_ICONS[name];
-      return `<button type="button" class="float-tool float-tool-icon" ${floatToolAttr(attr)} title="${title}" aria-label="${title}"><i class="${icon}"></i></button>`;
-    });
-    return `<div class="node-float-toolbar" data-float-toolbar="${kind}">${tools.join('')}${tools.length ? '<span class="float-tool-sep"></span>' : ''}${icons.join('')}</div>`;
+  function nodeQuickToolbar(kind) {
+    const common = `
+      <button data-quick="copy" title="复制节点"><i class="fa-regular fa-copy"></i></button>
+      <button data-quick="download" title="下载"><i class="fa-solid fa-download"></i></button>
+      <button data-quick="favorite" title="收藏"><i class="fa-regular fa-heart"></i></button>
+      <button data-quick="fullscreen" title="放大观看"><i class="fa-solid fa-expand"></i></button>`;
+    const image = `
+      <button data-quick="undo" title="撤销"><i class="fa-solid fa-rotate-left"></i></button>
+      <button data-quick="edit" title="编辑"><i class="fa-regular fa-pen-to-square"></i></button>
+      <button data-quick="describe" title="图片描述"><i class="fa-regular fa-eye"></i></button>
+      <button data-quick="grid" title="分镜"><i class="fa-solid fa-table-cells"></i></button>
+      <button data-quick="camera" title="镜头"><i class="fa-solid fa-camera"></i></button>`;
+    const video = `
+      <button data-quick="cover" title="截取尾帧"><i class="fa-regular fa-image"></i></button>`;
+    return `<div class="node-quick-toolbar">${kind === 'image' ? image : video}${common}</div>`;
   }
 
-  // Run buttons in the composer are round icon buttons; busy state swaps the icon for a spinner.
-  function setRunButtonBusy(btn, busy, icon = 'fa-arrow-up') {
-    if (!btn) return;
-    btn.disabled = !!busy;
-    btn.innerHTML = `<i class="fa-solid ${busy ? 'fa-spinner fa-spin' : icon}"></i>`;
+  function getModelOptions({kind, current = '', defaultValue = '', importedModels = []} = {}) {
+    const fallback = kind === 'video'
+      ? ['omni-flash', 'sora-2', 'veo3.1-components', 'veo_3_1-fast']
+      : ['gpt-image2', 'gpt-image-2', 'gpt-image-1'];
+    const pattern = kind === 'video'
+      ? /video|sora|kling|wan|hailuo|runway|veo|luma|pika|omni/i
+      : /image|img|dall|flux|gpt-image|edit/i;
+    return unique([current, defaultValue, ...fallback, ...importedModels.filter(m => pattern.test(m)), ...importedModels].filter(Boolean));
+  }
+
+  function modelOptionsHtml({kind, current = '', defaultValue = '', importedModels = [], esc = defaultEsc} = {}) {
+    return getModelOptions({kind, current, defaultValue, importedModels}).map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   }
 
   function imageStatusMessage(status, title = '') {
@@ -104,24 +69,18 @@
     const title = node?.data?.statusTitle || (type === 'running' ? '生成中' : type === 'error' ? '生成失败' : '');
     const message = imageStatusMessage(node?.data?.status, title) || (type === 'running' ? '正在请求接口，请稍候' : '请检查接口返回信息');
     const icon = type === 'running' ? 'fa-spinner fa-spin' : 'fa-triangle-exclamation';
-    return `<div class="generation-status ${esc(type)}">${type === 'running' ? `<video class="waiting-animation-video" autoplay muted loop playsinline src="${esc(waitingAnimationSrc)}"></video>` : ''}<i class="fa-solid ${icon}"></i><strong>${esc(title)}</strong><span>${esc(message)}</span>${type === 'error' && node?.data?.statusSafety ? safetyRewriteButtonHtml() : ''}</div>`;
+    return `<div class="generation-status ${esc(type)}">${type === 'running' ? `<video class="waiting-animation-video" autoplay muted loop playsinline src="${esc(waitingAnimationSrc)}"></video>` : ''}<i class="fa-solid ${icon}"></i><strong>${esc(title)}</strong><span>${esc(message)}</span></div>`;
   }
 
-  // Shown only when a generation was rejected by content-safety review.
-  function safetyRewriteButtonHtml() {
-    return '<button type="button" class="status-safe-btn" data-safe title="把提示词改写为更安全的表达"><i class="fa-solid fa-shield-heart"></i>安全改写</button>';
-  }
-
-  function referencePreviewHtml({item, label, index = 0, esc = defaultEsc, isVideo = isVideoMedia, roleOptions = '', timeControl = '', strengthControl = '', sheetButton = '', overLimit = false} = {}) {
+  function referencePreviewHtml({item, label, index = 0, esc = defaultEsc, isVideo = isVideoMedia, roleOptions = '', timeControl = ''} = {}) {
     const url = safeMediaUrl(item?.url);
     if (!url) return '';
     const title = label || (index === 0 ? '主体图' : '参考图');
     const key = esc(item.key || String(index));
     const media = isVideo('', url)
       ? `<video src="${url}"></video>`
-      : `<img src="${url}" alt="${esc(title)}">`;
-    const thumbTitle = overLimit ? `${title}：超出当前模型可接收的数量，请移除` : `${title}：双击查看完整参考，可拖动调整顺序`;
-    return `<div class="ref-item${overLimit ? ' over-limit' : ''}" data-ref-item data-ref-key="${key}"><button type="button" class="ref-thumb" data-open-ref data-ref-index="${index}" data-ref-key="${key}" title="${esc(thumbTitle)}">${media}<span>${esc(title)}</span></button><button type="button" class="ref-remove" data-remove-ref data-ref-key="${key}" title="移除这张参考" aria-label="移除${esc(title)}"><i class="fa-solid fa-xmark"></i></button>${sheetButton}${roleOptions ? `<select class="ref-role-select" data-reference-role data-ref-key="${key}" title="设置这份参考素材的用途" aria-label="${esc(title)}用途">${roleOptions}</select>` : ''}${strengthControl}${timeControl}</div>`;
+      : `<img ${url.startsWith('file:') ? `data-canvas-preview-src="${esc(url)}"` : `src="${url}"`} alt="${esc(title)}">`;
+    return `<div class="ref-item" data-ref-item data-ref-key="${key}"><button type="button" class="ref-thumb" data-open-ref data-ref-index="${index}" data-ref-key="${key}" title="${esc(title)}：双击查看完整参考，可拖动调整顺序">${media}<span>${esc(title)}</span></button>${roleOptions ? `<select class="ref-role-select" data-reference-role data-ref-key="${key}" title="设置这份参考素材的用途" aria-label="${esc(title)}用途">${roleOptions}</select>` : ''}${timeControl}</div>`;
   }
 
   function uniqueRefItems(items) {
@@ -136,11 +95,11 @@
 
   window.FutureAIUIRenderHelpers = {
     renderNodeMetadata,
-    nodeFloatToolbar,
-    setRunButtonBusy,
+    nodeQuickToolbar,
+    getModelOptions,
+    modelOptionsHtml,
     imageStatusMessage,
     imageStatusHtml,
-    safetyRewriteButtonHtml,
     referencePreviewHtml,
     uniqueRefItems
   };

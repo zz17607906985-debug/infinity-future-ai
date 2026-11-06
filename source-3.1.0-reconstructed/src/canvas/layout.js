@@ -23,6 +23,7 @@
     const nodeDisplayTitle = deps.nodeDisplayTitle;
     const nodeSize = deps.nodeSize;
     const hydrateNode = deps.hydrateNode;
+    const hydrateCanvasPreviews = deps.hydrateCanvasPreviews || (() => {});
     const selectSingleNode = deps.selectSingleNode;
     const clearSelection = deps.clearSelection;
     const releaseDrags = deps.releaseDrags;
@@ -31,8 +32,8 @@
     const renderSelection = deps.renderSelection || (() => {});
     const queueSave = deps.queueSave || (() => {});
     const runWorkflowGroup = deps.runWorkflowGroup || (() => {});
-    const beginNodeDrag = deps.beginNodeDrag || (() => {});
-    const openModal = deps.openModal;
+    const scheduleMinimap = deps.scheduleMinimap || (() => {});
+    let committedScale = NaN;
     // setCanvasProxyActive / scheduleViewportInteractionEnd / scheduleTransform / applyTransform are defined in this module body
 
 async function autoLayout(show) {
@@ -347,30 +348,17 @@ function fallbackAutoLayout(show) {
   videos.forEach((n, i) => moveNode(n, 1240, 160 + i * 280));
   layoutCommit(show);
 }
-// Fit every node into the free canvas area (outside toolbars, minimap and search), never zooming past 100%.
-// Optional subset: fit only these nodes (e.g. a freshly inserted template group); options.save=false skips saving.
-function fitView(show, subset = null, options = {}) {
-  const all = [...host.nodes.values()];
-  const picked = Array.isArray(subset) ? subset.map(item => typeof item === 'string' ? host.nodes.get(item) : item).filter(Boolean) : [];
-  const arr = picked.length ? picked : all;
+function fitView(show) {
+  const arr = [...host.nodes.values()];
   if (!arr.length) return resetView(show);
-  const canvasRect = $('canvas').getBoundingClientRect();
-  const safe = canvasSafeRect() || canvasRect;
-  const left = Math.min(...arr.map(n => n.x));
-  const top = Math.min(...arr.map(n => n.y));
-  const right = Math.max(...arr.map(n => n.x + nodeSize(n).width));
-  const bottom = Math.max(...arr.map(n => n.y + nodeSize(n).height));
-  const pad = Number.isFinite(Number(options.pad)) ? Number(options.pad) : 48;
-  // Group frames and image/video titles sit above their nodes; reserve room so they stay visible.
-  const extraTop = Number(options.extraTop || 0);
-  const availableWidth = Math.max(160, safe.right - safe.left - pad * 2);
-  const availableHeight = Math.max(160, safe.bottom - safe.top - pad * 2);
-  host.scale = clampScale(Math.min(1, availableWidth / Math.max(1, right - left), availableHeight / Math.max(1, bottom - top + extraTop)));
-  host.offsetX = (safe.left + safe.right) / 2 - canvasRect.left - (left + right) / 2 * host.scale;
-  host.offsetY = (safe.top + safe.bottom) / 2 - canvasRect.top - ((top - extraTop) + bottom) / 2 * host.scale;
+  const minX = Math.min(...arr.map(n => n.x));
+  const minY = Math.min(...arr.map(n => n.y));
+  host.scale = .98;
+  host.offsetX = 120 - minX * host.scale;
+  host.offsetY = 180 - minY * host.scale;
   applyTransform();
   drawEdges();
-  if (options.save !== false) saveProject();
+  saveProject();
   if (show) toast('已适配画布内容', 'success');
 }
 function fitNodeIntoView(node, show = false) {
@@ -404,215 +392,77 @@ function scheduleTransform(updateVisibility = true, updateToolbar = true) {
     applyTransform(updateVisibility, updateToolbar);
   });
 }
-function applyTransform(updateVisibility = true, updateToolbar = true) {
-  $('viewport').style.transform = `translate(${host.offsetX}px, ${host.offsetY}px) scale(${host.scale})`;
-  $('viewport').style.setProperty('--port-inverse-scale', String(1 / Math.max(host.scale, .2)));
-  $('viewport').style.setProperty('--canvas-zoom', String(host.scale));
-  $('viewport').style.setProperty('--canvas-zoom-inverse', String(1 / host.scale));
-  updateZoomLabel();
-  if (updateToolbar) updateSelectionToolbar();
-  if (updateVisibility) scheduleVisibilityUpdate();
-  if (host.canvasProxyActive) scheduleCanvasProxyDraw();
-  clampSelectedNodePanel();
-}
-// Keep the selected node's floating toolbar and prompt panel inside the free canvas area
-// (between the top bar / rail and the bottom canvas tools), never underneath them.
-const NODE_SAFE_OVERLAYS = '.workspace > .topbar, .workflow-bar, #canvas .canvas-rail, #canvas .bottom-canvas-tools, #canvas .canvas-minimap, #canvas .canvas-search-popover, #storageDefaultBanner';
-// Floating, draggable widgets (the ∞小子 mascot) only reserve a side while parked near that side.
-const NODE_SAFE_FLOATING = '#mascotButton';
-const NODE_SAFE_GAP = 12;
-let observedPanel = null;
-let revealedNodeId = null;
-let revealPending = false;
-let pointerHeld = false;
-let revealFrame = null;
-const panelResizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => clampSelectedNodePanel()) : null;
-document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
-['pointerup', 'pointercancel'].forEach(type => document.addEventListener(type, () => {
-  pointerHeld = false;
-  if (!revealPending) return;
-  revealPending = false;
-  requestAnimationFrame(() => revealSelectedNode(true));
-}, true));
-function overlayShown(el) {
-  const style = getComputedStyle(el);
-  if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
-  const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
-}
-function canvasSafeRect() {
-  const canvas = $('canvas');
-  const c = canvas?.getBoundingClientRect();
-  if (!c?.width || !c?.height) return null;
-  const safe = {left: c.left, top: c.top, right: c.right, bottom: c.bottom};
-  const midX = (c.left + c.right) / 2;
-  const midY = (c.top + c.bottom) / 2;
-  document.querySelectorAll(NODE_SAFE_OVERLAYS).forEach(el => {
-    if (!overlayShown(el)) return;
-    const r = el.getBoundingClientRect();
-    if (r.right <= c.left || r.left >= c.right || r.bottom <= c.top || r.top >= c.bottom) return;
-    if (r.height > r.width) {
-      if ((r.left + r.right) / 2 < midX) safe.left = Math.max(safe.left, r.right);
-      else safe.right = Math.min(safe.right, r.left);
-    } else if ((r.top + r.bottom) / 2 < midY) safe.top = Math.max(safe.top, r.bottom);
-    else safe.bottom = Math.min(safe.bottom, r.top);
-  });
-  document.querySelectorAll(NODE_SAFE_FLOATING).forEach(el => {
-    if (!overlayShown(el)) return;
-    const r = el.getBoundingClientRect();
-    if (r.bottom <= c.top || r.top >= c.bottom) return;
-    if (r.left >= c.right - c.width / 4 && r.left < c.right) safe.right = Math.min(safe.right, r.left);
-    else if (r.right <= c.left + c.width / 4 && r.right > c.left) safe.left = Math.max(safe.left, r.right);
-  });
-  return {left: safe.left + NODE_SAFE_GAP, top: safe.top + NODE_SAFE_GAP, right: safe.right - NODE_SAFE_GAP, bottom: safe.bottom - NODE_SAFE_GAP};
-}
-function soleSelectedNode() {
-  if (host.selectedNodes.size !== 1) return null;
-  const node = host.nodes.get([...host.selectedNodes][0]);
-  return node?.el?.isConnected ? node : null;
-}
-function selectedNodePanel(node) {
-  const panel = node?.el.querySelector(':scope > [data-composer]');
-  return panel && getComputedStyle(panel).display !== 'none' ? panel : null;
-}
-function selectedNodeToolbar(node) {
-  const toolbar = node?.el.querySelector(':scope > .node-float-toolbar');
-  return toolbar && getComputedStyle(toolbar).display !== 'none' ? toolbar : null;
-}
-// Screen-pixel offsets applied after the inverse-zoom scale: panel lifted up, toolbar dropped down.
-const floatOffsets = new Map();
-function setFloatOffset(el, prop, px) {
-  floatOffsets.forEach((entry, key) => {
-    if (entry.prop === prop && key !== el) { key.style.removeProperty(prop); floatOffsets.delete(key); }
-  });
-  if (!el) return;
-  if (px > 0) { el.style.setProperty(prop, `${px}px`); floatOffsets.set(el, {prop, px}); }
-  else { el.style.removeProperty(prop); floatOffsets.delete(el); }
-}
-function naturalRect(el) {
-  const r = el.getBoundingClientRect();
-  const entry = floatOffsets.get(el);
-  const shift = !entry ? 0 : entry.prop === '--composer-lift' ? entry.px : -entry.px;
-  return {left: r.left, right: r.right, top: r.top + shift, bottom: r.bottom + shift};
-}
-// Sticky UI: the panel lifts to stay above the safe bottom edge, the toolbar drops to stay below the safe top edge.
-function clampSelectedNodePanel() {
-  const node = soleSelectedNode();
-  const panel = selectedNodePanel(node);
-  const toolbar = selectedNodeToolbar(node);
-  if (observedPanel !== panel) {
-    if (observedPanel) panelResizeObserver?.unobserve(observedPanel);
-    if (panel) panelResizeObserver?.observe(panel);
-    observedPanel = panel;
+function commitViewportTransform() {
+  const viewport = $('viewport');
+  viewport.style.transform = `translate(${host.offsetX}px, ${host.offsetY}px) scale(${host.scale})`;
+  if (host.scale !== committedScale) {
+    const inverse = String(1 / Math.max(host.scale, .2));
+    viewport.style.setProperty('--port-inverse-scale', inverse);
+    viewport.style.setProperty('--canvas-zoom-inverse', inverse);
+    committedScale = host.scale;
+    updateZoomLabel();
   }
-  const safe = node && canvasSafeRect();
-  if (!safe) {
-    setFloatOffset(null, '--composer-lift', 0);
-    setFloatOffset(null, '--toolbar-drop', 0);
+}
+function applyTransform(updateVisibility = true, updateToolbar = true) {
+  if (host.canvasProxyActive) {
+    updateCanvasProxyPosition();
+    updateZoomLabel();
     return;
   }
-  const nodeRect = node.el.getBoundingClientRect();
-  const onScreen = nodeRect.top < safe.bottom && nodeRect.bottom > safe.top;
-  if (panel) {
-    const natural = naturalRect(panel);
-    // While the node is on screen the panel may rise to the safe top edge; otherwise no higher than the node itself.
-    const ceiling = onScreen ? Math.min(nodeRect.top, safe.top) : nodeRect.top;
-    setFloatOffset(panel, '--composer-lift', Math.max(0, Math.min(natural.bottom - safe.bottom, natural.top - ceiling)));
-  } else setFloatOffset(null, '--composer-lift', 0);
-  if (toolbar) {
-    const natural = naturalRect(toolbar);
-    // While the node is on screen the toolbar may drop onto it, but never past the node's bottom edge.
-    const floor = onScreen ? nodeRect.bottom - (natural.bottom - natural.top) : natural.top;
-    setFloatOffset(toolbar, '--toolbar-drop', Math.max(0, Math.min(safe.top - natural.top, floor - natural.top)));
-  } else setFloatOffset(null, '--toolbar-drop', 0);
-}
-function fitShift(min, max, safeMin, safeMax) {
-  if (min < safeMin) return safeMin - min;
-  if (max > safeMax) return safeMax - max;
-  return 0;
-}
-// Vertical reveal priority: toolbar + node + panel; else node + panel below it (toolbar sticks to the top);
-// only a node taller than the free area starts (toolbar first) at the top edge and lets the sticky panel overlap its lower part.
-function revealDelta(node, safe) {
-  const n = node.el.getBoundingClientRect();
-  const panel = selectedNodePanel(node);
-  const toolbar = selectedNodeToolbar(node);
-  const p = panel ? naturalRect(panel) : null;
-  const t = toolbar ? naturalRect(toolbar) : null;
-  const left = Math.min(n.left, p?.left ?? n.left, t?.left ?? n.left);
-  const right = Math.max(n.right, p?.right ?? n.right, t?.right ?? n.right);
-  const top = t ? t.top : n.top;
-  const bottom = p ? p.bottom : n.bottom;
-  const freeHeight = safe.bottom - safe.top;
-  const dx = right - left > safe.right - safe.left ? fitShift(n.left, n.right, safe.left, safe.right) : fitShift(left, right, safe.left, safe.right);
-  let dy;
-  if (bottom - top <= freeHeight) dy = fitShift(top, bottom, safe.top, safe.bottom);
-  else if (bottom - n.top <= freeHeight) dy = fitShift(n.top, bottom, safe.top, safe.bottom);
-  else if (n.bottom - n.top <= freeHeight) dy = safe.bottom - bottom;
-  else dy = safe.top - top;
-  return {dx, dy};
-}
-function animateViewBy(dx, dy) {
-  if (revealFrame) cancelAnimationFrame(revealFrame);
-  const instant = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const duration = instant ? 0 : 240;
-  const start = performance.now();
-  let applied = 0;
-  const step = now => {
-    const t = duration ? Math.min(1, (now - start) / duration) : 1;
-    const eased = 1 - Math.pow(1 - t, 3);
-    host.offsetX += dx * (eased - applied);
-    host.offsetY += dy * (eased - applied);
-    applied = eased;
-    applyTransform(true, true);
-    if (t < 1) revealFrame = requestAnimationFrame(step);
-    else { revealFrame = null; queueSave(); }
-  };
-  revealFrame = requestAnimationFrame(step);
-}
-// Called whenever the selection changes; pans once per newly selected node, after the pointer is released.
-function revealSelectedNode(force = false) {
-  const node = soleSelectedNode();
-  if (!node) {
-    revealedNodeId = null;
-    return clampSelectedNodePanel();
-  }
-  if (!force && node.id === revealedNodeId) return clampSelectedNodePanel();
-  revealedNodeId = node.id;
-  if (pointerHeld) {
-    revealPending = true;
-    return clampSelectedNodePanel();
-  }
-  const safe = canvasSafeRect();
-  if (!safe) return;
-  const {dx, dy} = revealDelta(node, safe);
-  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return clampSelectedNodePanel();
-  animateViewBy(dx, dy);
+  commitViewportTransform();
+  if (updateToolbar) updateSelectionToolbar();
+  if (updateVisibility) scheduleVisibilityUpdate();
 }
 function proxyNodeSize(node) {
-  const width = node.type === 'image' || node.type === 'video' || node.type === 'comfyui' ? 430 : node.type === 'upload' ? 360 : 320;
-  const height = node.type === 'image' || node.type === 'video'
-    ? Math.max(160, Math.round(width / nodeMediaAspectRatio(node)))
-    : node.type === 'comfyui' ? 260 : node.type === 'upload' ? 210 : 180;
+  const width = node.type === 'image' || node.type === 'upload' ? 292 * nodeMediaAspectRatio(node) + 2
+    : node.type === 'video' || node.type === 'comfyui' ? 430 : 320;
+  const height = node.type === 'image' || node.type === 'upload' ? 292
+    : node.type === 'video' ? 292 : node.type === 'comfyui' ? 260 : 180;
   return {width, height};
 }
 function nodeMediaAspectRatio(node) {
-  if (!node || (node.type !== 'image' && node.type !== 'video')) return 1;
+  if (!node || (node.type !== 'image' && node.type !== 'video' && node.type !== 'upload')) return 1;
+  if (Number.isFinite(node.mediaNaturalRatio) && node.mediaNaturalRatio > 0) return node.mediaNaturalRatio;
+  if (node.type === 'upload') return 16 / 9;
   return MediaDimensions?.mediaAspectRatio(node.data, node.type) || 1;
 }
 function setCanvasProxyActive(active) {
   const shouldUseProxy = !!active && host.fastCanvasMode;
   if (host.canvasProxyActive === shouldUseProxy) return;
+  if (shouldUseProxy && (!$('canvas') || !$('canvasProxyLayer'))) return;
   host.canvasProxyActive = shouldUseProxy;
-  $('canvas')?.classList.toggle('proxy-active', host.canvasProxyActive);
-  if (host.canvasProxyActive) scheduleCanvasProxyDraw();
-  else {
+  if (shouldUseProxy) {
+    drawCanvasProxy();
+    $('canvas')?.classList.add('proxy-active');
+  } else {
+    if (host.transformFrame) cancelAnimationFrame(host.transformFrame);
+    host.transformFrame = null;
+    commitViewportTransform();
+    $('canvas')?.classList.remove('proxy-active');
     if (host.canvasProxyFrame) cancelAnimationFrame(host.canvasProxyFrame);
+    if (host.canvasProxyRedrawTimer) clearTimeout(host.canvasProxyRedrawTimer);
     host.canvasProxyFrame = null;
+    host.canvasProxyRedrawTimer = null;
+    host.canvasProxySnapshot = null;
     const proxy = $('canvasProxyLayer');
-    const ctx = proxy?.getContext?.('2d');
-    if (ctx) ctx.clearRect(0, 0, proxy.width || 0, proxy.height || 0);
+    if (proxy) proxy.style.transform = '';
   }
+}
+function updateCanvasProxyPosition() {
+  const snapshot = host.canvasProxySnapshot;
+  const proxy = $('canvasProxyLayer');
+  if (!snapshot || !proxy) return;
+  const ratio = host.scale / snapshot.scale;
+  const dx = host.offsetX - ratio * snapshot.offsetX + snapshot.pad * (1 - ratio);
+  const dy = host.offsetY - ratio * snapshot.offsetY + snapshot.pad * (1 - ratio);
+  proxy.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${ratio})`;
+  if (Math.abs(dx) < snapshot.pad * .8 && Math.abs(dy) < snapshot.pad * .8 && ratio > .7 && ratio < 1.4) return;
+  if (host.canvasProxyRedrawTimer || host.canvasProxyFrame) return;
+  const delay = Math.max(0, 120 - (performance.now() - snapshot.drawnAt));
+  host.canvasProxyRedrawTimer = setTimeout(() => {
+    host.canvasProxyRedrawTimer = null;
+    scheduleCanvasProxyDraw();
+  }, delay);
 }
 function scheduleCanvasProxyDraw() {
   if (host.canvasProxyFrame) return;
@@ -627,28 +477,33 @@ function drawCanvasProxy() {
   const proxy = $('canvasProxyLayer');
   if (!canvas || !proxy) return;
   const rect = canvas.getBoundingClientRect();
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  const width = Math.max(1, Math.floor(rect.width * dpr));
-  const height = Math.max(1, Math.floor(rect.height * dpr));
+  const pad = 320;
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
+  const width = Math.max(1, Math.floor((rect.width + pad * 2) * dpr));
+  const height = Math.max(1, Math.floor((rect.height + pad * 2) * dpr));
   if (proxy.width !== width || proxy.height !== height) {
     proxy.width = width;
     proxy.height = height;
-    proxy.style.width = rect.width + 'px';
-    proxy.style.height = rect.height + 'px';
+    proxy.style.width = rect.width + pad * 2 + 'px';
+    proxy.style.height = rect.height + pad * 2 + 'px';
   }
+  proxy.style.left = -pad + 'px';
+  proxy.style.top = -pad + 'px';
+  proxy.style.transformOrigin = '0 0';
+  proxy.style.transform = '';
   const ctx = proxy.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.clearRect(0, 0, rect.width + pad * 2, rect.height + pad * 2);
   ctx.lineWidth = 1;
   ctx.font = '12px system-ui, sans-serif';
   host.nodes.forEach(node => {
     if (node.el?.classList.contains('search-hidden')) return;
     const size = proxyNodeSize(node);
-    const x = node.x * host.scale + host.offsetX;
-    const y = node.y * host.scale + host.offsetY;
+    const x = node.x * host.scale + host.offsetX + pad;
+    const y = node.y * host.scale + host.offsetY + pad;
     const w = Math.max(44, size.width * host.scale);
     const h = Math.max(28, size.height * host.scale);
-    if (x > rect.width + 80 || y > rect.height + 80 || x + w < -80 || y + h < -80) return;
+    if (x > rect.width + pad * 2 || y > rect.height + pad * 2 || x + w < 0 || y + h < 0) return;
     const color = node.type === 'image' ? '#f5c842' : node.type === 'video' ? '#6ea8ff' : node.type === 'comfyui' ? '#4ade80' : '#dbe7ef';
     ctx.fillStyle = 'rgba(17, 23, 31, .78)';
     ctx.strokeStyle = color;
@@ -663,6 +518,8 @@ function drawCanvasProxy() {
       ctx.fillText(title, x + 10, y + 20);
     }
   });
+  host.canvasProxySnapshot = {scale: host.scale, offsetX: host.offsetX, offsetY: host.offsetY, pad, drawnAt: performance.now()};
+  updateCanvasProxyPosition();
 }
 function scheduleViewportInteractionEnd() {
   clearTimeout(host.viewportInteractionTimer);
@@ -671,10 +528,17 @@ function scheduleViewportInteractionEnd() {
     $('canvas')?.classList.remove('is-panning', 'is-zooming');
     setCanvasProxyActive(false);
     updateSelectionToolbar();
-    clampSelectedNodePanel();
     scheduleVisibilityUpdate();
+    hydrateVisibleCanvasPreviews();
+    scheduleMinimap();
     queueSave();
   }, 140);
+}
+function hydrateVisibleCanvasPreviews() {
+  const view = currentWorldBounds(900);
+  host.nodes.forEach(node => {
+    if (node.mounted && nodeIntersectsView(node, view)) hydrateCanvasPreviews(node.el);
+  });
 }
 function currentWorldBounds(pad = 0) {
   const r = $('canvas').getBoundingClientRect();
@@ -715,20 +579,19 @@ function scheduleVisibilityUpdate() {
       else mountNode(node);
       if (wasMounted !== !!node.mounted) changed = true;
       node.el.classList.toggle('node-offscreen', node.mounted && !nodeIntersectsView(node, detailView));
+      if (node.mounted && !node.el.classList.contains('node-offscreen')) hydrateCanvasPreviews(node.el);
     });
     if (changed) scheduleDrawEdges();
   });
 }
-// '' keeps the theme accent; the rest are the presets the palette button cycles through.
-const GROUP_COLORS = ['', '#4a95d3', '#3fb27f', '#e0a33a', '#d9534f', '#9b6bd3'];
 function groupBounds(group) {
   const items = group.nodeIds.map(id => host.nodes.get(id)).filter(Boolean);
   if (!items.length) return null;
   const pad = 28;
   const left = Math.min(...items.map(n => n.x)) - pad;
   const top = Math.min(...items.map(n => n.y)) - pad;
-  const right = Math.max(...items.map(n => n.x + nodeSize(n).width)) + pad;
-  const bottom = Math.max(...items.map(n => n.y + nodeSize(n).height)) + pad;
+  const right = Math.max(...items.map(n => n.x + (host.dragging?.sizeById?.get(n.id) || nodeSize(n)).width)) + pad;
+  const bottom = Math.max(...items.map(n => n.y + (host.dragging?.sizeById?.get(n.id) || nodeSize(n)).height)) + pad;
   return {left, top, width: right - left, height: bottom - top};
 }
 function addGroup(nodeIds, id = null, name = '', save = true, metadata = {}) {
@@ -742,37 +605,25 @@ function addGroup(nodeIds, id = null, name = '', save = true, metadata = {}) {
     workflowVersion: String(metadata.workflowVersion || ''),
     workflowDefinition: metadata.workflowDefinition || null,
     collapsed: Boolean(metadata.collapsed),
-    color: GROUP_COLORS.includes(metadata.color) ? metadata.color : '',
     el: document.createElement('div')
   };
   group.el.className = 'canvas-group';
   group.el.dataset.group = group.id;
-  group.el.innerHTML = `<div class="canvas-group-label"><i class="fa-regular fa-object-group"></i><span data-group-name title="${esc(group.workflowVersion ? `双击重命名 · 工作流 v${group.workflowVersion}` : '双击重命名')}">${esc(group.name)}</span><button type="button" data-run-group="${esc(group.id)}" title="单步运行组合"><i class="fa-solid fa-play"></i></button><button type="button" data-color-group="${esc(group.id)}" title="切换组颜色"><i class="fa-solid fa-palette"></i></button><button type="button" data-toggle-group="${esc(group.id)}" title="展开或折叠组合"><i class="fa-solid ${group.collapsed ? 'fa-up-right-and-down-left-from-center' : 'fa-down-left-and-up-right-to-center'}"></i></button><button type="button" data-ungroup-group="${esc(group.id)}" title="解散组"><i class="fa-regular fa-object-ungroup"></i></button></div>`;
-  // Pressing the label selects the whole group; dragging it moves every member.
+  group.el.innerHTML = `<div class="canvas-group-label"><i class="fa-regular fa-object-group"></i><span>${esc(group.name)}</span>${group.workflowVersion ? `<em>v${esc(group.workflowVersion)}</em>` : ''}<button type="button" data-run-group="${esc(group.id)}" title="单步运行组合"><i class="fa-solid fa-play"></i></button><button type="button" data-toggle-group="${esc(group.id)}" title="展开或折叠组合"><i class="fa-solid ${group.collapsed ? 'fa-up-right-and-down-left-from-center' : 'fa-down-left-and-up-right-to-center'}"></i></button><button type="button" data-ungroup-group="${esc(group.id)}" title="解散组"><i class="fa-regular fa-object-ungroup"></i></button></div>`;
   group.el.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
-    if (e.target.closest('button')) return;
+    if (e.target.closest('[data-ungroup-group],[data-toggle-group],[data-run-group]')) return;
     selectGroupNodes(group.id);
-    const anchor = group.nodeIds.map(id => host.nodes.get(id)).find(node => node && !node.data.locked);
-    if (anchor) beginNodeDrag(anchor, e, null);
     e.preventDefault();
     e.stopPropagation();
-  });
-  group.el.addEventListener('dblclick', e => {
-    if (!e.target.closest('[data-group-name]')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    renameGroup(group.id);
   });
   group.el.addEventListener('click', e => {
     const btn = e.target.closest('[data-ungroup-group]');
     const toggle = e.target.closest('[data-toggle-group]');
     const run = e.target.closest('[data-run-group]');
-    const color = e.target.closest('[data-color-group]');
     if (btn) ungroupGroup(btn.dataset.ungroupGroup);
     else if (toggle) toggleGroupCollapsed(toggle.dataset.toggleGroup);
     else if (run) runWorkflowGroup(run.dataset.runGroup);
-    else if (color) cycleGroupColor(color.dataset.colorGroup);
     else return;
     e.preventDefault();
     e.stopPropagation();
@@ -792,9 +643,6 @@ function renderGroup(group) {
   group.el.classList.remove('hidden');
   group.el.classList.toggle('workflow-group', Boolean(group.workflowId || group.workflowDefinition));
   group.el.classList.toggle('collapsed', Boolean(group.collapsed));
-  group.el.classList.toggle('has-color', Boolean(group.color));
-  if (group.color) group.el.style.setProperty('--group-color', group.color);
-  else group.el.style.removeProperty('--group-color');
   group.nodeIds.forEach(id => host.nodes.get(id)?.el?.classList.toggle('workflow-collapsed-node', Boolean(group.collapsed)));
   group.el.style.transform = `translate3d(${bounds.left}px, ${bounds.top}px, 0)`;
   group.el.style.width = (group.collapsed ? Math.max(280, Math.min(420, bounds.width)) : bounds.width) + 'px';
@@ -807,8 +655,15 @@ function scheduleGroupRender() {
   if (host.groupFrame) return;
   host.groupFrame = requestAnimationFrame(() => {
     host.groupFrame = null;
-    renderGroups();
-    updateSelectionToolbar();
+    if (host.dragging?.items?.length) {
+      const moved = new Set(host.dragging.items.map(item => item.node.id));
+      host.groups.forEach(group => {
+        if (group.nodeIds.some(id => moved.has(id))) renderGroup(group);
+      });
+    } else {
+      renderGroups();
+      updateSelectionToolbar();
+    }
   });
 }
 function groupSelectedNodes() {
@@ -846,23 +701,6 @@ function toggleGroupCollapsed(groupId) {
   group.el.querySelector('[data-toggle-group] i')?.classList.toggle('fa-down-left-and-up-right-to-center', !group.collapsed);
   renderGroup(group);
   drawEdges();
-  saveProject();
-}
-function cycleGroupColor(groupId) {
-  const group = host.groups.get(groupId);
-  if (!group) return;
-  group.color = GROUP_COLORS[(GROUP_COLORS.indexOf(group.color || '') + 1) % GROUP_COLORS.length];
-  renderGroup(group);
-  saveProject();
-}
-async function renameGroup(groupId) {
-  const group = host.groups.get(groupId);
-  if (!group || !openModal) return;
-  const name = await openModal({title: '重命名组', value: group.name, okText: '保存'});
-  if (!name || !String(name).trim() || !host.groups.has(groupId)) return;
-  group.name = String(name).trim();
-  const label = group.el.querySelector('[data-group-name]');
-  if (label) label.textContent = group.name;
   saveProject();
 }
 function ungroupGroup(groupId) {
@@ -920,7 +758,6 @@ function viewCenter() {
       moveNode,
       scheduleTransform,
       applyTransform,
-      revealSelectedNode,
       proxyNodeSize,
       setCanvasProxyActive,
       scheduleCanvasProxyDraw,

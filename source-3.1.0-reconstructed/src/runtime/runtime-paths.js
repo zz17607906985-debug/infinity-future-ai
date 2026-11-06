@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { uniqueTempPath } = require('./atomic-write');
 
 const RUNTIME_MIGRATION_VERSION = 1;
 const MIGRATION_MARKER = 'runtime-migration-v1.json';
@@ -50,7 +49,7 @@ function copyFileMissing(source, target, copied) {
   const stats = fs.statSync(source);
   if (!stats.isFile()) return;
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  const temp = uniqueTempPath(target, 'migration.tmp');
+  const temp = `${target}.${process.pid}.${Date.now()}.migration.tmp`;
   fs.copyFileSync(source, temp);
   fs.renameSync(temp, target);
   copied.push({ source, target, size: stats.size });
@@ -69,7 +68,7 @@ function copyDirectoryMissing(sourceRoot, targetRoot, copied) {
 
 function writeJsonAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = uniqueTempPath(file);
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(value, null, 2), 'utf8');
   fs.renameSync(temp, file);
 }

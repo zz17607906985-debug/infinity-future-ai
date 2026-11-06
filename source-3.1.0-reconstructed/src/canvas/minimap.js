@@ -5,7 +5,7 @@
    * Canvas minimap: node rectangles plus the visible viewport on a small <canvas>.
    * Click or drag on it to pan. Redraws are throttled and only happen while it is shown.
    */
-  const REDRAW_INTERVAL_MS = 80;
+  const REDRAW_INTERVAL_MS = 120;
   const PAD = 6;
 
   function create(deps = {}) {
@@ -25,7 +25,7 @@
     let frozenMapping = null;
     let dragPointer = null;
 
-    const shown = () => enabled && panel && !panel.classList.contains('hidden') && panel.getClientRects().length > 0;
+    const shown = () => enabled && panel && !panel.classList.contains('hidden');
 
     function accentColor() {
       const value = getComputedStyle(document.body).getPropertyValue('--theme-accent').trim();
@@ -156,7 +156,7 @@
       panel?.classList.toggle('hidden', !enabled);
       panel?.setAttribute('aria-hidden', String(!enabled));
       if (enabled) {
-        observer?.observe(observeTarget, {childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class']});
+        observer?.observe(observeTarget, {childList: true});
         if (observeTarget) resizeObserver?.observe(observeTarget.parentElement || observeTarget);
         schedule();
       } else {

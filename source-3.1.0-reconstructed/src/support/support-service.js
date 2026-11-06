@@ -45,12 +45,11 @@ async function readSupportDocument(legalRoot, id) {
   return { id, title: entry.title, content: await fs.readFile(file, 'utf8') };
 }
 
-async function buildSupportInfo({ legalRoot, version, buildLabel = '', releaseChannel = 'internal', packaged = false }) {
+async function buildSupportInfo({ legalRoot, version, releaseChannel = 'internal', packaged = false }) {
   const contact = await readJson(path.join(legalRoot, 'support-contact.json'), { status: 'unconfigured', channels: [] });
   const approval = await readJson(path.join(legalRoot, 'legal-approval.json'), { status: 'draft' });
   return {
     version: String(version || '0.0.0'),
-    buildLabel: String(buildLabel || '').replace(/[^\w.-]/g, '').slice(0, 40),
     releaseChannel: releaseChannel === 'stable' ? 'stable' : 'internal',
     packaged: Boolean(packaged),
     signatureStatus: releaseChannel === 'stable' ? 'verified-at-build' : 'unsigned-internal',

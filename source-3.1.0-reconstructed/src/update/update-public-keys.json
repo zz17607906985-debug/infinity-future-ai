@@ -1,0 +1,10 @@
+{
+  "schema": "future-ai-update-keys/v1",
+  "keys": [
+    {
+      "alg": "Ed25519",
+      "kid": "update-release-1",
+      "publicKey": "MCowBQYDK2VwAyEA9SQfVDhAW8zQ2baSM6zuczCluZgotimfsVn7EUZ_Z5k"
+    }
+  ]
+}

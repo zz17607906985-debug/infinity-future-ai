@@ -9,11 +9,12 @@
   <link rel="stylesheet" href="./styles.css">
   <link rel="stylesheet" href="./assistant/workbench.css">
   <link rel="stylesheet" href="./media/short-asset-pipeline.css">
+  <link rel="stylesheet" href="./glass-theme.css">
 </head>
 <body class="dark-mode nexus-layout">
   <div id="projectHome" class="project-home">
-    <video id="homeBgVideo" class="home-bg-video" muted loop playsinline preload="none" poster="./assets/app-bg.jpg" aria-hidden="true"></video>
     <div id="homeWallpaper" class="wallpaper-layer home-wallpaper" aria-hidden="true" hidden></div>
+    <video id="homeBgVideo" class="home-bg-video" muted loop playsinline preload="none" poster="./assets/app-bg.jpg" aria-hidden="true"></video>
     <div class="gd-shell">
       <aside class="gd-sidebar" aria-label="项目中心侧栏">
         <div class="gd-sb-top">
@@ -26,6 +27,7 @@
         <nav class="gd-quick" aria-label="快捷入口">
           <button id="homeQuickCreate" class="gd-quick-item" type="button"><span class="gd-qi">＋</span><span>新建项目</span></button>
           <button id="homeQuickStorage" class="gd-quick-item" type="button"><span class="gd-qi"><i class="fa-solid fa-folder-open" aria-hidden="true"></i></span><span>选择存储</span></button>
+          <button id="homeQuickOpen" class="gd-quick-item" type="button" disabled><span class="gd-qi"><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i></span><span>进入项目</span></button>
           <button id="homeQuickSettings" class="gd-quick-item" type="button"><span class="gd-qi"><i class="fa-solid fa-gear" aria-hidden="true"></i></span><span>系统设置</span></button>
         </nav>
         <div class="gd-sb-scroll">
@@ -54,19 +56,15 @@
           <section class="home-summary gd-action-grid" aria-label="开始创作">
             <button id="homeCreateProject" class="action-card" type="button">
               <span class="t">新建项目</span>
-              <span class="d">从空白画布开始一部作品</span>
-            </button>
-            <button id="homeCreateFromTemplate" class="action-card" type="button">
-              <span class="t">从模板新建</span>
-              <span class="d">一键放入现成节点链路</span>
+              <span class="d">从空白或模板开始一部作品</span>
             </button>
             <button id="homeChooseStorageDir" class="action-card" type="button">
               <span class="t">选择存储位置</span>
               <span class="d">指定本地项目文件夹</span>
             </button>
-            <button id="homeResumeLast" class="action-card action-card-resume" type="button" hidden>
-              <span class="t">继续上次项目</span>
-              <span id="homeResumeLastMeta" class="d"></span>
+            <button id="homeOpenCurrent" class="action-card" type="button" disabled>
+              <span class="t">进入当前项目</span>
+              <span class="d">继续上次未完成的创作</span>
             </button>
             <button id="homeOpenSettings" class="action-card" type="button">
               <span class="t">系统设置</span>
@@ -107,18 +105,14 @@
         <div class="top-left">
           <button id="topLogo" class="nexus-nav-btn" title="返回项目中心"><i class="fa-solid fa-arrow-left"></i><span>返回项目中心</span></button>
           <div class="nav-pills" role="tablist" aria-label="工作区">
-            <button class="nexus-mode-btn active" data-workspace="short" type="button"><i class="fa-regular fa-circle-play"></i><span>AI 漫剧工作台</span></button>
             <button id="openDialogEditWorkbench" class="nexus-mode-btn dialog-edit-entry" data-workspace="assistant" type="button"><i class="fa-solid fa-comments"></i><span>∞ 灵枢万象</span></button>
-            <button class="nexus-mode-btn" data-workspace="canvas" type="button"><i class="fa-solid fa-infinity"></i><span>无限画布</span></button>
-            <button class="nexus-mode-btn" data-workspace="music" type="button"><i class="fa-solid fa-photo-film"></i><span>媒体中心</span></button>
+            <button class="nexus-mode-btn active" data-workspace="canvas" type="button"><i class="fa-solid fa-infinity"></i><span>无限画布</span></button>
             <button id="openDirectorDesk" class="nexus-mode-btn director-desk-entry" type="button"><i class="fa-solid fa-cube"></i><span>3D 导演台</span></button>
           </div>
-          <button id="workspaceMenuToggle" class="workspace-menu-toggle" type="button" aria-expanded="false" aria-controls="workspaceMenu"><span id="workspaceMenuLabel">AI 漫剧工作台</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button>
+          <button id="workspaceMenuToggle" class="workspace-menu-toggle" type="button" aria-expanded="false" aria-controls="workspaceMenu"><span id="workspaceMenuLabel">无限画布</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button>
           <div id="workspaceMenu" class="workspace-menu hidden" role="menu" aria-label="切换工作区">
-            <button type="button" role="menuitem" data-workspace-mobile="short">AI 漫剧工作台</button>
             <button type="button" role="menuitem" data-workspace-mobile="assistant">∞ 灵枢万象</button>
             <button type="button" role="menuitem" data-workspace-mobile="canvas">无限画布</button>
-            <button type="button" role="menuitem" data-workspace-mobile="music">媒体中心</button>
             <button type="button" role="menuitem" data-workspace-mobile="director">3D 导演台</button>
           </div>
           <div class="project-title hidden" aria-hidden="true">
@@ -129,7 +123,8 @@
           </div>
         </div>
         <div class="top-actions">
-          <button id="balanceChip" class="status-pill balance-chip hidden" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="balancePopover" title="API 余额"><span id="balanceChipValue">—</span></button>
+          <span id="saveStatus" class="save-status is-saved" role="status" aria-live="polite"><i class="fa-solid fa-check" aria-hidden="true"></i><span>已保存</span></span>
+          <button id="balanceChip" class="status-pill balance-chip hidden" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="balancePopover" title="API 余额"><i class="fa-solid fa-wallet"></i> <span id="balanceChipValue">—</span></button>
           <button id="themeToggle" class="icon-btn" type="button" title="进入专注模式" aria-label="进入专注模式"><i class="fa-solid fa-crosshairs"></i></button>
           <button id="topSettings" class="icon-btn" type="button" title="系统设置" aria-label="系统设置"><i class="fa-solid fa-gear"></i></button>
           <button id="queueToggle" class="ghost-btn" type="button" title="生成队列"><i class="fa-solid fa-list-check"></i> 队列 <span id="queueCount">0</span></button>
@@ -152,7 +147,7 @@
         <button id="addComfyUI" class="tool-btn"><i class="fa-solid fa-diagram-project"></i> ComfyUI</button>
         <button id="addStoryboard" class="tool-btn accent"><i class="fa-solid fa-film"></i> 分镜组</button>
         <button id="addCharacter" class="tool-btn"><i class="fa-regular fa-user"></i> 角色卡</button>
-        <button id="openWorkflowLibrary" class="tool-btn accent"><i class="fa-solid fa-boxes-stacked"></i> 模板</button>
+        <button id="openWorkflowLibrary" class="tool-btn accent"><i class="fa-solid fa-boxes-stacked"></i> 工作流库</button>
         <button id="openDirectorDeskInline" class="tool-btn accent"><i class="fa-solid fa-cube"></i> 3D 导演台</button>
         <button id="autoLayout" class="tool-btn"><i class="fa-solid fa-diagram-project"></i> 整理</button>
         <button id="fitView" class="tool-btn"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> 适配</button>
@@ -167,13 +162,12 @@
           <div class="canvas-empty-actions">
             <button type="button" class="primary-btn" data-canvas-empty="prompt"><i class="fa-regular fa-note-sticky" aria-hidden="true"></i>添加提示词</button>
             <button type="button" class="ghost-btn" data-canvas-empty="upload"><i class="fa-solid fa-upload" aria-hidden="true"></i>导入素材</button>
-            <button type="button" class="ghost-btn" data-canvas-empty="template"><i class="fa-solid fa-boxes-stacked" aria-hidden="true"></i>插入模板</button>
+            <button type="button" class="ghost-btn" data-canvas-empty="template"><i class="fa-solid fa-boxes-stacked" aria-hidden="true"></i>使用模板</button>
           </div>
         </div>
         <div class="canvas-rail" aria-label="画布工具">
           <button id="railPan" class="rail-btn active" title="展开流程工具"><i class="fa-solid fa-plus"></i></button>
           <button id="railSelect" class="rail-btn" title="参数设置"><i class="fa-solid fa-sliders"></i></button>
-          <button id="railMedia" class="rail-btn" title="媒体中心"><i class="fa-solid fa-music"></i></button>
           <button id="railHistory" class="rail-btn" title="历史记录"><i class="fa-regular fa-clock"></i></button>
           <button id="railAssets" class="rail-btn" title="资产库"><i class="fa-solid fa-box-archive"></i></button>
           <button id="railVariants" class="rail-btn" title="候选对比"><i class="fa-solid fa-table-cells-large"></i></button>
@@ -183,7 +177,7 @@
         <aside id="canvasAssistantDrawer" class="history-drawer canvas-assistant-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="canvasAssistantTitle" aria-hidden="true">
           <header><div><strong id="canvasAssistantTitle">画布执行助手</strong><span>先提案和预览，确认后才执行</span></div><button id="closeCanvasAssistant" class="icon-btn" type="button" title="关闭画布助手"><i class="fa-solid fa-xmark"></i></button></header>
           <div class="canvas-assistant-compose">
-            <textarea id="canvasAssistantInput" rows="4" placeholder="例如：用当前角色做一个三镜头的 16:9 短片 · 把这些图排整齐 · 导出选中的图片"></textarea>
+            <textarea id="canvasAssistantInput" rows="4" placeholder="例如：用当前角色做一个三镜头的 16:9 短片"></textarea>
             <button id="canvasAssistantPlanBtn" class="primary-btn" type="button"><i class="fa-solid fa-list-check"></i> 生成操作提案</button>
             <label class="canvas-assistant-paid"><input id="canvasAssistantRunPaid" type="checkbox"><span>画布建立后再单独确认运行付费节点</span></label>
           </div>
@@ -192,7 +186,7 @@
         </aside>
         <aside id="workflowLibraryDrawer" class="history-drawer workflow-library-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="workflowLibraryTitle" aria-hidden="true">
           <header>
-            <div><strong id="workflowLibraryTitle">保存工作流</strong><span>高级：暴露参数、导入导出 JSON</span></div>
+            <div><strong id="workflowLibraryTitle">组合工作流</strong><span>把常用节点流程保存成可复用模板</span></div>
             <button id="closeWorkflowLibrary" class="icon-btn" type="button" title="关闭工作流库" aria-label="关闭工作流库"><i class="fa-solid fa-xmark"></i></button>
           </header>
           <div class="workflow-library-compose">
@@ -243,7 +237,7 @@
         </aside>
         <aside id="assetLibraryDrawer" class="history-drawer asset-library-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="assetLibraryDrawerTitle" aria-hidden="true">
           <header>
-            <div><strong id="assetLibraryDrawerTitle">资产库</strong><span>拖到画布即可调用；标「便携」的素材在软件旁 library 文件夹，复制到其他电脑也能用</span></div>
+            <div><strong id="assetLibraryDrawerTitle">资产库</strong><span>拖到画布或 ∞ 灵枢万象即可调用</span></div>
             <button id="closeAssetLibrary" class="icon-btn" type="button" title="关闭资产库" aria-label="关闭资产库"><i class="fa-solid fa-xmark"></i></button>
           </header>
           <div class="asset-library-tools">
@@ -283,8 +277,6 @@
             <span id="canvasZoomLabel">100%</span>
             <button id="zoomPlusBtn" class="zoom-icon" type="button" title="放大">+</button>
           </div>
-          <button id="exportCanvasSnapshotBtn" class="canvas-tidy-btn" type="button" title="导出画布快照 PNG"><i class="fa-solid fa-camera"></i><span>快照</span></button>
-          <button id="openExportShare" class="canvas-tidy-btn" type="button" title="导出与分享"><i class="fa-solid fa-share-nodes"></i><span>导出</span></button>
           <button id="tidyCanvasBtn" class="canvas-tidy-btn" type="button" title="一键整理节点"><i class="fa-solid fa-table-cells-large"></i><span>整理</span></button>
           <div class="canvas-search-tool">
             <button id="canvasSearchBtn" class="canvas-tidy-btn canvas-search-btn" type="button" title="搜索节点（Ctrl+F）" aria-label="搜索节点" aria-expanded="false" aria-controls="canvasSearchPopover"><i class="fa-solid fa-magnifying-glass"></i></button>
@@ -307,50 +299,17 @@
                 </select>
                 <button id="canvasFavoritesOnly" class="icon-btn" type="button" title="只看收藏" aria-label="只看收藏"><i class="fa-regular fa-heart"></i></button>
                 <button id="focusCanvasSearchResult" class="mini-pill" type="button" title="跳到第一个结果"><span id="canvasSearchCount">0/0</span></button>
-                <button id="clearCanvasSearch" class="mini-pill" type="button" title="清空搜索和筛选">清空</button>
+                <button id="clearCanvasSearch" class="icon-btn" type="button" title="清空搜索和筛选" aria-label="清空搜索和筛选"><i class="fa-solid fa-eraser"></i></button>
               </div>
-            </div>
-          </div>
-          <div class="canvas-search-tool">
-            <button id="shortcutHelpBtn" class="canvas-tidy-btn canvas-search-btn" type="button" title="快捷键（?）" aria-label="快捷键" aria-expanded="false" aria-controls="shortcutHelp"><i class="fa-regular fa-keyboard"></i></button>
-            <div id="shortcutHelp" class="canvas-search-popover shortcut-help hidden" role="dialog" aria-label="快捷键">
-              <dl>
-                <dt>Ctrl+K</dt><dd>命令面板</dd>
-                <dt>Ctrl+F</dt><dd>搜索节点</dd>
-                <dt>Ctrl+Z / Ctrl+Shift+Z</dt><dd>撤销 / 重做</dd>
-                <dt>Ctrl+A</dt><dd>全选节点</dd>
-                <dt>Shift+单击</dt><dd>加选 / 取消选中节点</dd>
-                <dt>Ctrl+D</dt><dd>复制选中节点</dd>
-                <dt>Ctrl+G / Ctrl+Shift+G</dt><dd>打组 / 取消组</dd>
-                <dt>Delete</dt><dd>删除选中节点</dd>
-                <dt>Shift+1</dt><dd>适配画布</dd>
-                <dt>按住 Alt 拖动</dt><dd>不吸附对齐</dd>
-                <dt>右键节点</dt><dd>复制、锁定、置顶、下载、分享…</dd>
-                <dt>工具栏「导出」</dt><dd>分享包 / 图片 ZIP / 画布快照</dd>
-                <dt>连线拖到空白处</dt><dd>创建下一步节点</dd>
-                <dt>双击空白处</dt><dd>添加节点</dd>
-                <dt>Esc</dt><dd>关闭弹出菜单</dd>
-              </dl>
             </div>
           </div>
           <button id="fastCanvasBtn" class="canvas-fast-btn active" type="button" aria-pressed="true" title="极速画布：拖动和缩放时自动降低画面负载"><i class="fa-solid fa-gauge-high"></i><span>极速</span></button>
         </div>
         <div id="selectionBox" class="selection-box hidden"></div>
-        <div id="selectionToolbar" class="selection-toolbar hidden" role="toolbar" aria-label="多选操作">
-          <button class="float-tool float-tool-icon" type="button" data-align="left" title="左对齐" aria-label="左对齐"><i class="fa-solid fa-align-left"></i></button>
-          <button class="float-tool float-tool-icon" type="button" data-align="center" title="水平居中" aria-label="水平居中"><i class="fa-solid fa-align-center"></i></button>
-          <button class="float-tool float-tool-icon" type="button" data-align="right" title="右对齐" aria-label="右对齐"><i class="fa-solid fa-align-right"></i></button>
-          <button class="float-tool float-tool-icon" type="button" data-align="top" title="顶部对齐" aria-label="顶部对齐"><i class="fa-solid fa-arrows-up-to-line"></i></button>
-          <button class="float-tool float-tool-icon" type="button" data-align="middle" title="垂直居中" aria-label="垂直居中"><i class="fa-solid fa-grip-lines"></i></button>
-          <button class="float-tool float-tool-icon" type="button" data-align="bottom" title="底部对齐" aria-label="底部对齐"><i class="fa-solid fa-arrows-down-to-line"></i></button>
-          <button class="float-tool float-tool-icon" type="button" data-distribute="x" title="水平等距分布（至少 3 个）" aria-label="水平等距分布"><i class="fa-solid fa-arrows-left-right"></i></button>
-          <button class="float-tool float-tool-icon" type="button" data-distribute="y" title="垂直等距分布（至少 3 个）" aria-label="垂直等距分布"><i class="fa-solid fa-arrows-up-down"></i></button>
-          <span class="float-tool-sep" aria-hidden="true"></span>
-          <button id="groupSelection" class="float-tool" type="button" title="打组（Ctrl+G）"><i class="fa-regular fa-object-group"></i>打组</button>
-          <button id="ungroupSelection" class="float-tool" type="button" title="取消组（Ctrl+Shift+G）"><i class="fa-regular fa-object-ungroup"></i>取消组</button>
-          <button id="saveSelectionWorkflow" class="float-tool" type="button" title="保存为工作流"><i class="fa-solid fa-floppy-disk"></i>保存工作流</button>
-          <button id="downloadSelection" class="float-tool" type="button" title="下载选中节点的图片和视频"><i class="fa-solid fa-download"></i>下载</button>
-          <button id="exportShareSelection" class="float-tool" type="button" title="导出分享包"><i class="fa-solid fa-share-nodes"></i>分享</button>
+        <div id="selectionToolbar" class="selection-toolbar hidden">
+          <button id="groupSelection" type="button"><i class="fa-regular fa-object-group"></i> 打组</button>
+          <button id="saveSelectionWorkflow" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存工作流</button>
+          <button id="ungroupSelection" type="button"><i class="fa-regular fa-object-ungroup"></i> 取消组</button>
         </div>
       </section>
         <aside id="historyDrawer" class="history-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="historyDrawerTitle" aria-hidden="true">
@@ -651,7 +610,7 @@
             <label title="琥珀金"><input type="radio" name="colorTheme" value="amber"><span class="color-theme-swatch" style="--swatch:#e9aa3a"></span><span>琥珀金</span></label>
             <label title="自定义颜色"><input type="radio" name="colorTheme" value="custom"><span class="color-theme-swatch color-theme-custom"><i class="fa-solid fa-eye-dropper"></i></span><span>自定义</span></label>
           </div>
-          <div id="customThemeRow" class="custom-theme-row" aria-hidden="false">
+          <div id="customThemeRow" class="custom-theme-row" aria-hidden="true">
             <div class="theme-zone-picker" role="tablist" aria-label="选择要编辑的界面区域">
               <button class="active" type="button" role="tab" aria-selected="true" data-theme-zone="accent"><span class="theme-zone-swatch"></span><strong>按钮强调</strong></button>
               <button type="button" role="tab" aria-selected="false" data-theme-zone="deep"><span class="theme-zone-swatch"></span><strong>应用背景</strong></button>
@@ -674,47 +633,10 @@
             <div id="savedColorThemeList" class="saved-color-theme-list"></div>
           </section>
         </fieldset>
-        <fieldset class="color-theme-fieldset canvas-wallpaper-fieldset">
-          <legend>壁纸（画布与主界面）</legend>
-          <div id="canvasWallpaperGrid" class="color-theme-grid canvas-wallpaper-grid" role="radiogroup" aria-label="壁纸">
-            <label title="无"><input type="radio" name="canvasWallpaper" value="none" checked><span class="wallpaper-swatch"></span><span>无</span></label>
-            <label title="极光"><input type="radio" name="canvasWallpaper" value="aurora"><span class="wallpaper-swatch" data-wallpaper-preset="aurora"></span><span>极光</span></label>
-            <label title="暮霞"><input type="radio" name="canvasWallpaper" value="dusk"><span class="wallpaper-swatch" data-wallpaper-preset="dusk"></span><span>暮霞</span></label>
-            <label title="林间"><input type="radio" name="canvasWallpaper" value="forest"><span class="wallpaper-swatch" data-wallpaper-preset="forest"></span><span>林间</span></label>
-            <label title="深海"><input type="radio" name="canvasWallpaper" value="ocean"><span class="wallpaper-swatch" data-wallpaper-preset="ocean"></span><span>深海</span></label>
-            <label title="晨雾"><input type="radio" name="canvasWallpaper" value="mist"><span class="wallpaper-swatch" data-wallpaper-preset="mist"></span><span>晨雾</span></label>
-            <label id="canvasWallpaperCustomTile" title="我的图片" hidden><input type="radio" name="canvasWallpaper" value="custom"><span class="wallpaper-swatch"></span><span>我的图片</span></label>
-          </div>
-          <div class="canvas-wallpaper-upload">
-            <button id="canvasWallpaperUpload" class="ghost-btn" type="button"><i class="fa-solid fa-image"></i> 上传图片</button>
-            <button id="canvasWallpaperDelete" class="ghost-btn" type="button" title="删除上传的图片并恢复为无壁纸" hidden><i class="fa-solid fa-trash-can"></i> 删除图片</button>
-            <small id="canvasWallpaperLocation">上传的图片会复制一份保存，原文件可随意移动或删除。</small>
-            <input id="canvasWallpaperFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
-          </div>
-          <label class="ui-sound-volume">
-            <span><strong>模糊</strong><output id="canvasWallpaperBlurValue" for="canvasWallpaperBlur">0px</output></span>
-            <input id="canvasWallpaperBlur" type="range" min="0" max="24" step="1" value="0" data-ui-sound="off" aria-label="壁纸模糊">
-          </label>
-          <label class="ui-sound-volume">
-            <span><strong>暗度</strong><output id="canvasWallpaperDimValue" for="canvasWallpaperDim">35%</output></span>
-            <input id="canvasWallpaperDim" type="range" min="0" max="90" step="1" value="35" data-ui-sound="off" aria-label="壁纸暗度">
-          </label>
-          <label class="perf-mode-toggle">
-            <input id="canvasWallpaperGridToggle" type="checkbox" checked>
-            <span><strong>显示网格</strong><small>只在画布上叠加网格线（主界面不显示）。</small></span>
-          </label>
-        </fieldset>
         <p class="appearance-mode-hint">顶部准星可开关专注模式。浅色模式已去掉。</p>
         <label class="perf-mode-toggle">
           <input id="perfReduceMotion" type="checkbox">
           <span><strong>性能模式</strong><small>关闭首页背景视频与部分装饰动画，弱机更流畅；不影响生成与导出。</small></span>
-        </label>
-      </section>
-      <section class="settings-section startup-settings">
-        <h3><i class="fa-solid fa-power-off"></i> 启动</h3>
-        <label class="perf-mode-toggle">
-          <input id="autoOpenLastProject" type="checkbox">
-          <span><strong>启动时自动打开上次的项目</strong><small>默认关闭：启动后停留在主界面。项目丢失或损坏时会回到主界面并提示。</small></span>
         </label>
       </section>
       <section class="settings-section ui-sound-settings">
@@ -732,20 +654,34 @@
           <input id="uiSoundVolume" type="range" min="0" max="100" step="1" value="35" data-ui-sound="off" aria-label="界面音效音量">
         </label>
       </section>
+      <section class="settings-section canvas-wallpaper-fieldset">
+        <h3><i class="fa-solid fa-image"></i> 壁纸</h3>
+        <div id="canvasWallpaperGrid" class="color-theme-grid canvas-wallpaper-grid" role="radiogroup" aria-label="壁纸">
+          <label title="无"><input type="radio" name="canvasWallpaper" value="none" checked><span class="wallpaper-swatch"></span><span>无</span></label>
+          <label title="极光"><input type="radio" name="canvasWallpaper" value="aurora"><span class="wallpaper-swatch" data-wallpaper-preset="aurora"></span><span>极光</span></label>
+          <label title="暮霞"><input type="radio" name="canvasWallpaper" value="dusk"><span class="wallpaper-swatch" data-wallpaper-preset="dusk"></span><span>暮霞</span></label>
+          <label title="林间"><input type="radio" name="canvasWallpaper" value="forest"><span class="wallpaper-swatch" data-wallpaper-preset="forest"></span><span>林间</span></label>
+          <label title="深海"><input type="radio" name="canvasWallpaper" value="ocean"><span class="wallpaper-swatch" data-wallpaper-preset="ocean"></span><span>深海</span></label>
+          <label title="晨雾"><input type="radio" name="canvasWallpaper" value="mist"><span class="wallpaper-swatch" data-wallpaper-preset="mist"></span><span>晨雾</span></label>
+          <label id="canvasWallpaperCustomTile" title="我的图片" hidden><input type="radio" name="canvasWallpaper" value="custom"><span class="wallpaper-swatch"></span><span>我的图片</span></label>
+        </div>
+        <div class="canvas-wallpaper-upload">
+          <button id="canvasWallpaperUpload" class="ghost-btn" type="button"><i class="fa-solid fa-upload"></i> 上传图片</button>
+          <button id="canvasWallpaperDelete" class="ghost-btn" type="button" title="删除上传的壁纸" hidden><i class="fa-solid fa-trash-can"></i> 删除图片</button>
+          <small id="canvasWallpaperLocation">上传的图片会复制一份保存，原文件可随意移动或删除。</small>
+          <input id="canvasWallpaperFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        </div>
+        <label class="ui-sound-volume"><span><strong>模糊</strong><output id="canvasWallpaperBlurValue" for="canvasWallpaperBlur">0px</output></span><input id="canvasWallpaperBlur" type="range" min="0" max="24" step="1" value="0" data-ui-sound="off" aria-label="壁纸模糊"></label>
+        <label class="ui-sound-volume"><span><strong>暗度</strong><output id="canvasWallpaperDimValue" for="canvasWallpaperDim">35%</output></span><input id="canvasWallpaperDim" type="range" min="0" max="90" step="1" value="35" data-ui-sound="off" aria-label="壁纸暗度"></label>
+        <label class="generation-storage-toggle ui-sound-toggle"><input id="canvasWallpaperGridToggle" type="checkbox" checked><span class="ui-sound-switch" aria-hidden="true"></span><span class="ui-sound-copy"><strong>显示画布网格</strong></span></label>
+      </section>
       </div>
       <div class="settings-pane" data-settings-pane="api">
       <section class="settings-section api-settings-modern">
         <h3><i class="fa-solid fa-plug"></i> API 设置</h3>
-        <div class="api-settings-intro"><strong>只需三步：选服务、填地址和 Key、点击自动配置</strong><span>配置成功后会自动读取可用模型；模型选择会在服务卡片里直接显示。</span></div>
-        <section class="api-default-details api-global-defaults-details api-global-defaults-visible">
-          <div class="api-global-section-head"><div><strong><i class="fa-solid fa-route"></i> 默认模型</strong><small>设置画布未指定服务时使用的供应商和模型</small></div></div>
+        <details class="api-default-details api-global-defaults-details api-global-defaults-visible">
+          <summary><span><i class="fa-solid fa-route"></i> 默认模型</span><small>画布未指定服务时使用</small><i class="fa-solid fa-chevron-down"></i></summary>
         <div class="api-global-defaults">
-          <div class="api-global-head">
-            <div>
-              <strong>默认模型</strong>
-              <span>没有单独指定服务的节点，会使用这里的供应商和模型。</span>
-            </div>
-          </div>
           <div class="api-global-row" data-global-model-kind="chat">
             <b>聊天</b>
             <label>供应商<select id="globalChatProvider" data-global-provider="chat"></select></label>
@@ -762,12 +698,40 @@
             <label>模型<input id="globalVideoModel" data-global-model="video" list="globalVideoModelList" placeholder="选择模型，或粘贴 model id"><datalist id="globalVideoModelList"></datalist></label>
           </div>
         </div>
-        </section>
+        </details>
+        <details class="api-default-details">
+          <summary><span>旧版兼容设置（通常不需要修改）</span><i class="fa-solid fa-chevron-down"></i></summary>
+          <p class="api-legacy-note">这些字段用于兼容旧项目。新配置请在下面的供应商卡片中完成，保存后会自动同步。</p>
+          <div class="model-preset-row">
+            <label>模型配置预设<select id="modelPresetSelect">
+              <option value="openai-compatible">OpenAI 兼容</option>
+              <option value="siliconflow">硅基流动</option>
+              <option value="volcengine">火山</option>
+              <option value="tongyi">通义</option>
+              <option value="comfyui-local">ComfyUI 本地</option>
+              <option value="custom">自定义 OpenAI-compatible</option>
+            </select></label>
+            <button id="applyModelPreset" class="ghost-btn" type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> 应用预设</button>
+          </div>
+          <p id="modelPresetHint" class="model-preset-hint">选择预设后只填 API 地址和模型建议，不会改写 API 密钥。</p>
+          <label>API 地址<input id="apiUrl" value="https://nexusapi.cn/v1" placeholder="https://api.example.com/v1"></label>
+          <label>API 密钥<input id="apiKey" type="password" placeholder="sk-..."></label>
+          <button id="clearApiKey" class="ghost-btn" type="button"><i class="fa-regular fa-trash-can"></i> 清除密钥</button>
+          <label>默认图像模型<input id="imageModel" value="gpt-image2" placeholder="gpt-image2"></label>
+          <label>默认视频模型<input id="videoModel" value="omni-flash" placeholder="omni-flash / sora-2 / veo3.1-components"></label>
+          <label>默认聊天模型<input id="chatModel" value="gpt-4o-mini" placeholder="gpt-4o-mini"></label>
+          <label>∞ 灵枢万象上下文<select id="assistantContextMode">
+            <option value="auto">自动：选中节点优先，未选中时轻量摘要</option>
+            <option value="selected">仅选中节点：没选节点就不带画布</option>
+            <option value="full">完整画布：始终带项目摘要</option>
+            <option value="off">关闭：纯聊天</option>
+          </select></label>
+          <p class="assistant-context-mode-hint">控制∞ 灵枢万象每次发送消息时带多少画布上下文，避免通用问题被当前项目带偏。</p>
+        </details>
         <div class="api-providers-panel">
           <div class="api-providers-head">
             <div>
               <strong>已连接的服务</strong>
-              <span>通常只需要一个服务。填写地址和 Key 后点击“保存并自动配置”。</span>
             </div>
               <button id="addApiProvider" class="primary-btn" type="button"><i class="fa-solid fa-plus"></i> 添加服务</button>
           </div>
@@ -792,12 +756,6 @@
           <textarea id="comfyWorkflowJson" placeholder="导入 ComfyUI API 格式 workflow JSON 后，会保存在本机设置里。"></textarea>
         </details>
       </section>
-      <section class="settings-section agent-settings">
-        <h3><i class="fa-solid fa-robot"></i> 电脑智能体</h3>
-        <p class="codex-cli-hint">内置智能体可操作文件、浏览器与电脑界面；支持模板、定时、审批队列与审计。紧急停止：Ctrl+Alt+Shift+S。后端可选内置智能体或本机已安装的 Codex CLI（未安装时其他功能照常使用）。</p>
-        <div id="agentSettingsPanel" class="agent-settings-panel"></div>
-        <div id="agentLivePanel" class="agent-live-panel"></div>
-      </section>
       </div>
       <div class="settings-pane hidden" data-settings-pane="generation">
       <section class="settings-section generation-safety-settings">
@@ -805,7 +763,6 @@
         <div class="two-col">
           <label>单次最多请求数<input id="generationMaxTasks" type="number" min="1" max="100" step="1" value="12"><small>运行全部节点时，超过此数量会先停止。</small></label>
           <label>连续失败停止<input id="generationFailureStop" type="number" min="1" max="20" step="1" value="3"><small>连续失败达到次数后，不再提交后续任务。</small></label>
-          <label>失败后自动重试<select id="generationAutoRetry"><option value="0">不自动重试</option><option value="1" selected>最多 1 次</option><option value="2">最多 2 次</option><option value="3">最多 3 次</option></select><small>只在服务繁忙（429/502/503）或断网时重试，不会重复扣费。</small></label>
           <label>每日请求提醒<input id="generationDailyReminder" type="number" min="1" max="1000" step="1" value="30"><small>达到当天累计请求数时再次确认。</small></label>
           <label class="generation-storage-toggle ui-sound-toggle">
             <input id="generationRequireStorage" type="checkbox" checked>
@@ -815,7 +772,6 @@
         </div>
         <details class="settings-details">
           <summary>费用预算</summary>
-          <button id="openSpendFromSettings" class="ghost-btn" type="button"><i class="fa-solid fa-wallet"></i> 打开花费管理（记录、图表、余额提醒）</button>
           <div class="two-col">
             <label>预算币种<select id="generationBudgetCurrency"><option value="USD">USD 美元</option><option value="CNY">CNY 人民币</option></select><small>模型价格与预算币种不一致时会先阻止。</small></label>
             <label>单次任务预算<input id="generationSingleBudget" type="number" min="0" step="0.01" value="0"><small>0 表示不设上限；超过后必须明确确认。</small></label>
@@ -841,8 +797,6 @@
       <section class="settings-section">
         <h3><i class="fa-solid fa-folder-open"></i> 本地存储</h3>
         <label>存储位置<input id="localStoragePath" readonly placeholder="未选择，默认使用浏览器本地存储"></label>
-        <p id="storageDirDefaultNotice" class="settings-warning hidden"><i class="fa-solid fa-circle-info"></i> 当前使用默认目录 <b data-default-storage-dir></b>，建议选择你自己的存储目录。 <button id="storageDirDefaultChoose" class="ghost-btn" type="button">选择</button></p>
-        <p id="storageDirInstallWarning" class="settings-warning hidden"><i class="fa-solid fa-triangle-exclamation"></i> 存储目录位于软件安装目录内，更新或重装软件时可能被清空。请点击“更改”选择安装目录之外的文件夹（例如“文档”）。</p>
         <div class="settings-action-row">
           <button id="chooseStorageDir" class="ghost-btn"><i class="fa-solid fa-folder-open"></i> 更改</button>
           <button id="openStorageDir" class="ghost-btn"><i class="fa-solid fa-arrow-up-right-from-square"></i> 打开文件夹</button>
@@ -856,11 +810,10 @@
           </div>
         </div>
         <div class="settings-action-group">
-          <strong>导出与分享</strong>
+          <strong>导出</strong>
           <div class="settings-action-row">
-            <button id="openExportShareSettings" class="ghost-btn"><i class="fa-solid fa-share-nodes"></i> 分享包</button>
-            <button id="batchExport" class="ghost-btn"><i class="fa-solid fa-file-export"></i> 项目包</button>
-            <button id="exportReviewPackage" class="ghost-btn"><i class="fa-solid fa-clapperboard"></i> 审片包</button>
+            <button id="batchExport" class="ghost-btn"><i class="fa-solid fa-file-export"></i> 批量导出</button>
+            <button id="exportReviewPackage" class="ghost-btn"><i class="fa-solid fa-clapperboard"></i> 导出审片包</button>
             <button id="importReviewComments" class="ghost-btn"><i class="fa-solid fa-comment-medical"></i> 导入审阅意见</button>
             <input id="reviewCommentsFile" class="hidden" type="file" accept=".json,application/json">
           </div>
@@ -890,24 +843,47 @@
       </section>
       </div>
       <div class="settings-pane hidden" data-settings-pane="about">
+      <section class="settings-section license-settings">
+        <h3><i class="fa-solid fa-key"></i> 软件授权</h3>
+        <div id="licenseStatus" class="license-status" data-status="loading">
+          <i class="fa-solid fa-circle-notch fa-spin"></i>
+          <div><strong>正在检查</strong><span>--</span></div>
+        </div>
+        <div class="license-redeem-row">
+          <label><span>兑换码</span><input id="licenseRedemptionCode" type="text" maxlength="32" autocomplete="off" spellcheck="false" placeholder="FAI1-XXXX-XXXX-XXXX-XXXX"></label>
+          <button id="redeemLicense" class="primary-btn" type="button"><i class="fa-solid fa-shield-check"></i> 激活</button>
+        </div>
+        <button id="deactivateLicense" class="ghost-btn danger license-deactivate" type="button"><i class="fa-solid fa-link-slash"></i> 解除本机</button>
+        <details class="license-offline-recovery">
+          <summary><i class="fa-solid fa-life-ring"></i> 离线恢复</summary>
+          <div class="license-offline-body">
+            <label>许可证编号<input id="licenseId" type="text" maxlength="36" autocomplete="off" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></label>
+            <div class="two-col">
+              <button id="createActivationRequest" class="ghost-btn" type="button"><i class="fa-solid fa-fingerprint"></i> 生成请求码</button>
+              <button id="copyActivationRequest" class="ghost-btn" type="button"><i class="fa-regular fa-copy"></i> 复制请求码</button>
+            </div>
+            <label>请求码<textarea id="activationRequestCode" rows="3" readonly spellcheck="false"></textarea></label>
+            <label>激活响应码<textarea id="activationResponseCode" rows="4" spellcheck="false"></textarea></label>
+            <button id="importActivation" class="ghost-btn" type="button"><i class="fa-solid fa-file-import"></i> 导入离线响应</button>
+          </div>
+        </details>
+      </section>
+      <section class="settings-section">
+        <h3><i class="fa-solid fa-rotate"></i> 更新系统</h3>
+        <div class="settings-action-row">
+          <button id="checkUpdates" class="ghost-btn"><i class="fa-solid fa-magnifying-glass"></i> 检查更新</button>
+          <button id="installOnlineUpdate" class="ghost-btn"><i class="fa-solid fa-cloud-arrow-down"></i> 下载并安装</button>
+          <button id="applyUpdatePackage" class="ghost-btn"><i class="fa-solid fa-box-open"></i> 应用本地更新包</button>
+          <button id="rollbackUpdate" class="ghost-btn"><i class="fa-solid fa-clock-rotate-left"></i> 回滚上一版</button>
+        </div>
+        <p class="storage-note">正式版使用发布者签名的完整安装包升级；项目、历史、媒体和 API Key 保存在独立用户目录。</p>
+      </section>
       <section class="settings-section support-center-settings">
         <h3><i class="fa-solid fa-life-ring"></i> 客户支持与版本</h3>
         <div class="support-build-summary">
           <div><span>当前版本</span><strong id="supportVersion">--</strong></div>
           <div><span>发布通道</span><strong id="supportChannel">--</strong></div>
           <div><span>交付状态</span><strong id="supportTrustStatus">--</strong></div>
-        </div>
-        <div class="update-check-panel">
-          <label>更新地址<input id="updateSource" type="text" spellcheck="false" placeholder="留空则不检查；可填 https://…/version.json 或共享文件夹路径"><small>只读取一份很小的版本信息，不会自动下载或安装。</small></label>
-          <div class="update-check-row">
-            <label class="ui-sound-toggle update-auto-toggle">
-              <input id="updateAutoCheck" type="checkbox" checked>
-              <span class="ui-sound-switch" aria-hidden="true"></span>
-              <span class="ui-sound-copy"><strong>启动时自动检查</strong><small>每天最多一次，填了更新地址才会检查</small></span>
-            </label>
-            <button id="checkUpdateNow" class="ghost-btn" type="button"><i class="fa-solid fa-rotate"></i> 检查更新</button>
-          </div>
-          <div id="updateResult" class="update-result hidden" role="status" aria-live="polite"></div>
         </div>
         <div class="support-document-grid">
           <button class="ghost-btn" type="button" data-support-document="help"><i class="fa-regular fa-circle-question"></i> 帮助中心</button>
@@ -991,6 +967,32 @@
     </article>
   </section>
 
+  <section id="providerConformanceModal" class="provider-conformance-modal hidden" aria-modal="true" role="dialog" aria-labelledby="providerConformanceTitle">
+    <article class="provider-conformance-card">
+      <header>
+        <div><h2 id="providerConformanceTitle">API 兼容性验收</h2><span id="providerConformanceSubtitle">--</span></div>
+        <button id="providerConformanceClose" class="icon-btn" type="button" title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <div class="provider-conformance-body">
+        <section class="provider-conformance-options">
+          <label><input type="checkbox" data-conformance-step="models" checked><span><i class="fa-solid fa-list"></i>模型列表</span></label>
+          <label><input type="checkbox" data-conformance-step="text" checked><span><i class="fa-solid fa-message"></i>文本请求</span></label>
+          <label><input type="checkbox" data-conformance-step="imageSquare"><span><i class="fa-regular fa-square"></i>方图</span></label>
+          <label><input type="checkbox" data-conformance-step="imageLandscape"><span><i class="fa-regular fa-image"></i>16:9 图片</span></label>
+          <label><input type="checkbox" data-conformance-step="imageReference"><span><i class="fa-solid fa-images"></i>参考图</span></label>
+          <label><input type="checkbox" data-conformance-step="videoLandscape"><span><i class="fa-solid fa-video"></i>16:9 视频</span></label>
+        </section>
+        <p class="provider-conformance-cost"><i class="fa-solid fa-circle-info"></i>图片和视频项会提交真实生成任务，可能产生供应商费用。</p>
+        <div id="providerConformanceResults" class="provider-conformance-results"></div>
+      </div>
+      <footer>
+        <button id="providerConformanceExport" class="ghost-btn hidden" type="button"><i class="fa-solid fa-file-export"></i>导出证据</button>
+        <button id="providerConformanceRerun" class="ghost-btn hidden" type="button"><i class="fa-solid fa-rotate"></i>重新验收</button>
+        <button id="providerConformanceRun" class="primary-btn" type="button"><i class="fa-solid fa-play"></i>开始验收</button>
+      </footer>
+    </article>
+  </section>
+
   <div id="imageModal" class="image-modal hidden" role="dialog" aria-modal="true" aria-label="素材预览" aria-hidden="true">
     <button id="imageModalClose" class="image-close" type="button" title="关闭预览" aria-label="关闭预览"><i class="fa-solid fa-xmark"></i></button>
     <div class="image-modal-toolbar">
@@ -1009,7 +1011,7 @@
       <header class="fabric-editor-head">
         <div>
           <strong><i class="fa-regular fa-object-group"></i> 图片节点编辑器</strong>
-          <span id="fabricEditorTitle">选择、标注、绘制后保存为右侧新节点（原图保留）</span>
+          <span id="fabricEditorTitle">选择、标注、绘制后保存回当前图片节点</span>
         </div>
         <button id="fabricEditorClose" type="button" title="关闭"><i class="fa-solid fa-xmark"></i></button>
       </header>
@@ -1027,7 +1029,7 @@
         <button type="button" data-fabric-action="delete" title="删除选中"><i class="fa-regular fa-trash-can"></i></button>
         <button type="button" data-fabric-action="undo" title="撤销"><i class="fa-solid fa-rotate-left"></i></button>
         <button type="button" data-fabric-action="clear" title="清空标注"><i class="fa-solid fa-eraser"></i></button>
-        <button id="fabricEditorSave" type="button" class="fabric-editor-save"><i class="fa-solid fa-floppy-disk"></i><span>保存为新节点</span></button>
+        <button id="fabricEditorSave" type="button" class="fabric-editor-save"><i class="fa-solid fa-floppy-disk"></i><span>保存到节点</span></button>
       </div>
       <main class="fabric-editor-stage">
         <canvas id="fabricEditorCanvas" width="1024" height="768"></canvas>
@@ -1040,7 +1042,7 @@
       <header class="cropper-head">
         <div>
           <strong><i class="fa-solid fa-crop-simple"></i> 图片节点裁剪</strong>
-          <span id="cropperTitle">快速裁成常用比例并保存为右侧新节点（原图保留）</span>
+          <span id="cropperTitle">快速裁成常用比例并保存回当前图片节点</span>
         </div>
         <button id="cropperClose" type="button" title="关闭"><i class="fa-solid fa-xmark"></i></button>
       </header>
@@ -1056,150 +1058,12 @@
         <button type="button" data-crop-action="flip-x" title="水平翻转"><i class="fa-solid fa-left-right"></i></button>
         <button type="button" data-crop-action="flip-y" title="垂直翻转"><i class="fa-solid fa-up-down"></i></button>
         <button type="button" data-crop-action="reset" title="重置"><i class="fa-solid fa-arrows-rotate"></i></button>
-        <button id="cropperSave" type="button" class="cropper-save"><i class="fa-solid fa-floppy-disk"></i><span>保存为新节点</span></button>
+        <button id="cropperSave" type="button" class="cropper-save"><i class="fa-solid fa-floppy-disk"></i><span>保存到节点</span></button>
       </div>
       <main class="cropper-stage"><img id="cropperImage" alt=""></main>
       <p class="cropper-status" id="cropperStatus">拖动裁剪框调整构图，保存后会覆盖当前图片节点。</p>
     </div>
   </section>
-
-  <section id="localEditModal" class="local-edit-modal hidden" aria-label="局部编辑">
-    <div class="local-edit-shell">
-      <header class="local-edit-head">
-        <div>
-          <strong><i class="fa-solid fa-wand-magic-sparkles"></i> 局部编辑</strong>
-          <span id="localEditTitle">图片节点</span>
-        </div>
-        <button type="button" id="localEditClose" title="关闭"><i class="fa-solid fa-xmark"></i></button>
-      </header>
-      <div class="local-edit-toolbar" role="tablist">
-        <button type="button" data-local-edit-tool="inpaint" class="active"><i class="fa-solid fa-paintbrush"></i> 选区重绘</button>
-        <button type="button" data-local-edit-tool="outpaint"><i class="fa-solid fa-expand"></i> 扩图</button>
-        <button type="button" data-local-edit-tool="cutout"><i class="fa-solid fa-scissors"></i> 抠图去背景</button>
-        <button type="button" data-local-edit-tool="upscale"><i class="fa-solid fa-magnifying-glass-plus"></i> 放大变清晰</button>
-      </div>
-      <div class="local-edit-body">
-        <aside class="local-edit-side">
-          <div data-local-edit-pane="inpaint">
-            <label>笔刷大小 <span id="localEditBrushLabel">28px</span></label>
-            <input id="localEditBrush" type="range" min="4" max="160" value="28">
-            <button type="button" id="localEditClearMask" class="ghost"><i class="fa-solid fa-eraser"></i> 清空选区</button>
-            <p class="hint">在图上涂抹要修改的区域，再填写下方提示词。</p>
-          </div>
-          <div data-local-edit-pane="outpaint" class="hidden">
-            <label>四边扩展（像素）</label>
-            <div class="local-edit-pads">
-              <label>上 <input id="localEditPadTop" type="number" min="0" max="2048" value="128"></label>
-              <label>右 <input id="localEditPadRight" type="number" min="0" max="2048" value="128"></label>
-              <label>下 <input id="localEditPadBottom" type="number" min="0" max="2048" value="128"></label>
-              <label>左 <input id="localEditPadLeft" type="number" min="0" max="2048" value="128"></label>
-            </div>
-            <button type="button" id="localEditPadUniform" class="ghost">四边同步为上边值</button>
-            <p class="hint">扩出的区域会由模型补全；提示词可描述要延伸的内容。</p>
-          </div>
-          <div data-local-edit-pane="cutout" class="hidden">
-            <label>背景容差 <span id="localEditCutoutLabel">42</span></label>
-            <input id="localEditCutoutThreshold" type="range" min="8" max="120" value="42">
-            <p class="hint">本地抠图，按边缘颜色去背景，输出透明 PNG，不消耗额度。</p>
-          </div>
-          <div data-local-edit-pane="upscale" class="hidden">
-            <label>放大倍数</label>
-            <div class="local-edit-factors">
-              <button type="button" data-upscale-factor="2" class="active">2×</button>
-              <button type="button" data-upscale-factor="4">4×</button>
-            </div>
-            <p class="hint">默认本地放大（FFmpeg / 高品质缩放），不消耗额度。</p>
-          </div>
-          <div id="localEditPromptWrap">
-            <label for="localEditPrompt">提示词</label>
-            <textarea id="localEditPrompt" rows="4" placeholder="描述要改成什么，或扩图时希望延伸的内容"></textarea>
-          </div>
-          <p id="localEditTip" class="local-edit-tip"></p>
-          <div class="local-edit-actions">
-            <button type="button" id="localEditCancel" class="ghost">取消</button>
-            <button type="button" id="localEditRun" class="primary">开始处理</button>
-          </div>
-        </aside>
-        <main id="localEditStage" class="local-edit-stage" aria-label="编辑画布"></main>
-      </div>
-      <p id="localEditStatus" class="local-edit-status">准备就绪</p>
-    </div>
-  </section>
-
-
-  <section id="batchVariantsModal" class="batch-variants-modal hidden" aria-label="批量与变体">
-    <div class="batch-variants-shell">
-      <header class="batch-variants-head">
-        <div>
-          <strong><i class="fa-solid fa-layer-group"></i> 批量与变体</strong>
-          <span id="batchVariantsTitle">图片节点</span>
-        </div>
-        <button type="button" id="batchVariantsClose" title="关闭"><i class="fa-solid fa-xmark"></i></button>
-      </header>
-      <div class="batch-variants-body">
-        <aside class="batch-variants-side">
-          <label>模式</label>
-          <div class="batch-variants-chips" role="tablist">
-            <button type="button" data-batch-mode="same" class="active">相同参数</button>
-            <button type="button" data-batch-mode="style">风格变体</button>
-            <button type="button" data-batch-mode="aspect">比例变体</button>
-          </div>
-          <div id="batchVariantsCountPane">
-            <label>一次出几张 <em>最多 4</em></label>
-            <div class="batch-variants-chips">
-              <button type="button" data-batch-count="2" class="active">2</button>
-              <button type="button" data-batch-count="3">3</button>
-              <button type="button" data-batch-count="4">4</button>
-            </div>
-          </div>
-          <p id="batchVariantsCountNote" class="batch-variants-count-note hidden"></p>
-          <div id="batchVariantsStylePane" class="hidden">
-            <label>风格预设 <em>可多选，最多 4，每个风格一张</em></label>
-            <div class="batch-variants-chips">
-              <button type="button" data-batch-style="realistic" class="active">写实</button>
-              <button type="button" data-batch-style="anime" class="active">动漫</button>
-              <button type="button" data-batch-style="flat">扁平</button>
-              <button type="button" data-batch-style="cinematic">电影感</button>
-              <button type="button" data-batch-style="illustration">插画</button>
-            </div>
-          </div>
-          <div id="batchVariantsAspectPane" class="hidden">
-            <label>比例预设 <em>可多选，最多 4，每个比例一张</em></label>
-            <div class="batch-variants-chips">
-              <button type="button" data-batch-aspect="1:1" class="active">1:1</button>
-              <button type="button" data-batch-aspect="16:9" class="active">16:9</button>
-              <button type="button" data-batch-aspect="9:16">9:16</button>
-              <button type="button" data-batch-aspect="4:3">4:3</button>
-              <button type="button" data-batch-aspect="3:4">3:4</button>
-            </div>
-          </div>
-          <label for="batchVariantsPrompt">提示词</label>
-          <textarea id="batchVariantsPrompt" rows="4" placeholder="用于批量的提示词（不会改动原节点）"></textarea>
-          <label class="batch-variants-check"><input id="batchVariantsUseSource" type="checkbox"> 基于当前图作参考（图生图）</label>
-          <p id="batchVariantsTip" class="batch-variants-tip">将新建结果节点，原节点保持不变</p>
-          <div id="batchVariantsSummary" class="batch-variants-summary"></div>
-          <div class="batch-variants-actions">
-            <button type="button" id="batchVariantsCancel" class="ghost">取消</button>
-            <button type="button" id="batchVariantsRun" class="primary">开始批量</button>
-          </div>
-        </aside>
-        <main class="batch-variants-main">
-          <div class="batch-variants-guide">
-            <h3>怎么用</h3>
-            <ol>
-              <li><strong>相同参数</strong>：同一提示词连出多张，方便挑一张。</li>
-              <li><strong>风格变体</strong>：自动加写实 / 动漫 / 扁平等后缀，平行生成。</li>
-              <li><strong>比例变体</strong>：同一内容按 1:1、16:9、9:16 等比例各出一张。</li>
-            </ol>
-            <p>每次都会在右侧新建一排结果节点，原图节点不动。生成后点悬浮栏「选用」，把这张标成继续往下连的工作节点；其他结果仍留在画布上。</p>
-            <p class="batch-variants-note">花费提示会合并成一次闪动。模型不支持时会给出中文提示，不会乱报错。</p>
-          </div>
-        </main>
-      </div>
-      <p id="batchVariantsStatus" class="batch-variants-status">准备就绪</p>
-    </div>
-  </section>
-
   <section id="cameraModal" class="camera-modal hidden" aria-label="3D 相机角度">
     <div class="camera-card">
       <header>
@@ -1259,112 +1123,14 @@
     <iframe id="directorDeskFrame" title="3D 导演台" data-src="./director-desk/index.html"></iframe>
   </section>
 
-  <div id="storageDefaultBanner" class="storage-default-banner hidden" role="status">
-    <span><i class="fa-solid fa-folder-open"></i> 当前使用默认目录 <b data-default-storage-dir></b>，建议选择你自己的存储目录。</span>
-    <button id="storageDefaultBannerChoose" class="ghost-btn" type="button">选择</button>
-    <button id="storageDefaultBannerDismiss" class="icon-btn" type="button" title="暂时关闭（下次启动仍会提醒）"><i class="fa-solid fa-xmark"></i></button>
-  </div>
   <div id="balanceFlash" class="balance-flash hidden" role="status" aria-live="polite"></div>
-  <section id="promptAssistModal" class="prompt-assist-modal hidden" aria-hidden="true" aria-label="提示词辅助">
-    <div class="prompt-assist-shell" role="dialog" aria-modal="true" aria-labelledby="promptAssistTitle">
-      <header class="prompt-assist-head">
-        <div>
-          <strong id="promptAssistTitle">提示词辅助</strong>
-          <span>本地结构补全与片段；不消耗额度。AI 优化会调用聊天模型。</span>
-        </div>
-        <button id="closePromptAssist" type="button" title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
-      </header>
-      <div class="prompt-assist-body">
-        <aside class="prompt-assist-side">
-          <label>结构分项</label>
-          <div id="promptAssistSections" class="prompt-assist-sections"></div>
-          <button id="promptAssistSkeleton" type="button" class="prompt-assist-secondary"><i class="fa-solid fa-table-columns"></i> 补全结构</button>
-          <label>常用片段</label>
-          <div id="promptAssistSnippets" class="prompt-assist-snippets"></div>
-          <label>最近用过</label>
-          <div id="promptAssistRecent" class="prompt-assist-recent-list"></div>
-        </aside>
-        <main class="prompt-assist-main">
-          <label for="promptAssistDraft">提示词草稿</label>
-          <textarea id="promptAssistDraft" rows="12" placeholder="写画面内容，或点左侧片段 / 补全结构"></textarea>
-          <div id="promptAssistTips" class="prompt-assist-tips" aria-live="polite"></div>
-          <div class="prompt-assist-actions">
-            <button id="promptAssistSaveSnippet" type="button" class="ghost">收藏为片段</button>
-            <button id="promptAssistOptimize" type="button" class="ghost"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 优化</button>
-            <button id="promptAssistApply" type="button" class="primary">写回节点</button>
-          </div>
-        </main>
-      </div>
-      <p id="promptAssistStatus" class="prompt-assist-status">本地辅助不消耗额度</p>
-    </div>
-  </section>
-
-
-  <section id="exportShareModal" class="export-share-modal hidden" aria-hidden="true" aria-label="导出与分享">
-    <div class="export-share-shell" role="dialog" aria-modal="true" aria-labelledby="exportShareTitle">
-      <header class="export-share-head">
-        <div>
-          <strong id="exportShareTitle">导出与分享</strong>
-          <span>把成品打包发给别人，或只导出图片</span>
-        </div>
-        <button id="closeExportShare" type="button" title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
-      </header>
-      <div class="export-share-body">
-        <label>范围</label>
-        <div class="export-share-chips">
-          <button type="button" class="export-share-chip active" data-export-scope="selection">当前选中</button>
-          <button type="button" class="export-share-chip" data-export-scope="canvas">整板</button>
-        </div>
-        <label>方式</label>
-        <div class="export-share-chips">
-          <button type="button" class="export-share-chip active" data-export-format="share-zip">分享包 ZIP<em>含说明+提示词</em></button>
-          <button type="button" class="export-share-chip" data-export-format="media-zip">仅媒体 ZIP</button>
-          <button type="button" class="export-share-chip" data-export-format="media-folder">仅媒体到文件夹</button>
-          <button type="button" class="export-share-chip" data-export-format="snapshot">画布快照 PNG</button>
-        </div>
-        <p id="exportShareSummary" class="export-share-summary">选择范围后显示可导出数量</p>
-        <div class="export-share-actions">
-          <button id="exportShareConfirm" type="button" class="primary"><i class="fa-solid fa-share-nodes"></i> 开始导出</button>
-        </div>
-      </div>
-      <p id="exportShareStatus" class="export-share-status">分享包不含 API 密钥</p>
-    </div>
-  </section>
-
-  <section id="spendModal" class="spend-modal hidden" aria-hidden="true" aria-label="花费管理">
-    <div class="spend-shell" role="dialog" aria-modal="true" aria-labelledby="spendTitle">
-      <header class="spend-head">
-        <div>
-          <strong id="spendTitle">花费管理</strong>
-          <span>看看钱花在哪，给每天和每个项目设个上限</span>
-        </div>
-        <button id="closeSpend" type="button" title="关闭" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
-      </header>
-      <div id="spendBody" class="spend-body"></div>
-      <footer class="spend-foot">
-        <p id="spendFootNote"></p>
-        <div>
-          <button id="spendClear" type="button" class="ghost-btn"><i class="fa-solid fa-trash-can"></i> 清空记录</button>
-          <button id="spendExportCsv" type="button" class="primary"><i class="fa-solid fa-file-csv"></i> 导出表格</button>
-        </div>
-      </footer>
-    </div>
-  </section>
-
   <div id="balancePopover" class="balance-popover hidden" aria-label="余额显示"></div>
   <div id="toast" class="toast-stack"></div>
   <!-- Core modules: defer keeps order while unblocking HTML parse. Heavy vendors load on demand. -->
-  <script defer src="./runtime/api-defaults.js"></script>
   <script defer src="./runtime/renderer-bootstrap.js"></script>
   <script defer src="./runtime/vendor-loader.js"></script>
   <script defer src="./runtime/performance-mode.js"></script>
   <script defer src="./runtime/e2e-smoke.js"></script>
-  <script defer src="./media/local-edit-core.js"></script>
-  <script defer src="./media/local-edit.js"></script>
-  <script defer src="./generation/prompt-assist-core.js"></script>
-  <script defer src="./generation/prompt-assist.js"></script>
-  <script defer src="./generation/batch-variants-core.js"></script>
-  <script defer src="./generation/batch-variants.js"></script>
   <script defer src="./media/image-editors.js"></script>
   <script defer src="./media/dimensions.js"></script>
   <script defer src="./models/capabilities.js"></script>
@@ -1375,25 +1141,18 @@
   <script defer src="./generation/variant-manager.js"></script>
   <script defer src="./delivery/provenance.js"></script>
   <script defer src="./generation/variant-workbench.js"></script>
-  <script defer src="./providers/model-availability.js"></script>
+  <script defer src="./providers/key-pool.js"></script>
   <script defer src="./providers/provider-api.js"></script>
   <script defer src="./providers/provider-ui.js"></script>
   <link rel="stylesheet" href="./generation/image-request-policy.css">
   <script defer src="./generation/image-request-policy.js"></script>
-  <script defer src="./stability/auto-retry-core.js"></script>
   <script defer src="./generation/generation-queue.js"></script>
-  <script defer src="./media/short-workbench.js"></script>
   <script defer src="./support/support-ui.js"></script>
+  <script defer src="./licensing/license-ui.js"></script>
   <script defer src="./app/domain-registry.js"></script>
-  <script defer src="./app/command-palette.js"></script>
-  <script defer src="./app/director-desk.js"></script>
   <script defer src="./ai-client.js"></script>
-  <script defer src="./short-batch-coordinator.js"></script>
   <script defer src="./ai/context.js"></script>
   <script defer src="./assistant/attachments.js"></script>
-  <script defer src="./agent/rule-defaults.js"></script>
-  <script defer src="./agent/codex-state.js"></script>
-  <script defer src="./agent/agent-ui.js"></script>
   <script defer src="./assistant/canvas-executor.js"></script>
   <script defer src="./assistant/topics.js"></script>
   <script defer src="./assistant/dialog-runtime.js"></script>
@@ -1403,44 +1162,18 @@
   <script defer src="./project/store.js"></script>
   <script defer src="./history/history.js"></script>
   <script defer src="./diagnostics/renderer-diagnostics.js"></script>
+  <script defer src="./providers/provider-conformance.js"></script>
   <script defer src="./cleanup/cleanup-rendering.js"></script>
+  <script defer src="./update/update-rendering.js"></script>
   <script defer src="./export/batch-export-payload.js"></script>
-  <script defer src="./export/share-package-core.js"></script>
-  <script defer src="./export/share-export-ui.js"></script>
-  <script defer src="./spend/spend-history-core.js"></script>
-  <script defer src="./spend/spend-panel-ui.js"></script>
   <script defer src="./canvas/core.js"></script>
   <script defer src="./canvas/edges.js"></script>
   <script defer src="./canvas/nodes.js"></script>
   <script defer src="./canvas/camera.js"></script>
-  <script defer src="./canvas/snapshot.js"></script>
   <script defer src="./canvas/runtime.js"></script>
-  <script defer src="./canvas/arrange.js"></script>
   <script defer src="./canvas/layout.js"></script>
   <script defer src="./canvas/minimap.js"></script>
   <script defer src="./canvas/events.js"></script>
-
-  <div id="templateGalleryModal" class="template-gallery-modal hidden" role="dialog" aria-modal="true" aria-labelledby="templateGalleryTitle" aria-hidden="true">
-    <div class="template-gallery-panel">
-      <header class="template-gallery-head">
-        <div>
-          <strong id="templateGalleryTitle">工作流模板</strong>
-          <span id="templateGallerySubtitle">点一下，整条节点链路放到画布</span>
-        </div>
-        <button id="closeTemplateGallery" class="icon-btn" type="button" title="关闭" aria-label="关闭模板库"><i class="fa-solid fa-xmark"></i></button>
-      </header>
-      <div class="template-gallery-tabs" id="templateGalleryTabs" role="tablist" aria-label="模板分类"></div>
-      <div id="templateGalleryGrid" class="template-gallery-grid"></div>
-      <footer class="template-gallery-foot">
-        <div class="template-gallery-save" id="templateGallerySaveBox" hidden>
-          <input id="templateGallerySaveName" maxlength="80" placeholder="给选中的节点起个模板名">
-          <button id="templateGallerySaveBtn" class="primary-btn" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存为模板</button>
-        </div>
-        <small id="templateGalleryHint">内置模板随软件携带；「我的模板」保存在软件目录的 templates 文件夹，拷贝软件即可带走。</small>
-      </footer>
-    </div>
-  </div>
-
   <script defer src="./workflows/workflow-library.js"></script>
   <script defer src="./ui/render-helpers.js"></script>
   <script defer src="./ui/color-themes.js"></script>
@@ -1449,12 +1182,10 @@
   <script defer src="./ui/balance-chip.js"></script>
   <script defer src="./ui/sound-feedback.js"></script>
   <script defer src="./media/media-utils.js"></script>
-  <script defer src="./media/media-refs.js"></script>
   <script defer src="./media/media-library-rendering.js"></script>
   <script defer src="./assets/smart-index.js"></script>
   <script defer src="./review/review-package.js"></script>
-  <script defer src="./media/lx-player-core.js"></script>
-  <script defer src="./media/workbench.js"></script>
+  <script defer src="./models/presets.js"></script>
   <script defer src="./models/model-rendering.js"></script>
   <script defer src="./templates/project-templates.js"></script>
   <script defer src="./app.js"></script>

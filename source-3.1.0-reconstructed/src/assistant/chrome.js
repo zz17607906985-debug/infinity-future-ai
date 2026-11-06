@@ -1,9 +1,6 @@
 (() => {
   'use strict';
 
-  const CODEX_INSTALL_URL = 'https://github.com/openai/codex';
-  const CODEX_MISSING_TEXT = '安装 Codex 以启用电脑自动化';
-
   /**
    * 灵枢万象 chrome: topics, profiles, skills, codex console / schedules.
    * Dialog thread generation lives in assistant/dialog-runtime.js.
@@ -25,6 +22,7 @@
     const resetDialogRun = deps.resetDialogRun;
     const globalProviderForKind = deps.globalProviderForKind;
     const providerApiKey = deps.providerApiKey;
+    const reportProviderKeyResult = deps.reportProviderKeyResult;
     const unique = deps.unique;
     const openModal = deps.openModal;
     const serialize = deps.serialize;
@@ -118,7 +116,7 @@ function renderAssistantChrome() {
     breadcrumb.innerHTML = `<i class="fa-solid fa-terminal"></i><strong>∞ 灵枢万象</strong><i class="fa-solid fa-chevron-right"></i><span>${esc(trail)}</span>`;
   }
   const chatProvider = globalProviderForKind('chat');
-  const globalChatModel = chatProvider?.chatModel || FutureAIApiDefaults.get('chatModel') || '';
+  const globalChatModel = chatProvider?.chatModel || $('chatModel')?.value || '';
   const chatModels = unique([globalChatModel, ...providerModelsForKind(chatProvider, 'chat'), ...modelsForKind(host.importedModels || [], 'chat')]).filter(Boolean);
   const selectedChatModel = chatModels.includes(profile?.model) && profile?.model === globalChatModel ? profile.model : globalChatModel;
   fillSelect($('assistantModelSelect'), chatModels, selectedChatModel);
@@ -130,7 +128,7 @@ function renderAssistantChrome() {
 function renderCodexDesktopContext() {
   const summary = agentProjectSummary();
   const provider = globalProviderForKind('chat');
-  const model = provider?.chatModel || FutureAIApiDefaults.get('chatModel') || '未选择';
+  const model = provider?.chatModel || $('chatModel')?.value || '未选择';
   const runtime = $('assistantRuntimeInfo');
   if (runtime) runtime.innerHTML = `
     <div><i class="fa-regular fa-folder"></i><span title="${esc(host.storageDir || '未选择工作目录')}">${esc(host.storageDir || '未选择工作目录')}</span></div>
@@ -185,13 +183,14 @@ function renderAgentConsole() {
   const codexPermissionLabel = ({readonly: '只读审查', project: '项目内开发', full: '完全开发'})[host.codexPermission] || '项目内开发';
   const codexOpen = host.codexExpanded;
   const codexActions = `
-    <button type="button" data-codex-action="check"><i class="fa-solid fa-circle-check"></i>重新检测</button>
-    <button type="button" data-codex-action="run" ${host.codexRunning || !host.codexCli?.ok ? 'disabled' : ''}><i class="fa-solid fa-play"></i>运行</button>
-    <button type="button" data-codex-action="stop" ${host.codexRunning ? '' : 'disabled'}><i class="fa-solid fa-stop"></i>停止</button>
+    <button type="button" data-codex-action="check"><i class="fa-solid fa-circle-check"></i>检测</button>
+    ${host.appReleaseChannel === 'internal' ? `<button type="button" data-codex-action="choose"><i class="fa-solid fa-folder-open"></i>程序</button><button type="button" data-codex-action="update" ${host.codexUpdating || host.codexRunning ? 'disabled' : ''}><i class="fa-solid fa-rotate"></i>更新</button>` : ''}
+    <button type="button" data-codex-action="run" ${host.codexRunning || host.codexUpdating ? 'disabled' : ''}><i class="fa-solid fa-play"></i>运行</button>
+    <button type="button" data-codex-action="stop" ${host.codexRunning || host.codexUpdating ? '' : 'disabled'}><i class="fa-solid fa-stop"></i>停止</button>
     <button type="button" data-codex-action="toggle"><i class="fa-solid ${codexOpen ? 'fa-chevron-up' : 'fa-terminal'}"></i>${codexOpen ? '收起' : '控制台'}</button>`;
   const codexPanel = codexOpen ? `
     <div class="codex-console is-open">
-      <div class="codex-command-line">程序：${host.codexCli?.ok ? `${esc(host.codexCli.path)}（${esc(host.codexCli.version)}）` : `${CODEX_MISSING_TEXT}：<a href="${CODEX_INSTALL_URL}" target="_blank" rel="noreferrer">${CODEX_INSTALL_URL}</a>`}</div>
+      <div class="codex-command-line">程序：${host.appReleaseChannel === 'stable' ? '软件内置 Codex' : (host.codexCommand ? esc(host.codexCommand) : '使用手动选择的 Codex；未选择时优先使用软件内置 Codex')}</div>
       <div class="codex-api-line">联网/API：安装后可联网调用；运行时自动使用设置里的文本 API、密钥和聊天模型。</div>
       <label class="codex-permission-line"><span>开发权限</span><select id="codexPermissionSelect">${permissionOptions}</select></label>
       <textarea id="codexPromptInput" class="codex-prompt" placeholder="把要交给本地 Codex 的任务写在这里。">${esc(host.codexPromptDraft)}</textarea>
@@ -251,7 +250,7 @@ function installCodexOutputHandler() {
       }
       return;
     }
-    if (!host.codexSessionId && host.codexRunning && payload.sessionId) host.codexSessionId = payload.sessionId;
+    if (!host.codexSessionId && (host.codexRunning || host.codexUpdating) && payload.sessionId) host.codexSessionId = payload.sessionId;
     if (payload.sessionId !== host.codexSessionId) return;
     if (host.codexDialogRun && dialogRunIsActive(host.codexDialogRun) && payload.type === 'activity' && payload.text) {
       updateDialogRun(host.codexDialogRun, payload.text);
@@ -263,8 +262,10 @@ function installCodexOutputHandler() {
       host.codexDialogRun.error = `${host.codexDialogRun.error || ''}${payload.text}`.slice(-12000);
     }
     if (payload.type === 'close' || payload.type === 'error') {
+      const wasUpdating = host.codexUpdating;
       host.codexRunning = false;
-      host.codexStatus = payload.type === 'error' ? '运行失败' : '任务结束';
+      host.codexUpdating = false;
+      host.codexStatus = payload.type === 'error' ? (wasUpdating ? '更新失败' : '运行失败') : (wasUpdating ? '更新完成' : '任务结束');
       if (host.codexDialogRun) {
         const run = host.codexDialogRun;
         const finalText = String(run.output || '').trim();
@@ -295,8 +296,57 @@ async function runCodexConsoleAction(action) {
     host.codexExpanded = true;
     host.codexPromptDraft = $('codexPromptInput')?.value || host.codexPromptDraft;
     host.codexPermission = $('codexPermissionSelect')?.value || host.codexPermission;
-    await refreshCodexCli({force: true});
-    toast(host.codexCli?.ok ? '本地 Codex 可用' : CODEX_MISSING_TEXT, host.codexCli?.ok ? 'success' : 'warn');
+    host.codexStatus = '检测中';
+    host.codexOutput = '正在检测本地 Codex...\n';
+    renderAgentConsole();
+    try {
+      const result = await window.codexBridge.check({ command: host.codexCommand });
+      host.codexStatus = result?.ok ? '可用' : '不可用';
+      host.codexOutput += result?.ok ? `检测成功：${result.output || 'Codex 已响应'}\n` : `检测失败：${result?.error || result?.output || '无法启动 Codex CLI'}\n`;
+      renderAgentConsole();
+      toast(result?.ok ? '本地 Codex 可用' : '本地 Codex 暂不可用', result?.ok ? 'success' : 'warn');
+    } catch (err) {
+      host.codexStatus = '不可用';
+      host.codexOutput += `检测失败：${err.message || err}\n`;
+      renderAgentConsole();
+    }
+    return;
+  }
+  if (action === 'choose') {
+    host.codexExpanded = true;
+    host.codexPromptDraft = $('codexPromptInput')?.value || host.codexPromptDraft;
+    host.codexPermission = $('codexPermissionSelect')?.value || host.codexPermission;
+    const picked = await window.codexBridge.chooseCommand?.();
+    if (picked) {
+      host.codexCommand = picked;
+      const settings = getStore(host.STORE.settings, {});
+      setStore(host.STORE.settings, { ...settings, codexCommand: host.codexCommand, codexPermission: host.codexPermission });
+      host.codexStatus = '已选择程序';
+      host.codexOutput = `已选择：${picked}\n请点击检测确认是否可用。\n`;
+      renderAgentConsole();
+    }
+    return;
+  }
+  if (action === 'update') {
+    host.codexExpanded = true;
+    host.codexPromptDraft = $('codexPromptInput')?.value || host.codexPromptDraft;
+    host.codexPermission = $('codexPermissionSelect')?.value || host.codexPermission;
+    host.codexOutput = '正在联网更新内置 Codex...\n';
+    host.codexStatus = '更新中';
+    host.codexUpdating = true;
+    renderAgentConsole();
+    try {
+      const result = await window.codexBridge.update?.({ command: host.codexCommand });
+      host.codexSessionId = result?.sessionId || '';
+      if (result?.backupFile) appendCodexOutput(`已备份旧版：${result.backupFile}\n`);
+      const settings = getStore(host.STORE.settings, {});
+      setStore(host.STORE.settings, { ...settings, codexLastAutoUpdateAt: Date.now() });
+    } catch (err) {
+      host.codexUpdating = false;
+      host.codexStatus = '更新失败';
+      host.codexOutput += `更新失败：${err.message || err}\n`;
+      renderAgentConsole();
+    }
     return;
   }
   if (action === 'run') {
@@ -305,7 +355,6 @@ async function runCodexConsoleAction(action) {
     host.codexPromptDraft = prompt;
     host.codexPermission = $('codexPermissionSelect')?.value || host.codexPermission;
     if (!prompt) return toast('请先输入任务', 'warn');
-    if (!host.codexCli?.ok) return toast(CODEX_MISSING_TEXT, 'warn');
     if (!host.storageDir) return toast('请先选择本地存储目录，Codex 会在该目录内工作', 'warn');
     host.codexOutput = `任务：${prompt}\n\n`;
     host.codexStatus = '运行中';
@@ -313,7 +362,7 @@ async function runCodexConsoleAction(action) {
     renderAgentConsole();
     try {
       const apiConfig = await codexApiConfig();
-      const result = await window.codexBridge.run({ prompt, storageDir: host.storageDir, permission: host.codexPermission, ...apiConfig });
+      const result = await window.codexBridge.run({ prompt, storageDir: host.storageDir, command: host.codexCommand, permission: host.codexPermission, ...apiConfig });
       host.codexSessionId = result?.sessionId || '';
     } catch (err) {
       host.codexRunning = false;
@@ -326,53 +375,47 @@ async function runCodexConsoleAction(action) {
   if (action === 'stop') {
     if (host.codexSessionId) await window.codexBridge.cancel(host.codexSessionId);
     host.codexRunning = false;
+    host.codexUpdating = false;
     host.codexStatus = '已停止';
     appendCodexOutput('\n已请求停止。\n');
     renderAgentConsole();
   }
 }
 
-// Codex is optional: without it, computer automation is off and everything else keeps working.
-// Detection lives in host.codexState (agent/codex-state.js); its subscribers re-render the UI.
-function codexCliSummary(cli = host.codexCli) {
-  if (!cli) return '检测中…';
-  if (cli.ok) return `已找到 Codex ${cli.version}${cli.overridden ? '（手动选择）' : ''}`;
-  return CODEX_MISSING_TEXT;
-}
-
-function syncCodexConsoleStatus(cli = host.codexCli) {
-  if (!cli) { host.codexStatus = '检测中'; return; }
-  host.codexStatus = cli.ok ? '可用' : '未安装';
-  host.codexOutput = cli.ok ? `Codex ${cli.version}：${cli.path}\n` : `${cli.error || CODEX_MISSING_TEXT}\n`;
-}
-
-async function refreshCodexCli({force = false} = {}) {
-  if (!host.codexState) return null;
-  host.codexStatus = '检测中';
-  const cli = await host.codexState.refresh({force});
-  syncCodexConsoleStatus(cli);
-  renderAgentConsole();
-  return cli;
-}
-
-async function chooseCodexCommand() {
-  if (!host.codexState) return null;
-  const picked = await host.codexState.choose();
-  if (!picked) return null;
-  if (!picked.ok) { toast(picked.error || '所选程序不是可用的 Codex CLI', 'error'); return picked; }
-  syncCodexConsoleStatus(picked);
-  renderAgentConsole();
-  toast(`已使用 Codex ${picked.version}`, 'success');
-  return picked;
+function scheduleCodexAutoUpdate() {
+  if (!window.codexBridge?.update) return;
+  const settings = getStore(host.STORE.settings, {});
+  const last = Number(settings.codexLastAutoUpdateAt || 0);
+  const oneDay = 24 * 60 * 60 * 1000;
+  if (Date.now() - last < oneDay) return;
+  setTimeout(async () => {
+    if (host.codexRunning || host.codexUpdating) return;
+    host.codexUpdating = true;
+    host.codexStatus = '自动更新中';
+    host.codexOutput = '正在联网自动更新内置 Codex...\n';
+    renderAgentConsole();
+    try {
+      const result = await window.codexBridge.update({ command: host.codexCommand });
+      host.codexSessionId = result?.sessionId || '';
+      setStore(host.STORE.settings, { ...getStore(host.STORE.settings, {}), codexLastAutoUpdateAt: Date.now() });
+    } catch (err) {
+      host.codexUpdating = false;
+      host.codexStatus = '自动更新失败';
+      host.codexOutput += `自动更新失败：${err.message || err}\n`;
+      setStore(host.STORE.settings, { ...getStore(host.STORE.settings, {}), codexLastAutoUpdateAt: Date.now() });
+      renderAgentConsole();
+    }
+  }, 12000);
 }
 
 async function codexApiConfig() {
   ensureApiProviders();
   const provider = globalProviderForKind('chat');
-  const baseUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '') || '';
-  const model = provider.chatModel || FutureAIApiDefaults.get('chatModel').trim() || '';
-  const apiKey = await providerApiKey(provider);
+  const baseUrl = provider.apiUrl || $('apiUrl')?.value.trim().replace(/\/$/, '') || '';
+  const model = provider.chatModel || $('chatModel')?.value.trim() || '';
+  const apiKey = await providerApiKey(provider, 'chat', model);
   if (!apiKey || !baseUrl) {
+    if (apiKey) reportProviderKeyResult?.(provider, 'chat', {releaseOnly: true});
     toast('Codex 未接到完整 API：请先在设置里保存文本 API 和密钥', 'warn');
   }
   const settings = getStore(host.STORE.settings, {});
@@ -434,7 +477,7 @@ async function runAgentConsoleAction(action) {
     const video = addNode('video', c.x - 80, c.y - 140, {
       title: 'Seedance 2 视频',
       prompt: '使用左侧 Seedance 2 镜头指令生成 5 秒测试镜头。',
-      model: FutureAIApiDefaults.get('videoModel') || 'seedance',
+      model: $('videoModel')?.value || 'seedance',
       duration: '5',
       size: '1280x720',
       tags: ['Seedance 2', '视频']
@@ -579,7 +622,7 @@ async function onAssistantWorkbenchClick(e) {
   }
   const addProfile = e.target.closest('[data-assistant-action="add-profile"]');
   if (addProfile) {
-    const next = AssistantTopics.newAssistantProfile({defaultModel: globalProviderForKind('chat')?.chatModel || FutureAIApiDefaults.get('chatModel') || ''});
+    const next = AssistantTopics.newAssistantProfile({defaultModel: globalProviderForKind('chat')?.chatModel || $('chatModel')?.value || ''});
     host.assistantProfiles = [next, ...host.assistantProfiles];
     host.assistantActiveId = next.id;
     saveProject();
@@ -762,7 +805,7 @@ function renderAssistantProfileSettings(profileId = host.assistantActiveId) {
       const current = profileFromSettingsModal();
       if (!current) return;
       current[field] = e.target.value;
-      if (field === 'model') FutureAIApiDefaults.set('chatModel', e.target.value);
+      if (field === 'model') $('chatModel').value = e.target.value;
       saveSettings();
       saveProject();
       renderAssistantChrome();
@@ -770,7 +813,7 @@ function renderAssistantProfileSettings(profileId = host.assistantActiveId) {
   }
   modal.dataset.profileId = profile.id;
   const imported = host.importedModels || [];
-  const chatModels = unique([profile.model, FutureAIApiDefaults.get('chatModel'), ...imported.filter(m => /gpt|chat|claude|gemini|qwen|deepseek|kimi/i.test(m)), ...imported]).filter(Boolean);
+  const chatModels = unique([profile.model, $('chatModel')?.value, ...imported.filter(m => /gpt|chat|claude|gemini|qwen|deepseek|kimi/i.test(m)), ...imported]).filter(Boolean);
   const skills = AssistantTopics.assistantSkills ? AssistantTopics.assistantSkills() : [];
   const enabledSkills = new Set(Array.isArray(profile.skills) ? profile.skills : []);
   const skillHtml = skills.length ? skills.map(skill => `
@@ -1193,10 +1236,6 @@ async function checkDueCodexSchedules() {
 
 async function runCodexSchedule(schedule, manual = false) {
   if (!window.codexBridge?.run) return toast('当前应用环境不支持本地 Codex', 'warn');
-  if (!host.codexCli?.ok) {
-    if (manual) toast(CODEX_MISSING_TEXT, 'warn');
-    return;
-  }
   if (!String(schedule?.prompt || '').trim()) return toast('请先填写已安排任务的内容', 'warn');
   if (!host.storageDir) return toast('请先在灵枢万象设置中选择工作目录', 'warn');
   schedule.lastStatus = '运行中';
@@ -1208,7 +1247,7 @@ async function runCodexSchedule(schedule, manual = false) {
   try {
     const apiConfig = await codexApiConfig();
     const prompt = `【已安排任务】\n${schedule.title}\n\n${buildCodexAssistantPrompt(schedule.prompt)}`;
-    const result = await window.codexBridge.run({prompt, storageDir: host.storageDir, permission: host.codexPermission === 'full' ? 'project' : host.codexPermission, scheduled: true, ...apiConfig});
+    const result = await window.codexBridge.run({prompt, storageDir: host.storageDir, command: host.codexCommand, permission: host.codexPermission === 'full' ? 'project' : host.codexPermission, scheduled: true, ...apiConfig});
     if (!result?.sessionId) throw new Error('Codex 没有返回任务会话');
     codexScheduleSessions.set(result.sessionId, {scheduleId: schedule.id, output: '', error: ''});
     if (manual) toast('已开始执行安排任务', 'success');
@@ -1242,10 +1281,11 @@ function openCodexSettings() {
       const providerId = $('codexSettingsProvider')?.value || provider.id;
   const selectedProvider = (host.apiProviders || []).find(item => item.id === providerId) || provider;
       const model = String($('codexSettingsModel')?.value || '').trim();
-      host.globalModelProviders.chat = selectedProvider.id;
+      globalModelProviders.chat = selectedProvider.id;
       selectedProvider.chatModel = model;
-      FutureAIApiDefaults.set('chatModel', model);
+      if ($('chatModel')) $('chatModel').value = model;
       host.codexPermission = $('codexSettingsPermission')?.value || 'project';
+      host.codexCommand = host.appReleaseChannel === 'stable' ? '' : String($('codexSettingsCommand')?.value || '').trim();
       const previous = getStore(host.STORE.settings, {});
       const enabledSkillIds = [...modal.querySelectorAll('[data-codex-shared-skill]:checked')].map(input => input.value);
       const enabledPluginIds = [...modal.querySelectorAll('[data-codex-shared-plugin]:checked')].map(input => input.value);
@@ -1258,7 +1298,8 @@ function openCodexSettings() {
     });
   }
   const fullPermissionOption = host.appReleaseChannel === 'internal' ? `<option value="full" ${host.codexPermission === 'full' ? 'selected' : ''}>完全开发</option>` : '';
-  modal.innerHTML = `<section class="codex-settings-card"><header><div><h2>灵枢万象设置</h2><p>管理灵枢万象的模型与执行环境，不改动画布和媒体设置。</p></div><button class="icon-btn" data-codex-settings-close type="button" title="关闭"><i class="fa-solid fa-xmark"></i></button></header><div class="codex-settings-body"><label>聊天供应商<select id="codexSettingsProvider">${providerOptionsForKind('chat', provider.id)}</select></label><label>调用模型<input id="codexSettingsModel" list="codexSettingsModelList" value="${esc(provider.chatModel || '')}" placeholder="选择或粘贴模型 ID"><datalist id="codexSettingsModelList">${models.map(model => `<option value="${esc(model)}"></option>`).join('')}</datalist></label><label>执行权限<select id="codexSettingsPermission"><option value="readonly" ${host.codexPermission === 'readonly' ? 'selected' : ''}>只读审查</option><option value="project" ${host.codexPermission === 'project' ? 'selected' : ''}>项目内开发</option>${fullPermissionOption}</select></label><div class="codex-settings-cli"><span>电脑自动化 (Codex)</span><em>${esc(codexCliSummary())}</em></div><section class="codex-runtime-card"><header><span><i class="fa-solid fa-laptop-code"></i></span><div><strong>本地执行环境</strong><small>任务只在你选择的目录中运行</small></div></header><div class="codex-settings-dir"><i class="fa-regular fa-folder-open"></i><span title="${esc(host.storageDir || '未选择工作目录')}">${esc(host.storageDir || '未选择工作目录')}</span><button class="ghost-btn" data-codex-settings-dir type="button"><i class="fa-solid fa-folder-tree"></i> 选择目录</button></div><div class="codex-runtime-options"><div class="codex-runtime-option"><div><strong>自动运行已安排任务</strong><small>到达时间后在此目录执行</small></div><label class="codex-switch"><input id="codexSettingsAutoRun" type="checkbox" ${getStore(host.STORE.settings, {}).codexScheduleAutoRun === false ? '' : 'checked'}><span></span></label></div><div class="codex-runtime-option"><div><strong>接入本机 Skill 与插件</strong><small>仅复用扩展，不覆盖当前 API 设置</small></div><label class="codex-switch"><input id="codexSettingsSharedExtensions" type="checkbox" ${getStore(host.STORE.settings, {}).codexSharedExtensions === false ? '' : 'checked'}><span></span></label></div></div></section><div class="codex-settings-api-state"><i class="fa-solid fa-key"></i><span>API 密钥由当前供应商保存和管理。</span><button class="ghost-btn" data-codex-settings-api type="button">管理 API</button></div></div><footer><button class="ghost-btn" data-codex-settings-close type="button">取消</button><button class="primary-btn" data-codex-settings-save type="button">保存</button></footer></section>`;
+  const commandSetting = host.appReleaseChannel === 'internal' ? `<label>Codex 执行命令<input id="codexSettingsCommand" value="${esc(host.codexCommand)}" placeholder="留空时使用内置 Codex"></label>` : '';
+  modal.innerHTML = `<section class="codex-settings-card"><header><div><h2>灵枢万象设置</h2><p>管理灵枢万象的模型与执行环境，不改动画布和媒体设置。</p></div><button class="icon-btn" data-codex-settings-close type="button" title="关闭"><i class="fa-solid fa-xmark"></i></button></header><div class="codex-settings-body"><label>聊天供应商<select id="codexSettingsProvider">${providerOptionsForKind('chat', provider.id)}</select></label><label>调用模型<input id="codexSettingsModel" list="codexSettingsModelList" value="${esc(provider.chatModel || '')}" placeholder="选择或粘贴模型 ID"><datalist id="codexSettingsModelList">${models.map(model => `<option value="${esc(model)}"></option>`).join('')}</datalist></label><label>执行权限<select id="codexSettingsPermission"><option value="readonly" ${host.codexPermission === 'readonly' ? 'selected' : ''}>只读审查</option><option value="project" ${host.codexPermission === 'project' ? 'selected' : ''}>项目内开发</option>${fullPermissionOption}</select></label>${commandSetting}<section class="codex-runtime-card"><header><span><i class="fa-solid fa-laptop-code"></i></span><div><strong>本地执行环境</strong><small>任务只在你选择的目录中运行</small></div></header><div class="codex-settings-dir"><i class="fa-regular fa-folder-open"></i><span title="${esc(host.storageDir || '未选择工作目录')}">${esc(host.storageDir || '未选择工作目录')}</span><button class="ghost-btn" data-codex-settings-dir type="button"><i class="fa-solid fa-folder-tree"></i> 选择目录</button></div><div class="codex-runtime-options"><div class="codex-runtime-option"><div><strong>自动运行已安排任务</strong><small>到达时间后在此目录执行</small></div><label class="codex-switch"><input id="codexSettingsAutoRun" type="checkbox" ${getStore(host.STORE.settings, {}).codexScheduleAutoRun === false ? '' : 'checked'}><span></span></label></div><div class="codex-runtime-option"><div><strong>接入本机 Skill 与插件</strong><small>仅复用扩展，不覆盖当前 API 设置</small></div><label class="codex-switch"><input id="codexSettingsSharedExtensions" type="checkbox" ${getStore(host.STORE.settings, {}).codexSharedExtensions === false ? '' : 'checked'}><span></span></label></div></div></section><div class="codex-settings-api-state"><i class="fa-solid fa-key"></i><span>API 密钥由当前供应商保存和管理。</span><button class="ghost-btn" data-codex-settings-api type="button">管理 API</button></div></div><footer><button class="ghost-btn" data-codex-settings-close type="button">取消</button><button class="primary-btn" data-codex-settings-save type="button">保存</button></footer></section>`;
   const apiState = modal.querySelector('.codex-settings-api-state');
   apiState?.insertAdjacentHTML('beforebegin', `<section class="codex-extension-manager"><header><div><strong>本机 Skill</strong><small>${sharedCodexSkills.length} 个可选，关闭后不会出现在技能库</small></div><em>${enabledSharedSkillIds.size} 已启用</em></header><div class="codex-extension-list">${sharedCodexSkills.map(skill => `<label><input data-codex-shared-skill type="checkbox" value="${esc(skill.id)}" ${enabledSharedSkillIds.has(skill.id) ? 'checked' : ''}><span><strong>${esc(skill.name)}</strong><small>${esc(skill.description || '本机 Skill')}</small></span></label>`).join('') || '<div class="codex-extension-empty">未发现本机 Skill</div>'}</div></section><section class="codex-extension-manager"><header><div><strong>本机插件</strong><small>关闭后不会写入 Codex 本次运行配置</small></div><em>${enabledSharedPluginIds.size} 已启用</em></header><div class="codex-extension-list">${sharedCodexPlugins.map(plugin => `<label><input data-codex-shared-plugin type="checkbox" value="${esc(plugin.id)}" ${enabledSharedPluginIds.has(plugin.id) ? 'checked' : ''}><span><strong>${esc(plugin.name || plugin.id)}</strong><small>${esc(plugin.id)}</small></span></label>`).join('') || '<div class="codex-extension-empty">未发现本机插件</div>'}</div></section>`);
 }
@@ -1314,8 +1355,7 @@ function loadActiveTopicDialogState(fallback = null) {
       codexFailureMessage,
       installCodexOutputHandler,
       runCodexConsoleAction,
-      refreshCodexCli,
-      chooseCodexCommand,
+      scheduleCodexAutoUpdate,
       codexApiConfig,
       agentProjectDiagnosisText,
       agentNextPlanText,

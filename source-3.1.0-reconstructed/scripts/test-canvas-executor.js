@@ -1,0 +1,17 @@
+const assert = require('assert');
+const executor = require('../src/assistant/canvas-executor');
+const plan = executor.buildProposal({text: '用当前角色做一个三镜头的 16:9 短片', selected: [{id: 'c1', type: 'character'}], imageModel: 'image-m', videoModel: 'video-m', providers: [{id: 'p1'}]});
+assert.equal(plan.shotCount, 3);
+assert.equal(plan.ratio, '16:9');
+assert.equal(plan.requests, 6);
+assert.equal(plan.previewNodes.length, 9);
+assert.equal(plan.hasPaidOperations, true);
+assert.ok(plan.actions.some(item => item.kind === 'group'));
+assert.ok(!plan.actions.some(item => /delete/i.test(item.kind)));
+const squareVideo = executor.buildProposal({text: '生成一个 1:1 视频', videoModel: 'video-m', providers: [{id: 'p1'}]});
+assert.equal(squareVideo.ratio, '1:1');
+assert.equal(squareVideo.actions.find(item => item.nodeType === 'video')?.data?.size, '1024x1024');
+const portraitVideo = executor.buildProposal({text: '生成一个 3:4 视频', videoModel: 'video-m', providers: [{id: 'p1'}]});
+assert.equal(portraitVideo.ratio, '3:4');
+assert.equal(portraitVideo.actions.find(item => item.nodeType === 'video')?.data?.size, '960x1280');
+console.log('Canvas executor tests passed.');

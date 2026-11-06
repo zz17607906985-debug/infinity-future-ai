@@ -22,12 +22,10 @@
     const ModelCapabilities = deps.ModelCapabilities || window.FutureAIModelCapabilities;
     const ReferenceRoles = deps.ReferenceRoles || window.FutureAIReferenceRoles;
     const VideoDirector = deps.VideoDirector || window.FutureAIVideoDirector;
-    const RenderHelpers = deps.UIRenderHelpers || window.FutureAIUIRenderHelpers;
     const authorizeGenerationBudget = deps.authorizeGenerationBudget;
     const completeGenerationBudget = deps.completeGenerationBudget;
     const VariantManager = deps.VariantManager || window.FutureAIVariantManager;
     const Provenance = deps.Provenance || window.FutureAIProvenance;
-    const ModelAvailability = deps.ModelAvailability || window.FutureAIModelAvailability;
     // Canvas/node collaborators used by runVideo (orchestration stays thin in this domain)
     const getNode = deps.getNode || (id => null);
     const hydrateNode = deps.hydrateNode;
@@ -38,6 +36,7 @@
     const ensureInputImageRefs = deps.ensureInputImageRefs;
   const currentProviderForNode = deps.currentProviderForNode;
   const providerApiKey = deps.providerApiKey;
+  const reportProviderKeyResult = deps.reportProviderKeyResult;
   const globalProviderForKind = deps.globalProviderForKind;
   const setGlobalModelValue = deps.setGlobalModelValue;
   const classifyModelKind = deps.classifyModelKind;
@@ -57,6 +56,7 @@
   const normalizeShortVideoTask = deps.normalizeShortVideoTask;
   const formatError = deps.formatError;
     const isSafetyError = deps.isSafetyError;
+    const softenPrompt = deps.softenPrompt;
     const nodes = { get: id => getNode(id) };
 
 function modelAgnosticGenerationPrefix(mode = 'image') {
@@ -99,97 +99,34 @@ function extractChatText(data) {
 }
 function apiErrorMessage(err, context = '') {
   const msg = err?.message || String(err || '未知错误');
-  const status = Number(err?.status || 0);
-  const prefix = context ? context + '：\n' : '';
-  const transient = (typeof window !== 'undefined' && window.FutureAICanvasAIClient?.transientApiErrorMessage)
-    ? window.FutureAICanvasAIClient.transientApiErrorMessage(err)
-    : '';
-  if (transient) return `${prefix}${msg}\n\n${transient}`;
-  if ([502, 503, 504].includes(status) || /\b502\b|\b503\b|\b504\b|bad gateway|service unavailable|gateway timeout/i.test(msg)) {
-    return `${prefix}${msg}\n\n中转站暂时不可用。已自动重试仍失败，请稍后重试，或在设置中切换其他 API / 模型。`;
-  }
-  if (status === 429 || /\b429\b|rate.?limit|too many requests|限流|配额/i.test(msg)) {
-    return `${prefix}${msg}\n\n请求过于频繁或额度受限。请稍后再试，或在设置中切换其他 API / 模型。`;
-  }
-  if (/请求超时|timeout|aborted|AbortError|econnreset|socket hang up|network|fetch failed/i.test(msg)) {
-    return `${prefix}${msg}\n\n建议：网络不稳定或中转站超时。可稍后重试；若持续失败，请切换 API / 模型。若 /models 能通但生成超时，也可能是该模型排队过久或不支持当前接口。`;
-  }
-  if (/Images API is not supported|image generation is not supported for this platform|images\/generations.*not supported/i.test(msg)) {
-    return `${prefix}${msg}\n\n该模型不走 OpenAI Images 接口。应用会改用聊天补全（/chat/completions）生成图片；若仍失败，请确认中转站已开通该 Gemini/香蕉 图像模型。`;
+  if (/请求超时|timeout|aborted|AbortError/i.test(msg)) {
+    return `${context ? context + '：\n' : ''}${msg}\n\n建议：确认聊天模型名是否真实可用；如果 /models 能通但生成超时，通常是该模型排队过久、服务商中转不稳定，或模型不支持 /chat/completions。`;
   }
   if (/model|not found|does not exist|unsupported|无效|不存在|不支持/i.test(msg)) {
-    return `${prefix}${msg}\n\n建议：点击“导入模型”，从列表里选择真实存在的聊天/图像模型。`;
+    return `${context ? context + '：\n' : ''}${msg}\n\n建议：点击“导入模型”，从列表里选择真实存在的聊天模型。`;
   }
   if (/401|403|unauthorized|forbidden|invalid.*key|api.?key|认证|密钥|权限/i.test(msg)) {
-    return `${prefix}${msg}\n\n建议：检查 API 密钥、额度和该模型权限。`;
+    return `${context ? context + '：\n' : ''}${msg}\n\n建议：检查 API 密钥、额度和该模型权限。`;
   }
-  return `${prefix}${msg}`;
+  return `${context ? context + '：\n' : ''}${msg}`;
 }
-async function chatCompletionTextRequest({apiUrl, apiKey, model, messages, temperature = .55, maxTokens = 1600, timeoutMs = API_TIMEOUTS.text, retries = 2, endpoint = '/chat/completions'}) {
-  try {
+async function chatCompletionTextRequest({apiUrl, apiKey, model, messages, temperature = .55, maxTokens = 1600, timeoutMs = API_TIMEOUTS.text, retries = 1, endpoint = '/chat/completions'}) {
   const {res} = await fetchApiWithBaseFallback(apiUrl, endpoint || '/chat/completions', {
     timeoutMs,
     retries,
-    retryUnsafe: true,
     method: 'POST',
     headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey},
     body: JSON.stringify({model, messages, temperature, max_tokens: maxTokens})
   });
   const data = await safeJson(res);
-  if (!res.ok) {
-    const err = createProviderApiError(data, res);
-    throw enrichTransientError(err);
-  }
+  if (!res.ok) throw new Error(data.error?.message || data.message || JSON.stringify(data));
   const text = extractChatText(data);
   if (!text) throw new Error('聊天模型没有返回文本内容');
   return cleanAiText(text);
-  } catch (err) {
-    throw enrichTransientError(err);
-  }
 }
 
 function isOpenAiImageGenerationModel(model = '') {
   return /^(?:gpt-image|dall-e)(?:[-_]|$)/i.test(String(model || '').trim());
-}
-/** Gemini / banana / chat-native image models that must use /chat/completions, not /images/generations. */
-function isChatImageGenerationModel(model = '') {
-  const value = String(model || '').trim();
-  if (!value) return false;
-  if (isOpenAiImageGenerationModel(value)) return false;
-  return /gemini[-_.]?\d.*image|gemini.*-image|nano[-_]?banana|banana[-_]?image|imagen[-_]?\d|gpt[-_]?4o[-_]?image|chatgpt[-_]?image|flux[-_]?chat|chat[-_]?image/i.test(value);
-}
-function imageRouteModelKey(model = '') {
-  return String(model || '').trim().toLowerCase();
-}
-function preferredImageGenerationRoute(provider, model = '') {
-  const key = imageRouteModelKey(model);
-  const remembered = provider?.imageGenerationRoutes?.[key];
-  if (remembered === 'chat' || remembered === 'images') return remembered;
-  if (provider?.type === 'chat-image') return 'chat';
-  if (isChatImageGenerationModel(model)) return 'chat';
-  return 'images';
-}
-function rememberImageGenerationRoute(provider, model = '', route = 'chat') {
-  if (!provider || !model) return;
-  const key = imageRouteModelKey(model);
-  if (!key) return;
-  if (!provider.imageGenerationRoutes || typeof provider.imageGenerationRoutes !== 'object') {
-    provider.imageGenerationRoutes = {};
-  }
-  if (provider.imageGenerationRoutes[key] === route) return;
-  provider.imageGenerationRoutes[key] = route;
-  try { saveSettings(); } catch (_err) { /* ignore */ }
-}
-function isImagesEndpointUnsupportedError(err) {
-  const message = String(err?.message || err || '');
-  const status = Number(err?.status || 0);
-  if (/Images API is not supported|image(?:s)? API is not supported|not supported for this platform|does not support (?:the )?images? api|images\/generations.+(?:not supported|unsupported)|unsupported.*(images?|generations)/i.test(message)) {
-    return true;
-  }
-  if ((status === 404 || status === 400 || status === 405) && /image|generations|platform|not supported|unsupported/i.test(message)) {
-    return true;
-  }
-  return false;
 }
 function applyKnownImageProtocol(provider, model = '') {
   if (!provider || provider.type !== 'chat-image' || !isOpenAiImageGenerationModel(model)) return false;
@@ -263,7 +200,7 @@ function imageModelCandidates(provider, selected = '', includeStandardFallbacks 
   const configured = [
     selected,
     provider?.imageModel,
-    FutureAIApiDefaults.get('imageModel')?.trim()
+    $('imageModel')?.value?.trim()
   ].map(model => effectiveImageModel(provider, model, resolution)).filter(Boolean);
   const available = providerImageModelIds(provider);
   if (available.length) {
@@ -323,21 +260,13 @@ function classifyImageProviderError(err) {
 }
 function createProviderApiError(data, response) {
   const detail = data?.error && typeof data.error === 'object' ? data.error : data || {};
-  let message = detail.message || data?.message || response?.statusText || JSON.stringify(data);
-  const status = Number(response?.status || data?.status || 0);
-  if (/Images API is not supported|not supported for this platform/i.test(String(message || ''))) {
-    message = `${message}（该图像模型应使用聊天补全 /chat/completions，而非 /images/generations）`;
-  } else if ([502, 503, 504, 429].includes(status)) {
-    message = `HTTP ${status} ${message || response?.statusText || ''}`.trim();
-  }
+  const message = detail.message || data?.message || response?.statusText || JSON.stringify(data);
   const error = new Error(String(message || '图片供应商请求失败'));
   error.code = String(detail.code || data?.code || '');
   error.param = String(detail.param || data?.param || '');
   error.type = String(detail.type || data?.type || '');
-  error.status = status;
-  const retryAfter = Number(response?.headers?.get?.('retry-after'));
-  if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterMs = retryAfter * 1000;
-  return enrichTransientError(error);
+  error.status = Number(response?.status || data?.status || 0);
+  return error;
 }
 function imageTaskAdapterConfig(provider = {}) {
   return {
@@ -385,15 +314,6 @@ function asyncImageUrlFromResponse(data, path = '') {
     throw error;
   }
   o.onTask?.({id: String(taskId), protocol: 'generic-image', queryEndpoint: config.queryEndpoint});
-  try {
-    return await pollAsyncImageTask(o, config, taskId);
-  } catch (err) {
-    // The task was already accepted (and possibly charged); never let an automatic retry resubmit it.
-    if (err && typeof err === 'object') { try { err.afterSubmit = true; } catch (_) {} }
-    throw err;
-  }
-}
-async function pollAsyncImageTask(o, config, taskId) {
   for (let attempt = 0; attempt < config.maxPollAttempts; attempt += 1) {
     await sleep(config.pollIntervalMs, o.signal);
     const queryPath = config.queryEndpoint.includes('{id}')
@@ -422,44 +342,19 @@ async function rawImageGenerationWithModel(o, model, requestSize) {
   if (o.provider?.imageTaskMode === 'async' || type === 'dashscope-wanx' || type === 'volcengine-ark') {
     return await requestAsyncImageTask(request);
   }
+  if (type === 'chat-image') return await chatImageGenerateRequest(request);
   if (type === 'custom-sync') return await customSyncImageRequest(request);
-  const route = preferredImageGenerationRoute(o.provider, model);
-  if (type === 'chat-image' || route === 'chat') {
-    const url = await chatImageGenerateRequest(request);
-    rememberImageGenerationRoute(o.provider, model, 'chat');
-    return url;
-  }
-  const body = {model, prompt: o.prompt, n: 1, ...imageRequestDimensionFields(o.provider, requestSize), ...imageRequestSeedFields({...o, model})};
+   const body = {model, prompt: o.prompt, n: 1, ...imageRequestDimensionFields(o.provider, requestSize), ...imageRequestSeedFields({...o, model}), ...imageBackgroundFields(o, model)};
   if (o.quality && o.quality !== 'auto') body.quality = o.quality;
   const endpoint = o.provider?.imageEndpoint || o.provider?.endpoint || '/images/generations';
-  try {
-    const {res} = await fetchApiWithBaseFallback(o.apiUrl, endpoint, {timeoutMs: API_TIMEOUTS.image, signal: o.signal, method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + o.apiKey}, body: JSON.stringify(body), retries: 2, retryUnsafe: true});
-    const data = await safeJson(res);
-    if (!res.ok) throw createProviderApiError(data, res);
-    rememberImageGenerationRoute(o.provider, model, 'images');
-    return extractImageUrl(data, o.provider?.responsePath);
-  } catch (err) {
-    if (!isImagesEndpointUnsupportedError(err) && !isUnsupportedImageModelError(err)) throw err;
-    // Gemini / banana and some relays reject /images/generations — fall back once to chat completions.
-    const url = await chatImageGenerateRequest(request);
-    rememberImageGenerationRoute(o.provider, model, 'chat');
-    return url;
-  }
+  const {res} = await fetchApiWithBaseFallback(o.apiUrl, endpoint, {timeoutMs: API_TIMEOUTS.image, signal: o.signal, method: 'POST', headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + o.apiKey}, body: JSON.stringify(body)});
+  const data = await safeJson(res);
+  if (!res.ok) throw createProviderApiError(data, res);
+  return extractImageUrl(data, o.provider?.responsePath);
 }
 async function rawImageEditRequest(o) {
   const type = o.provider?.type || 'openai-images';
-  const hasMask = Boolean(o.maskUrl);
-  if (type === 'custom-sync') {
-    if (hasMask) throw new Error('当前自定义同步接口未声明遮罩编辑支持。请换用 OpenAI Images，或去掉遮罩后重试。');
-    return await customSyncImageRequest(o);
-  }
-  const route = preferredImageGenerationRoute(o.provider, o.model);
-  if (type === 'chat-image' || route === 'chat' || isChatImageGenerationModel(o.model)) {
-    if (hasMask) throw new Error('当前模型不支持：对话出图线路无法提交遮罩（选区重绘 / 扩图）。请换用支持 /images/edits 的图片模型。');
-    const url = await chatImageGenerateRequest(o);
-    rememberImageGenerationRoute(o.provider, o.model, 'chat');
-    return url;
-  }
+  if (type === 'custom-sync') return await customSyncImageRequest(o);
   if (type !== 'openai-images') {
     throw new Error(`${providerTypeLabel(type)} 当前配置不支持直接图生图。可改用 OpenAI Images、ComfyUI，或配置一个支持 refs 的自定义同步接口。`);
   }
@@ -472,30 +367,53 @@ async function rawImageEditRequest(o) {
   Object.entries(dimensions).forEach(([key, value]) => fd.append(key, String(value)));
   Object.entries(imageRequestSeedFields(o)).forEach(([key, value]) => fd.append(key, String(value)));
   if (o.quality && o.quality !== 'auto') fd.append('quality', o.quality);
+   Object.entries(imageBackgroundFields(o, o.model)).forEach(([key, value]) => fd.append(key, value));
   for (let i = 0; i < o.refUrls.length; i++) {
     fd.append(fieldName, await mediaUrlToBlob(o.refUrls[i]), `reference_${i + 1}.png`);
   }
-  if (hasMask) {
-    fd.append('mask', await mediaUrlToBlob(o.maskUrl), 'mask.png');
-  }
   const endpoint = o.provider?.editEndpoint || '/images/edits';
-  try {
-    const {res} = await fetchApiWithBaseFallback(o.apiUrl, endpoint, {timeoutMs: API_TIMEOUTS.image, signal: o.signal, method: 'POST', headers: {Authorization: 'Bearer ' + o.apiKey}, body: fd, retries: 2, retryUnsafe: true});
-    const data = await safeJson(res);
-    if (!res.ok) throw createProviderApiError(data, res);
-    rememberImageGenerationRoute(o.provider, o.model, 'images');
-    return extractImageUrl(data, o.provider?.responsePath);
-  } catch (err) {
-    if (hasMask) throw err; // never silently drop the mask via chat fallback
-    if (!isImagesEndpointUnsupportedError(err) && !isUnsupportedImageModelError(err)) throw err;
-    const url = await chatImageGenerateRequest(o);
-    rememberImageGenerationRoute(o.provider, o.model, 'chat');
-    return url;
+  const {res} = await fetchApiWithBaseFallback(o.apiUrl, endpoint, {timeoutMs: API_TIMEOUTS.image, signal: o.signal, method: 'POST', headers: {Authorization: 'Bearer ' + o.apiKey}, body: fd});
+  const data = await safeJson(res);
+  if (!res.ok) throw createProviderApiError(data, res);
+  return extractImageUrl(data, o.provider?.responsePath);
+}
+function imageBackgroundFields(o, model) {
+  const transparent = o.backgroundMode === 'transparent';
+  const supportsBackground = (o.provider?.type || 'openai-images') === 'openai-images'
+    && /^gpt-image-(?:1(?:\.5|-mini)?|2(?:-2026-04-21)?|2\.5(?:-(?:sunburst|flare)(?:-2026-09-08)?)?)$/i.test(String(model || ''));
+  if (transparent && !supportsBackground) {
+    throw new Error('当前图片模型或供应商未确认支持透明背景，请选择 GPT Image 的 OpenAI Images 兼容接口');
   }
+  if (!supportsBackground) return {};
+  return {background: transparent ? 'transparent' : 'opaque', output_format: 'png'};
+}
+async function imageGenerateBatchRequest(o) {
+  if ((o.provider?.type || 'openai-images') !== 'openai-images' || !Number.isInteger(o.count) || o.count < 2 || o.count > 4) {
+    throw new Error('当前接口不支持单次多图请求');
+  }
+  const model = normalizeKnownImageModelAlias(o.model, o.provider);
+  const body = {
+    model, prompt: o.prompt, n: o.count,
+    ...imageRequestDimensionFields(o.provider, o.size),
+    ...imageBackgroundFields(o, model)
+  };
+  if (o.quality && o.quality !== 'auto') body.quality = o.quality;
+  const endpoint = o.provider?.imageEndpoint || o.provider?.endpoint || '/images/generations';
+  const {res} = await fetchApiWithBaseFallback(o.apiUrl, endpoint, {
+    timeoutMs: API_TIMEOUTS.image, method: 'POST',
+    headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + o.apiKey},
+    body: JSON.stringify(body)
+  });
+  const data = await safeJson(res);
+  if (!res.ok) throw createProviderApiError(data, res);
+  const images = Array.isArray(data.data) ? data.data : Array.isArray(data.images) ? data.images : [];
+  if (images.length !== o.count) throw new Error(`接口返回 ${images.length} 张图片，预期 ${o.count} 张；不会重复提交以避免重复扣费`);
+  return images.map(item => ({url: extractImageUrl(item), model}));
 }
 async function requestImageGenerationWithModel(o, model) {
-  assertImageProviderCapability(o.provider);
+  assertImageProviderCapability(o.provider, o.apiKey);
   const requestModel = normalizeKnownImageModelAlias(model, o.provider);
+  if (o.backgroundMode === 'transparent') imageBackgroundFields(o, requestModel);
   saveKnownImageProtocolCorrection(o.provider, requestModel);
   const requestSizes = providerImageRequestSizes(o.size || '1024x1024', o.provider, requestModel);
   let lastError = null;
@@ -514,13 +432,13 @@ async function requestImageGenerationWithModel(o, model) {
     throw lastError || new Error('供应商未返回可用图片');
   } catch (err) {
     if (isImageGenerationDisabledError(err)) {
-      markImageProviderCapability(o.provider, 'blocked', '当前密钥所属账户组未启用图片生成。');
-      throw imageCapabilityError(o.provider);
+      markImageProviderCapability(o.provider, 'blocked', '当前密钥所属账户组未启用图片生成。', o.apiKey);
+      throw imageCapabilityError(o.provider, o.apiKey);
     }
     throw err;
   }
 }
-async function imageGenerateOnProvider(o) {
+async function imageGenerateRequest(o) {
   if (o.allowModelFallback !== true && String(o.model || '').trim()) {
     return await requestImageGenerationWithModel(o, o.model);
   }
@@ -555,6 +473,7 @@ async function imageGenerateOnProvider(o) {
 }
 async function requestImageEditWithModel(o, model) {
   const requestModel = normalizeKnownImageModelAlias(model, o.provider);
+  if (o.backgroundMode === 'transparent') imageBackgroundFields(o, requestModel);
   saveKnownImageProtocolCorrection(o.provider, requestModel);
   const requestSizes = providerImageRequestSizes(o.size || '1024x1024', o.provider, requestModel);
   let lastError = null;
@@ -572,7 +491,7 @@ async function requestImageEditWithModel(o, model) {
   throw lastError || new Error('供应商未返回可用图片');
 }
 async function imageEditRequest(o) {
-  assertImageProviderCapability(o.provider);
+  assertImageProviderCapability(o.provider, o.apiKey);
   if (o.allowModelFallback !== true && String(o.model || '').trim()) {
     return await requestImageEditWithModel(o, o.model);
   }
@@ -606,55 +525,19 @@ async function imageEditRequest(o) {
     throw new Error(`当前图片供应商没有可用于图生图的模型。\n已自动尝试：${attempted}\n${detail}`);
   } catch (err) {
     if (isImageGenerationDisabledError(err)) {
-      markImageProviderCapability(o.provider, 'blocked', '当前密钥所属账户组未启用图片生成。');
-      throw imageCapabilityError(o.provider);
+      markImageProviderCapability(o.provider, 'blocked', '当前密钥所属账户组未启用图片生成。', o.apiKey);
+      throw imageCapabilityError(o.provider, o.apiKey);
     }
     throw err;
   }
-}
-function imageModelsForProvider(provider) {
-  return unique([provider?.imageModel, ...providerImageModelIds(provider)].filter(Boolean));
-}
-// When the chosen provider+model is unavailable (404 / 503 / "not supported"), try the next
-// configured image route in the user's fallback order and report which model produced the image.
-async function withImageProviderFallback(o, run) {
-  try {
-    return await run(o);
-  } catch (err) {
-    if (o.signal?.aborted || !ModelAvailability.fallbackEnabled(host.imageFallback) || !ModelAvailability.isModelUnavailableError(err)) throw err;
-    const failed = ModelAvailability.routeKey(o.provider?.id, o.model);
-    const routes = ModelAvailability.imageFallbackRoutes(host.apiProviders || [], host.imageFallback, imageModelsForProvider, host.globalModelProviders?.image || '', failed);
-    for (const route of routes) {
-      if (o.signal?.aborted) break;
-      const provider = host.apiProviders.find(item => item.id === route.providerId);
-      const apiUrl = String(provider?.apiUrl || '').trim().replace(/\/$/, '');
-      const apiKey = await providerApiKey(provider);
-      if (!apiUrl || !apiKey) continue;
-      o.onStatus?.(`图片模型不可用，正在改用 ${route.providerName} · ${route.model}...`);
-      try {
-        const result = await run({...o, provider, apiUrl, apiKey, model: route.model, allowModelFallback: false});
-        const note = ModelAvailability.fallbackNote(route);
-        toast?.(note, 'info');
-        return {...result, model: result.model || route.model, fallback: {providerId: provider.id, providerName: route.providerName, model: route.model, note}};
-      } catch (next) {
-        if (o.signal?.aborted) throw next;
-      }
-    }
-    throw err;
-  }
-}
-function imageGenerateRequest(o) {
-  return withImageProviderFallback(o, imageGenerateOnProvider);
-}
-function imageEditWithFallback(o) {
-  return withImageProviderFallback(o, imageEditOnProvider);
 }
 async function referenceGuidedImageFallback(o) {
   const chatProvider = globalProviderForKind('chat');
-  const chatApiUrl = chatProvider?.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '') || '';
-  const chatApiKey = await providerApiKey(chatProvider);
-  const chatModel = String(chatProvider?.chatModel || FutureAIApiDefaults.get('chatModel') || '').trim();
+  const chatApiUrl = chatProvider?.apiUrl || $('apiUrl')?.value.trim().replace(/\/$/, '') || '';
+  const chatApiKey = await providerApiKey(chatProvider, 'chat');
+  const chatModel = String(chatProvider?.chatModel || $('chatModel')?.value || '').trim();
   if (!chatApiUrl || !chatApiKey || !chatModel) {
+    if (chatApiKey) reportProviderKeyResult?.(chatProvider, 'chat', {releaseOnly: true}, chatApiKey);
     throw new Error('图生图接口超时，且未配置可用的视觉聊天模型用于参考图兼容生成。');
   }
   let referenceProfile = String(o.referenceProfile || '').trim();
@@ -671,10 +554,10 @@ async function referenceGuidedImageFallback(o) {
   }
   o.onStatus?.('参考特征兼容生成中，将保留角色外观、服装、构图和风格约束...');
   const prompt = `${o.prompt}\n\n参考图特征约束（自动提取，必须遵守）：\n${referenceProfile}`;
-  const result = await imageGenerateOnProvider({...o, prompt, refUrls: []});
+  const result = await imageGenerateRequest({...o, prompt, refUrls: []});
   return {...result, referenceProfile};
 }
-async function imageEditOnProvider(o) {
+async function imageEditWithFallback(o) {
   if (o.allowReferenceFallback === false || o.refUrls.length <= 1) return await imageEditRequest(o);
   const attempts = [];
   try {
@@ -697,7 +580,7 @@ async function imageEditOnProvider(o) {
     const mergedRef = await composeReferenceBoard(o.refUrls);
     return await imageEditRequest({
       ...o,
-      prompt: referenceBoardPrompt(o.prompt, o.refUrls.length, Boolean(o.references?.length)),
+      prompt: referenceBoardPrompt(o.prompt, o.refUrls.length),
       refUrls: [mergedRef],
       imageFieldName: 'image'
     });
@@ -706,12 +589,8 @@ async function imageEditOnProvider(o) {
     throw new Error('多参考图全部兼容路径失败。\n' + attempts.join('\n'));
   }
 }
-// The board numbers its cells 1…N left-to-right, top-to-bottom, the same numbering as 图1…图N in the prompt.
-function referenceBoardPrompt(prompt, count, hasRoleGuide = false) {
-  const usage = hasRoleGuide
-    ? `格子按从左到右、从上到下依次为图1…图${Math.min(count, 6)}，各图用途以下方「参考图说明」为准。`
-    : '左上角/第一格是主体图，后续格子是参考图。保持主体图的人物身份、服装、脸部特征和核心构图，融合其他参考格的场景、光线、氛围或细节。';
-  return `请把随附的参考板作为${count}张参考图理解：${usage}不要把参考板边框、格子、编号文字画进最终图。\n\n${prompt}`;
+function referenceBoardPrompt(prompt, count) {
+  return `请把随附的参考板作为${count}张参考图理解：左上角/第一格是主体图，后续格子是参考图。保持主体图的人物身份、服装、脸部特征和核心构图，融合其他参考格的场景、光线、氛围或细节。不要把参考板边框、格子、标签文字画进最终图。\n\n${prompt}`;
 }
 function shortError(err) {
   return (err?.message || String(err || '')).replace(/\s+/g, ' ').slice(0, 220);
@@ -921,39 +800,11 @@ function imageRequestSeedFields(o = {}) {
   if (!Number.isFinite(seed)) return {};
   return {seed: Math.max(0, Math.floor(seed))};
 }
-function enrichTransientError(err) {
-  if (!err || err.userMessage) return err;
-  const hint = (typeof window !== 'undefined' && window.FutureAICanvasAIClient?.transientApiErrorMessage)
-    ? window.FutureAICanvasAIClient.transientApiErrorMessage(err)
-    : '';
-  if (hint) {
-    err.userMessage = hint;
-    if (err.message && !String(err.message).includes('切换其他 API')) {
-      err.message = `${err.message}\n\n${hint}`;
-    }
-  }
-  return err;
-}
 async function fetchApiWithBaseFallback(apiUrl, endpoint, options = {}) {
-  const method = String(options.method || 'GET').toUpperCase();
-  const requestOptions = {
-    ...options,
-    // Chat/image POSTs are retried on transient gateway errors (max ~3 attempts).
-    retries: options.retries != null ? options.retries : (method === 'GET' || method === 'HEAD' ? 1 : 2),
-    retryUnsafe: options.retryUnsafe != null ? options.retryUnsafe : (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS')
-  };
   const urls = apiRequestCandidates(apiUrl, endpoint);
   let response = null;
-  let lastError = null;
   for (let index = 0; index < urls.length; index += 1) {
-    try {
-      response = await fetchJsonWithRetry(urls[index], requestOptions);
-      lastError = null;
-    } catch (err) {
-      lastError = err;
-      if (index === urls.length - 1) throw enrichTransientError(err);
-      continue;
-    }
+    response = await fetchJsonWithRetry(urls[index], options);
     if (response.status === 404 && typeof response.clone === 'function') {
       const payload = await response.clone().json().catch(() => null);
       const detail = [payload?.error?.code, payload?.error?.param, payload?.error?.message, payload?.message].filter(Boolean).join(' ');
@@ -967,68 +818,26 @@ async function fetchApiWithBaseFallback(apiUrl, endpoint, options = {}) {
   }
   return {res: response, requestUrl: urls[0], usedV1Fallback: false};
 }
-function chatImageSizeHint(size = '') {
-  const target = String(size || '').trim();
-  if (!target) return '';
-  try {
-    const parsed = validateGeneratedImageTargetSize(target);
-    const aspect = sizeToAspect(parsed.size);
-    return `请按约 ${parsed.size}（宽高比 ${aspect}）生成一张图片。`;
-  } catch (_err) {
-    return target ? `请按画幅 ${target} 生成一张图片。` : '';
-  }
-}
-function buildChatImageUserContent(o = {}) {
-  const parts = [];
-  const sizeHint = chatImageSizeHint(o.size);
-  const text = [String(o.prompt || '').trim(), sizeHint].filter(Boolean).join('\n');
-  if (text) parts.push({type: 'text', text});
-  const refs = Array.isArray(o.refUrls) ? o.refUrls.filter(Boolean) : [];
-  for (const url of refs.slice(0, 8)) {
-    parts.push({type: 'image_url', image_url: {url: String(url)}});
-  }
-  if (parts.length === 1 && parts[0].type === 'text') return parts[0].text;
-  if (!parts.length) return String(o.prompt || '');
-  return parts;
-}
 async function chatImageGenerateRequest(o) {
   const dimensions = imageRequestDimensionFields(o.provider, o.size || '1024x1024');
-  const endpoint = o.provider?.chatEndpoint || (o.provider?.type === 'chat-image' ? (o.provider?.imageEndpoint || '/chat/completions') : '/chat/completions');
-  const userContent = buildChatImageUserContent(o);
-  const body = {
-    model: o.model,
-    messages: [
-      {
-        role: 'system',
-        content: '你是图像生成模型。根据用户描述生成一张图片，并在回复中直接返回图片（markdown 图片、data URL、或内联 image / inline_data）。不要只描述图片。'
-      },
-      {role: 'user', content: userContent}
-    ],
-    ...dimensions,
-    ...imageRequestSeedFields(o),
-    ...(o.quality && o.quality !== 'auto' ? {quality: o.quality} : {})
-  };
-  // Some relays accept image size via nested extra_body / generationConfig.
-  if (dimensions.size) {
-    body.extra_body = {...(body.extra_body || {}), size: dimensions.size, aspect_ratio: sizeToAspect(dimensions.size)};
-  }
-  const {res} = await fetchApiWithBaseFallback(o.apiUrl, endpoint, {
+  const {res} = await fetchApiWithBaseFallback(o.apiUrl, o.provider?.imageEndpoint || o.provider?.chatEndpoint || o.provider?.endpoint || '/chat/completions', {
     timeoutMs: API_TIMEOUTS.image,
     signal: o.signal,
     method: 'POST',
     headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + o.apiKey},
-    body: JSON.stringify(body),
-    retries: 2,
-    retryUnsafe: true
+    body: JSON.stringify({
+      model: o.model,
+      messages: [
+        {role: 'system', content: 'Generate one image for the user prompt and return an image URL or base64 image in the response.'},
+        {role: 'user', content: o.prompt}
+      ],
+      ...dimensions,
+      ...(o.quality && o.quality !== 'auto' ? {quality: o.quality} : {})
+    })
   });
   const data = await safeJson(res);
   if (!res.ok) throw createProviderApiError(data, res);
   return extractImageUrl(data, o.provider?.responsePath);
-}
-// Structured roles for relays that read them; refs[i] and reference_roles[i] describe the same image.
-function customSyncReferenceRoles(references) {
-  if (!Array.isArray(references) || !references.length) return {};
-  return {reference_roles: references.map((item, index) => ({index, role: item.role || 'reference', strength: item.strength || 'medium'}))};
 }
 async function customSyncImageRequest(o) {
   const dimensions = imageRequestDimensionFields(o.provider, o.size || '1024x1024');
@@ -1046,8 +855,7 @@ async function customSyncImageRequest(o) {
       ...dimensions,
       ...imageRequestSeedFields(o),
       quality: o.quality || 'auto',
-      refs: o.refUrls || [],
-      ...customSyncReferenceRoles(o.references)
+      refs: o.refUrls || []
     })
   });
   const data = await safeJson(res);
@@ -1063,96 +871,45 @@ function valueAtPath(data, path) {
 }
 function imageUrlFromUnknown(value) {
   if (!value) return '';
-  if (typeof value === 'string') {
-    if (/^(?:https?:|data:image\/|blob:|file:)/i.test(value)) return value;
-    return imageUrlFromTextBlob(value);
-  }
+  if (typeof value === 'string') return value;
   if (typeof value === 'object') {
     if (value.url) return value.url;
     if (value.b64_json) return 'data:image/png;base64,' + value.b64_json;
-    const inline = imageUrlFromInlineData(value);
-    if (inline) return inline;
-    if (value.image_url) return typeof value.image_url === 'string' ? value.image_url : (value.image_url.url || '');
-    if (typeof value.text === 'string') {
-      const fromText = imageUrlFromTextBlob(value.text);
-      if (fromText) return fromText;
-    }
+    if (value.image_url) return typeof value.image_url === 'string' ? value.image_url : value.image_url.url;
+    if (value.content) return extractImageUrl(value);
   }
-  return '';
-}
-function imageUrlFromInlineData(value) {
-  if (!value || typeof value !== 'object') return '';
-  const inline = value.inline_data || value.inlineData || value;
-  const raw = inline.data || inline.b64_json || inline.base64;
-  if (!raw || typeof raw !== 'string') return '';
-  if (/^data:image\//i.test(raw)) return raw;
-  const mime = inline.mime_type || inline.mimeType || inline.mime || 'image/png';
-  return `data:${mime};base64,${raw.replace(/^data:[^,]*,/, '')}`;
-}
-function imageUrlFromTextBlob(text = '') {
-  const value = String(text || '');
-  if (!value) return '';
-  const md = value.match(/!\[[^\]]*\]\((data:image\/[^\s)]+|https?:\/\/[^\s)]+)\)/i);
-  if (md?.[1]) return md[1].replace(/[),.;]+$/, '');
-  const dataUrl = value.match(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/i)?.[0];
-  if (dataUrl) return dataUrl;
-  const url = value.match(/https?:\/\/\S+\.(?:png|jpe?g|webp|gif)(?:\?\S*)?/i)?.[0];
-  if (url) return url.replace(/[),.;]+$/, '');
   return '';
 }
 function extractImageUrl(data, responsePath = '') {
   const mapped = imageUrlFromUnknown(valueAtPath(data, responsePath));
-  if (mapped && usableGeneratedImageUrl(mapped)) return mapped;
-  const first = data?.data?.[0] || data;
-  if (first?.url && usableGeneratedImageUrl(first.url)) return first.url;
-  if (first?.b64_json) return 'data:image/png;base64,' + first.b64_json;
-  const inlineFirst = imageUrlFromInlineData(first);
-  if (inlineFirst) return inlineFirst;
-  const message = data?.choices?.[0]?.message || data?.message || {};
-  const messageImages = message.images || data?.images || [];
-  if (Array.isArray(messageImages)) {
-    for (const item of messageImages) {
-      const url = imageUrlFromUnknown(item) || imageUrlFromInlineData(item) || (typeof item === 'string' ? item : '');
-      if (url && usableGeneratedImageUrl(url)) return url;
-    }
-  }
-  const messageContent = message.content;
+  if (mapped) return mapped;
+  const first = data.data?.[0] || data;
+  if (first.url) return first.url;
+  if (first.b64_json) return 'data:image/png;base64,' + first.b64_json;
+  const messageContent = data.choices?.[0]?.message?.content;
   if (Array.isArray(messageContent)) {
     for (const part of messageContent) {
-      const url = imageUrlFromUnknown(part)
-        || imageUrlFromInlineData(part)
-        || imageUrlFromInlineData(part?.image)
-        || (typeof part?.text === 'string' ? imageUrlFromTextBlob(part.text) : '')
-        || (typeof part === 'string' ? imageUrlFromTextBlob(part) : '');
-      if (url && usableGeneratedImageUrl(url)) return url;
+      const url = imageUrlFromUnknown(part);
+      if (url) return url;
     }
   }
   if (typeof messageContent === 'string') {
-    const fromText = imageUrlFromTextBlob(messageContent);
-    if (fromText) return fromText;
+    const dataUrl = messageContent.match(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/i)?.[0];
+    if (dataUrl) return dataUrl;
+    const url = messageContent.match(/https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i)?.[0];
+    if (url) return url;
   }
-  const output = data?.output || data?.result || data?.images || data?.image;
-  if (Array.isArray(output)) {
-    for (const item of output) {
-      const url = imageUrlFromUnknown(item) || imageUrlFromInlineData(item);
-      if (url && usableGeneratedImageUrl(url)) return url;
-    }
-  } else {
-    const outputUrl = imageUrlFromUnknown(output) || imageUrlFromInlineData(output);
-    if (outputUrl && usableGeneratedImageUrl(outputUrl)) return outputUrl;
-  }
-  throw new Error('聊天图像接口未返回可用图片（支持 markdown / data URL / images[] / inline_data）。该模型可能需走 /chat/completions 而非 /images/generations。');
+  const output = data.output || data.result || data.images || data.image;
+  const outputUrl = Array.isArray(output) ? imageUrlFromUnknown(output[0]) : imageUrlFromUnknown(output);
+  if (outputUrl) return outputUrl;
+  throw new Error('接口未返回图片 URL 或 b64_json');
 }
-async function runVideo(id, visiting = new Set(), options = {}) {
-  // quiet: a rerun on a new node; its single result toast comes from the caller.
-  const say = (message, ...rest) => (options.quiet ? ((options.lastMessage = String(message || '')), false) : toast(message, ...rest));
+async function runVideo(id, visiting = new Set()) {
   const node = nodes.get(id);
   if (!node) return;
   const generationStartedAt = Date.now();
   const previousUrl = node.data.url || '';
   const previousUrls = Array.isArray(node.data.urls) ? [...node.data.urls] : (previousUrl ? [previousUrl] : []);
-  // Regenerating keeps the current output in the node's history (‹ › on the node).
-  VariantManager?.ensureCurrentOutput(node.data, 'video');
   const ownPrompt = (node.data.prompt || '').trim();
   const linkedPrompt = getInputPrompt(id);
   let prompt = ownPrompt || linkedPrompt;
@@ -1175,7 +932,7 @@ async function runVideo(id, visiting = new Set(), options = {}) {
   prompt += VideoDirector?.operationInstructions({operation, duration: node.data.duration, speed: node.data.speed, references: resolvedReferences}) || '';
   if (refs[0]) node.data.refUrl = refs[0];
   hydrateNode(node);
-  if (!prompt) { say('视频节点缺少提示词', 'warn'); return false; }
+  if (!prompt) { toast('视频节点缺少提示词', 'warn'); return false; }
   const directorValidation = VideoDirector?.validateRequest({
     operation,
     mode: node.data.mode,
@@ -1186,19 +943,21 @@ async function runVideo(id, visiting = new Set(), options = {}) {
   });
   if (directorValidation?.errors?.length) {
     updateVideoStatus(node, directorValidation.errors.map(item => item.message).join('\n'), 'error');
-    say(directorValidation.errors.map(item => item.message).join('\n'), 'warn');
+    toast(directorValidation.errors.map(item => item.message).join('\n'), 'warn');
     return false;
   }
   const provider = currentProviderForNode(node, 'video');
-  const apiUrl = provider.apiUrl || FutureAIApiDefaults.get('apiUrl').trim().replace(/\/$/, '');
-  const videoModel = node.data.model || provider.videoModel || FutureAIApiDefaults.get('videoModel') || 'omni-flash';
-  const apiKey = await providerApiKey(provider);
+  const apiUrl = provider.apiUrl || $('apiUrl').value.trim().replace(/\/$/, '');
+  const videoModel = node.data.model || provider.videoModel || $('videoModel').value || 'omni-flash';
+  const apiKey = await providerApiKey(provider, 'video', videoModel);
   if (!apiUrl || !apiKey) {
-    say('请先在设置里完善该视频节点选择的 API 配置和密钥', 'warn');
+    if (apiKey) reportProviderKeyResult?.(provider, 'video', {releaseOnly: true}, apiKey);
+    toast('请先在设置里完善该视频节点选择的 API 配置和密钥', 'warn');
     return false;
   }
   if (!videoModel) {
-    say('请先选择或填写视频模型', 'warn');
+    reportProviderKeyResult?.(provider, 'video', {releaseOnly: true}, apiKey);
+    toast('请先选择或填写视频模型', 'warn');
     return false;
   }
   const videoBudgetRequest = {
@@ -1225,7 +984,8 @@ async function runVideo(id, visiting = new Set(), options = {}) {
       warnings: capability.warnings.map(item => item.message)
     };
     if (capability.errors.length) {
-      say(capability.errors.map(item => item.message).join('\n'), 'warn');
+      reportProviderKeyResult?.(provider, 'video', {releaseOnly: true}, apiKey);
+      toast(capability.errors.map(item => item.message).join('\n'), 'warn');
       return false;
     }
   }
@@ -1234,14 +994,14 @@ async function runVideo(id, visiting = new Set(), options = {}) {
   try {
     budgetEntryId = await authorizeGenerationBudget?.({node, provider, model: videoModel, kind: 'video', request: videoBudgetRequest, profile: videoCapabilityProfile}) || '';
   } catch (error) {
-    say(error?.message || '已由预算保护停止，未发送 API 请求', 'warn');
+    reportProviderKeyResult?.(provider, 'video', {releaseOnly: true}, apiKey);
+    toast(error?.message || '已由预算保护停止，未发送 API 请求', 'warn');
     return false;
   }
   const btn = node.el.querySelector('[data-run="video"]');
-  const savedTask = node.data.videoTask && normalizeShortVideoTask(node.data.videoTask);
-  RenderHelpers?.setRunButtonBusy(btn, true);
   btn.disabled = true;
-  btn.title = savedTask ? '继续查询视频...' : `${VideoDirector?.operationDefinition(operation)?.label || '视频生成'}中...`;
+  const savedTask = node.data.videoTask && normalizeShortVideoTask(node.data.videoTask);
+  btn.innerHTML = savedTask ? '继续查询视频...' : `${VideoDirector?.operationDefinition(operation)?.label || '视频生成'}中...`;
   updateVideoStatus(node, '正在提交视频任务...', 'info');
   try {
     const refUrls = resolvedReferences.map(item => item.url).filter(Boolean);
@@ -1271,8 +1031,18 @@ async function runVideo(id, visiting = new Set(), options = {}) {
       ? await resumeShortVideoTask(request, savedTask)
       : await videoGenerateRequest(request);
     const url = await persistMediaUrl(generatedUrl, `generated_video_${Date.now()}`, 'mp4');
-    if (/^https?:/i.test(String(generatedUrl)) && url !== generatedUrl) node.data.sourceUrl = String(generatedUrl);
     node.data.prompt = ownPrompt || node.data.prompt;
+    if (previousUrl && previousUrl !== url && VideoDirector?.isVersionedOperation(operation)) {
+      const versions = Array.isArray(node.data.videoVersions) ? node.data.videoVersions.slice() : [];
+      if (!versions.some(item => item.url === previousUrl)) versions.push({
+        id: `video-version-${Date.now()}`,
+        url: previousUrl,
+        operation: node.data.lastOperation || 'source',
+        outputMetadata: node.data.outputMetadata || null,
+        preservedAt: Date.now()
+      });
+      node.data.videoVersions = versions.slice(-20);
+    }
     node.data.url = url;
     node.data.urls = [url];
     node.data.videoTask = null;
@@ -1321,10 +1091,13 @@ async function runVideo(id, visiting = new Set(), options = {}) {
     hydrateNode(node);
     addHistory({type: 'video', url, refUrl: refUrls[0] || '', references: resolvedReferences, prompt, model: videoModel, provider: provider.name, operation, size: request.size, outputMetadata: node.data.outputMetadata, duration: node.data.duration, time: Date.now()});
     saveProject();
-    say('视频生成完成', 'success');
+    toast('视频生成完成', 'success');
+    reportProviderKeyResult?.(provider, 'video', null, apiKey);
     completeGenerationBudget?.(budgetEntryId, {actualRequests: budgetActualRequests, status: 'completed', differenceReason: savedTask ? '继续查询已有任务，未重复提交生成' : ''});
     return true;
   } catch (err) {
+    reportProviderKeyResult?.(provider, 'video', err, apiKey);
+    if (isSafetyError(err)) node.data.prompt = softenPrompt(prompt);
     node.data.url = previousUrl;
     node.data.urls = previousUrls;
     VariantManager?.recordOutputs(node.data, [{
@@ -1339,25 +1112,21 @@ async function runVideo(id, visiting = new Set(), options = {}) {
       createdAt: Date.now()
     }]);
     if (isTerminalShortVideoTaskError(err)) node.data.videoTask = null;
-    updateVideoStatus(node, formatVideoError(err), 'error', {safety: isSafetyError(err)});
+    updateVideoStatus(node, formatVideoError(err), 'error');
     hydrateNode(node);
     saveProject();
     completeGenerationBudget?.(budgetEntryId, {actualRequests: budgetActualRequests, status: 'failed', differenceReason: err?.message || '视频生成失败'});
-    say(formatVideoError(err), 'error');
+    toast(formatVideoError(err), 'error');
     return false;
   } finally {
-    RenderHelpers?.setRunButtonBusy(btn, false, node.data.videoTask ? 'fa-rotate' : 'fa-arrow-up');
     btn.disabled = false;
-    btn.title = node.data.videoTask ? '继续查询视频' : node.data.url ? '重新生成（新建节点，原视频保留）' : '生成视频';
+    btn.innerHTML = '<i class="fa-solid fa-video"></i> 生成视频';
   }
 }
-function updateVideoStatus(node, text, type = 'info', {safety = false} = {}) {
+function updateVideoStatus(node, text, type = 'info') {
   if (!node) return;
   node.data.status = text || '';
   node.data.statusType = type === 'error' ? 'error' : '';
-  // hydrateNode renders the 安全改写 button for content-safety failures.
-  if (type === 'error' && safety) node.data.statusSafety = true;
-  else delete node.data.statusSafety;
   const box = node.el.querySelector('[data-status]');
   if (box) {
     box.textContent = node.data.status;
@@ -1396,22 +1165,7 @@ function buildVideoCreateBody(o, refs) {
   };
 }
 function sizeToAspect(size) {
-  try {
-    if (typeof MediaDimensions?.normalizeAspect === 'function') {
-      return MediaDimensions.normalizeAspect(size, '16:9') || '16:9';
-    }
-  } catch (_err) { /* ignore */ }
-  const match = String(size || '').match(/(\d+)\s*[x×*]\s*(\d+)/i);
-  if (match) {
-    const w = Number(match[1]);
-    const h = Number(match[2]);
-    if (w > 0 && h > 0) {
-      const g = (a, b) => (b ? g(b, a % b) : a);
-      const d = g(w, h) || 1;
-      return `${Math.round(w / d)}:${Math.round(h / d)}`;
-    }
-  }
-  return '16:9';
+  return MediaDimensions?.normalizeAspect(size, '16:9') || '16:9';
 }
 async function pollVideoTask(apiUrl, apiKey, id, onStatus, endpoint = '/video/query') {
   let last = null;
@@ -1638,7 +1392,7 @@ function tryExtractVideoUrl(data) {
 function formatVideoError(err) {
   const msg = err?.message || String(err);
   if (/PUBLIC_ERROR_UNSAFE_GENERATION|unsafe|安全|safety/i.test(msg)) {
-    return '视频生成失败：\n平台安全策略拒绝了这次生成。\n\n建议：把人物关系、亲密动作、未成年人、裸露、危险动作等描述改得更克制；也可以点击下方「安全改写」按钮后再生成。';
+    return '视频生成失败：\n平台安全策略拒绝了这次生成。\n\n建议：把人物关系、亲密动作、未成年人、裸露、危险动作等描述改得更克制；也可以点击“安全改写”后再生成。';
   }
   if (/X-TC-Action|MissingParameter|common parameter/i.test(msg)) {
     return '视频生成失败：\n当前 API 返回腾讯云网关参数缺失，缺少 X-TC-Action。\n\n软件已支持 /video/create 与 /videos 自动切换；如果仍出现此提示，请把“模式”改为“自动”，并确认 API 地址是服务商提供的兼容中转地址，而不是腾讯云原生接口地址。';
@@ -1680,16 +1434,6 @@ async function persistGeneratedImageResult(result, name = 'generated_image', ext
       apiErrorMessage,
       chatCompletionTextRequest,
       isOpenAiImageGenerationModel,
-      isChatImageGenerationModel,
-      preferredImageGenerationRoute,
-      rememberImageGenerationRoute,
-      isImagesEndpointUnsupportedError,
-      buildChatImageUserContent,
-      chatImageGenerateRequest,
-      extractImageUrl,
-      imageUrlFromTextBlob,
-      imageUrlFromInlineData,
-      enrichTransientError,
       applyKnownImageProtocol,
       saveKnownImageProtocolCorrection,
       isUnsupportedImageModelError,
@@ -1711,6 +1455,7 @@ async function persistGeneratedImageResult(result, name = 'generated_image', ext
       rawImageEditRequest,
       requestImageGenerationWithModel,
       imageGenerateRequest,
+      imageGenerateBatchRequest,
       requestImageEditWithModel,
       imageEditRequest,
       referenceGuidedImageFallback,

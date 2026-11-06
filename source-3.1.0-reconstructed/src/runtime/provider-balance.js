@@ -125,12 +125,12 @@ function createBalanceService({readKey, fetchImpl = (...args) => fetch(...args),
   if (typeof readKey !== 'function') throw new TypeError('readKey is required');
   const cache = new Map();
 
-  async function query({providerId, apiUrl, useGlobalKey = false, force = false} = {}) {
+  async function query({providerId, apiUrl, useGlobalKey = false, keyId = '', force = false} = {}) {
     let base;
     let apiKey;
     try {
       base = balanceBaseUrl(apiUrl);
-      apiKey = String(await readKey({providerId, useGlobalKey}) || '').trim();
+      apiKey = String(await readKey({providerId, useGlobalKey, keyId}) || '').trim();
     } catch (err) {
       return {status: 'error', reason: err instanceof BalanceError ? err.message : '无法读取 Key', checkedAt: now()};
     }
