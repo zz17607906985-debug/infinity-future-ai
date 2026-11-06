@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('localStorageBridge', {
   listProjectBackups: dir => ipcRenderer.invoke('storage:listProjectBackups', dir),
   restoreProjectBackup: (dir, fileName) => ipcRenderer.invoke('storage:restoreProjectBackup', dir, fileName),
   saveMedia: (dir, payload) => ipcRenderer.invoke('storage:saveMedia', dir, payload),
+  saveRemoteMedia: (dir, payload) => ipcRenderer.invoke('storage:saveRemoteMedia', dir, payload),
   readMedia: target => ipcRenderer.invoke('storage:readMedia', target),
   canvasPreview: target => ipcRenderer.invoke('storage:canvasPreview', target),
   checkWritable: dir => ipcRenderer.invoke('storage:checkWritable', dir)

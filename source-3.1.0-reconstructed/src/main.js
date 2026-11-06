@@ -4161,6 +4161,57 @@ ipcMain.handle('storage:saveMedia', async (event, dir, payload) => {
   return pathToFileURL(file).href;
 });
 
+ipcMain.handle('storage:saveRemoteMedia', async (event, dir, payload = {}) => {
+  assertTrustedRenderer(event);
+  if (!dir || !payload.url) return '';
+  await ensureStorageRootAllowed(dir);
+
+  let url;
+  try { url = new URL(String(payload.url)); } catch { throw new Error('图片地址无效'); }
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) {
+    throw new Error('仅支持下载 HTTP/HTTPS 图片');
+  }
+
+  const response = await fetch(url.href, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(45000),
+    headers: {Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'}
+  });
+  if (!response.ok) throw new Error(`图片服务器返回 ${response.status}`);
+  const maxSize = 100 * 1024 * 1024;
+  const declaredSize = Number(response.headers.get('content-length') || 0);
+  if (declaredSize > maxSize) throw new Error('图片超过 100 MB 下载限制');
+
+  const chunks = [];
+  let received = 0;
+  for await (const chunk of response.body) {
+    received += chunk.byteLength;
+    if (received > maxSize) throw new Error('图片超过 100 MB 下载限制');
+    chunks.push(Buffer.from(chunk));
+  }
+  const bytes = Buffer.concat(chunks, received);
+  if (!bytes.length) throw new Error('图片内容为空');
+
+  const isPng = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const isGif = bytes.subarray(0, 6).toString('ascii').startsWith('GIF8');
+  const isWebp = bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP';
+  const isAvif = bytes.subarray(4, 12).toString('ascii').includes('ftypavif')
+    || bytes.subarray(4, 12).toString('ascii').includes('ftypavis');
+  const ext = isPng ? 'png' : isJpeg ? 'jpg' : isGif ? 'gif' : isWebp ? 'webp' : isAvif ? 'avif' : '';
+  if (!ext) throw new Error('服务器返回的内容不是受支持的图片格式');
+
+  const mediaDir = safeStoragePath(dir, 'media');
+  await ensureDir(mediaDir);
+  const safeName = String(payload.name || 'generated_image')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\.[^.]+$/, '')
+    .slice(0, 80) || 'generated_image';
+  const file = path.join(mediaDir, `${Date.now()}_${safeName}_${crypto.randomUUID()}.${ext}`);
+  await fs.writeFile(file, bytes, {flag: 'wx'});
+  return pathToFileURL(file).href;
+});
+
 function wallpaperDirs() {
   const userDir = path.join(app.getPath('userData'), 'wallpapers');
   return app.isPackaged ? [path.join(path.dirname(app.getPath('exe')), 'wallpapers'), userDir] : [userDir];

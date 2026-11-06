@@ -1419,7 +1419,7 @@ async function safeJson(res) {
 async function persistGeneratedImageResult(result, name = 'generated_image', ext = 'png') {
   if (!result?.url) throw new Error('图片生成结果缺少可保存的 URL');
   const temporaryUrl = String(result.url);
-  const persistedUrl = await persistMediaUrl(temporaryUrl, name, ext);
+  const persistedUrl = await persistMediaUrl(temporaryUrl, name, ext, {required: true});
   if (temporaryUrl.startsWith('blob:') && persistedUrl !== temporaryUrl) {
     URL.revokeObjectURL(temporaryUrl);
   }

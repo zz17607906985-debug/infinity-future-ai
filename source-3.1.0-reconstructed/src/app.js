@@ -5226,10 +5226,15 @@
   async function safeJson(...args) { return providerApi()?.safeJson?.(...args); }
   async function persistGeneratedImageResult(...args) { return providerApi()?.persistGeneratedImageResult?.(...args); }
 
-  async function persistMediaUrl(url, name = 'media', ext = '') {
+  async function persistMediaUrl(url, name = 'media', ext = '', options = {}) {
     const value = String(url || '');
-    if (!storageDir || !window.localStorageBridge?.saveMedia || (!value.startsWith('data:') && !value.startsWith('blob:'))) return value;
+    if (!storageDir || !window.localStorageBridge?.saveMedia) return value;
     try {
+      if (/^https?:\/\//i.test(value)) {
+        if (!window.localStorageBridge.saveRemoteMedia) throw new Error('当前版本不支持远程图片自动保存');
+        return await window.localStorageBridge.saveRemoteMedia(storageDir, {url: value, name});
+      }
+      if (!value.startsWith('data:') && !value.startsWith('blob:')) return value;
       const dataUrl = value.startsWith('blob:') ? await blobUrlToDataUrl(value) : value;
       return await window.localStorageBridge.saveMedia(storageDir, {
         dataUrl,
@@ -5239,6 +5244,7 @@
     } catch (err) {
       console.warn('media persist failed', err);
       toast('媒体已生成，但保存到本地 media 文件夹失败，已临时保留在当前会话。', 'warn');
+      if (options.required) throw new Error(`图片已生成，但保存到本地 media 文件夹失败：${err?.message || err}`);
       return value;
     }
   }
